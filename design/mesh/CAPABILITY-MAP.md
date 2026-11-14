@@ -183,7 +183,7 @@ restored from a backup gets the whole history, so it isn't listed.
 
 ## Open questions
 
-- **Move to a new ID?** Settle before `spaces`. Every device holds the root
+- **Move to a new ID?** *Settled 2026-11-14 (your call, SPEC-spaces): not in this version; spaces lists what it leaves open under Known limits.* Was: settle before `spaces`. Every device holds the root
   secret (identity D2), so a removed device that's still unlocked can sign
   itself a new device key and get back in. The only real fix is a signed
   "I've moved to this new ID" message that friends follow (and Spaces, once

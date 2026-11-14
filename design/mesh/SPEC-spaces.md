@@ -1,11 +1,25 @@
 # Spec: `spaces` (Mesh)
 
-Status: **DRAFT 2026-11-14, for your review.** No plan and no code until you
-approve it. Module 9 of the build order in [CAPABILITY-MAP.md](CAPABILITY-MAP.md).
-It depends on [`dm`](SPEC-dm.md), [`mailbox`](SPEC-mailbox.md),
-[`e2ee`](SPEC-e2ee.md), [`routing`](SPEC-routing.md) and
-[`social`](SPEC-social.md), all built. It changes five approved decisions in
-them (*Changes to approved decisions*), each of which needs your OK.
+Status: **DRAFT, revision 2 (2026-11-14), for your review.** No plan and no
+code until you approve it. Module 9 of the build order in
+[CAPABILITY-MAP.md](CAPABILITY-MAP.md). It depends on [`dm`](SPEC-dm.md),
+[`mailbox`](SPEC-mailbox.md), [`e2ee`](SPEC-e2ee.md),
+[`routing`](SPEC-routing.md) and [`social`](SPEC-social.md), all built.
+
+**Revision 2, after your review of revision 1:**
+- Only the owner removes, bans or demotes an admin. Honest changes on a
+  losing branch are redone. Test 7 is rewritten (S7).
+- Old events are checked against author-signed device certificates, with a
+  time for each removed device (S5). Test 4 is new.
+- The connection model (S14), the mail worst case (S9) and the contact cap
+  (S2) are given in numbers.
+- What members can learn about each other is stated plainly (*Known
+  limits*).
+- Cut from this version: invite codes, and admins-only channels for seeing.
+- Your answers are recorded: 50 members, full history, Olm, batched mail,
+  add-by-ID only, and "move to a new ID" not in this version.
+- Change 5 (admins delete anyone's message) is approved. Changes 1 to 4 wait
+  for this revision.
 
 ## Acceptance tests
 
@@ -13,63 +27,77 @@ Process tests in Mesh-Node (`tests/spaces.rs`) run helpers and a seed, as
 `tests/dm.rs` and `tests/mailbox.rs` do. The Mesh-Voice checkpoint test
 (`checkpoint.rs`) gains a Spaces step. The last two tests are by hand.
 
-In the process tests, **A** creates the Space. **B** and **C** are A's
-friends but not each other's. **D** is a friend of nobody in it.
+In the process tests, **O** owns the Space. **B** and **C** are O's
+friends but not each other's. **D** is B's friend and nobody else's. **X**
+and **Y** are admins.
 
 1. **Strangers in one Space.**
-   - A creates a Space with `#general`, and adds B and C.
-   - B and C talk in `#general` both ways, live, in under 1 s.
+   - O creates a Space with `#general`, and adds B and C.
+   - B and C talk in `#general` both ways, live, in under 1 s (the first
+     line includes a dial).
    - They still aren't friends:
      - neither shows in the other's friends list;
      - neither gets the other's presence;
-     - a DM between them is refused (`not-friends`);
-     - once C leaves, C's devices no longer get through B's handshake.
+     - a DM between them is refused (`not-friends`).
+   - Once C leaves, C's devices no longer get through B's handshake.
+   - 60 s after the last line, B and C hold no connection to each other
+     (S14).
 2. **Away and back.**
    - C locks. B posts three lines and locks too.
    - C unlocks with nobody else online, and gets all three by mail, in order.
-   - The seed's mail puts for those three lines are **at most one per C
-     device**, not one per line (S9).
-3. **An invite code.**
-   - B makes a Space invite code. D, who is nobody's friend, joins with it.
-   - B's device admits D on its next collect, within 5 minutes.
-   - D gets `#general`'s history from before D joined, newest first, from
-     whichever member it reaches first.
-4. **History can't be forged.** A member's test client alters the text of
+   - The seed counts **at most one put per C device** for those three lines
+     (S9).
+3. **A friend of one member joins, and sees the past.**
+   - B adds D. D gets `#general`'s history from before D joined, newest
+     first, from whichever member it reaches first.
+4. **History survives a replaced device and a departure** (S5).
+   - C links a new device, removes the old one, and leaves the Space.
+   - E then joins (added by O). E sees C's old lines, from both the removed
+     device and the new one, as C's.
+   - A line signed by C's removed device and dated after its removal is
+     refused.
+5. **History can't be forged.** A member's test client alters the text of
    another person's event in the history it serves. D refuses that event
    (bad signature), takes the rest, and gets the real one from another
    member.
-5. **Roles.**
+6. **Roles.**
    - A member can't create a channel, delete someone else's message, or post
      in an admins-post-only channel. Every member's device refuses it, not
      just the sender's.
    - An admin deletes one of C's messages, and it's gone on every device.
-6. **The admins' channel.** A channel only admins can see:
-   - no member's device ever receives its events, live, by mail or in
-     history;
-   - a member made admin later gets its history;
-   - an admin made a member again keeps what they had, but gets nothing new.
-7. **Kick and ban.**
-   - A kicks C. C can rejoin with a new invite.
-   - A bans C. C's later events are refused by everyone, C's invite codes and
-     joins are refused, and C's devices stop getting through every member's
-     handshake, except where C is also someone's friend.
-8. **Two admins remove each other at once.** They do it while apart. When
-   they meet, every device ends with the same members, and the owner's
-   decision wins (S7).
-9. **Fifty members.** A Space of 50 members, one device each (an `--ignored`
-   measurement, recorded in the plan):
+   - An admin can't remove, ban or demote another admin. Every device refuses
+     it.
+7. **Forks** (S7):
+   1. **An ex-admin can't win.** O removes admin X. X, apart and with a
+      modified client, forks from before the removal with a ground-low event
+      ID and a low `seq`, and kicks B and renames `#general`. When they meet,
+      every device follows O's branch: X is out, B is in, and the name
+      stands.
+   2. **Two admins, apart.** X kicks C while Y renames `#general`, on two
+      branches. When they meet, every device ends with both changes: the
+      losing branch's author's device redoes its change on the winner.
+   3. **A late fork undoes, and the author redoes.** Y, with a modified
+      client, forks from an old version to drop X's ban of C. X's device
+      sees its ban dropped and redoes it. Every device ends with C banned.
+8. **Kick and ban.**
+   - O kicks C, and C can be added again.
+   - O bans C. C's later events and any add of C are refused everywhere, and
+     C's devices stop getting through every member's handshake, except where
+     C is also someone's friend.
+9. **Fifty members** (an `--ignored` measurement, recorded in the plan). A
+   Space of 50 members, one device each:
    - a line reaches all 49 others;
    - unlock with 5 such Spaces is under 1 s after "online";
-   - a sender's CPU time and seed puts per line are recorded.
+   - for one line, the sender's CPU time and bytes, the connections open,
+     and the seed puts are recorded.
 10. **Unlock doesn't read Space history.** Unlock takes the same time with a
-    Space holding 100,000 events as with an empty one. A Space's log is read
-    the first time it's used (S11).
+    Space holding 100,000 events as with an empty one (S11).
 11. **Nothing identifying is logged.** The seed's files and logs and the
     helper's stderr hold no Space ID, channel name, member ID or message text.
 12. **By hand, on the gate** (three machines, two networks, an outside seed):
     the above with real people, in Mesh-Voice.
 13. **By hand, a solo look** at the screens: the Space rail, channels and
-    categories, the member list with roles, Space settings, the invite flow,
+    categories, the member list with roles, Space settings, adding a member,
     unread counts and mentions, and the narrow layout.
 
 ## Objective
@@ -81,16 +109,13 @@ named channels, with someone in charge who can remove people. That is what
 
 **The smallest version that replaces a small Discord server for text:**
 
-- A Space of **up to 50 members** (*Question 1*), which needn't be friends.
+- A Space of **up to 50 members** (Q1), who needn't be friends.
 - **Text channels in categories**, which the owner and admins create, rename,
   reorder and delete.
-- **Three roles:** the owner, admins and members. Each channel has two
-  switches: who may post (everyone, or admins only, for announcements) and
-  who may see it (everyone, or admins only).
-- **Joining** is by being added by a member who is your friend, or with a
-  Space invite code that works like a friend code.
-- **History for new members**: they see what was said before they joined
-  (*Question 2*).
+- **Three roles:** the owner, admins and members. Each channel has one
+  switch, who may post: everyone, or admins only (for announcements).
+- **Joining** by being added by a member who is your friend (Q5).
+- **History for new members**: everything said before they joined (Q2).
 - **Moderation:** admins delete anyone's message, and kick or ban members.
 - **Everything a DM already has**, per channel: edits, deletes, reactions,
   replies, files and pictures, typing, unread counts and read state.
@@ -100,13 +125,21 @@ named channels, with someone in charge who can remove people. That is what
 
 ### Not in this version
 
+- **Invite codes** (cut 2026-11-14). They would add joining without first
+  being anyone's friend: a Space invite code works like a friend code, whose
+  knock asks to join and is admitted by the inviter's device on its next
+  collect. It reuses the friend-code hold, lookup, knock box and seed limits,
+  plus one new knock purpose and auto-admit.
+- **Channels only admins can see** (cut 2026-11-14). They would add a mods'
+  room. Its events go only to admin devices (live, mail and history); a new
+  admin gets its history, and a demoted one keeps what they had. That's a
+  second audience per Space and a role check when serving history.
 - Voice channels (`calls`).
-- Custom roles, per-person permission overrides, and per-role channel
-  access beyond "admins only".
-- Threads, pins, slow mode, timeouts, audit log, server emoji, webhooks and
-  bots, server discovery, and vanity invites.
+- Custom roles, per-person permissions and per-role channel access.
+- Threads, pins, slow mode, timeouts, an audit log, server emoji, webhooks
+  and bots, server discovery.
 - Presence for members who aren't your friends. Friends show as they do now.
-- Spaces past 50 members (see *The path past 50*).
+- Spaces past 50 members (*The path past 50*).
 - Per-Space nicknames and avatars. Display names come from joining.
 - Notification settings per channel, beyond muting a whole Space.
 
@@ -116,84 +149,111 @@ named channels, with someone in charge who can remove people. That is what
 
 | dm | In a Space |
 |---|---|
-| D1 events | The same event format, with a channel in it, and **signed by the author's device** (S5) so other members can pass it on. |
+| D1 events | The same format, with a channel and the change it follows (S5) in it, and **signed by the author's device** (S5) so other members can pass it on. |
 | D2 ordering | The same `seq` and `n` rules, per channel. |
-| D3 edits and deletes | The same, plus an admin may delete anyone's message (S8). |
+| D3 edits and deletes | The same, plus an admin may delete anyone's message (S8; change 5, approved). |
 | D4 reactions | Unchanged. |
-| D5 delivery counters | Unchanged: per reader device, sender's own events. This is what makes "sending" and "sent" honest. |
-| D7 signed change chain | Generalised from the creator to roles: the owner, then admins (S7). |
-| D8 own-device sync | Unchanged. Your own devices get your Spaces as they get your chats. |
+| D5 delivery counters | Unchanged: per reader device, the sender's own events. This is what makes "sending" and "sent" honest. |
+| D7 signed change chain | Generalised from the creator to roles, with redo (S7). |
+| D8 own-device sync | Unchanged: your own devices get your Spaces as they get your chats. |
 | D9 read state | Per channel. |
 | D10 typing | Per channel, to connected member devices. |
 | D11 store | Segments per channel. The device-wide log changes for Spaces (S11). |
-| D12, D13 files | Unchanged. Members fetch from any member device that has the file. |
+| D12, D13 files | Unchanged: members fetch from any member device that has the file. |
 | D14 limits | The same, plus the Space limits (*Limits*). |
-| Group DMs over 1:1 Olm sessions (e2ee D6 as changed) | **Spaces too, in this version** (S4). |
+| Group DMs over 1:1 Olm sessions (e2ee D6 as changed) | **Spaces too, in this version** (S4, Q3). |
 
 **From `mailbox`**, unchanged in format:
 
-- A Space member is a pair like a friend is (routing D1 needs only the two
-  IDs), so mail boxes, slots, claims, mail records, receipts and the
+- A Space member is a pair like a friend is, because routing D1 needs only
+  the two IDs. So mail boxes, slots, claims, mail records, receipts and the
   six-week collect all work for them as they are.
-- The one change is when Space events are mailed (S9): batched, not one put
-  per event.
-- Claims are padded to 64 boxes a week. A member of one full Space has 49
-  pairs from it, so most people still fit one bucket.
+- The one change is when Space events are mailed (S9).
 
-**From `routing` and `social`:**
-
-- Address records, reach and the handshake allow-list cover Space members
-  (S2).
-- Space invite codes are friend codes with a different purpose inside (S6):
-  the same hold, lookup, knock box, seal and limits at the seed.
+**From `routing`:** address records, reach and the handshake allow-list
+cover Space members (S2).
 
 **From `e2ee`:** Olm sessions per device and `encrypt_device_batch`, as
-group DMs use them. The Megolm code (`mesh-e2ee` `group.rs`) is already
-built. It stays unused in this version, and it's what the path past 50 uses.
+group DMs use them. The Megolm code (`mesh-e2ee` `group.rs`) is built and
+stays unused in this version. It's what the path past 50 uses.
 
 ## Decisions (proposed)
 
 | # | Decision | Why |
 |---|---|---|
-| S1 | **A Space is a signed log of changes plus channels of events.** Its ID is `blake3::derive_key("mesh/v1/space", creator ID ‖ random)`, as a group DM's is (dm D7), so nobody else can make a creation for it. The log holds: the name; the channels and categories, each with its two switches; the members, each with their role and the display name they joined with; the bans; and the invite settings. | The group DM's design, which is built and tested, with more kinds of change. |
-| S2 | **Members are "Space peers", a new kind of contact.** For each member it shares a Space with, a device keeps an account entry of kind `space`. That kind publishes address and mail records, allows the handshake, and reads their records, exactly like `outgoing`. But **a connection with one never makes a friend** (social D8 excluded), and it gets no presence and no DMs. Leaving or being removed drops the entry, unless the two share another Space or are friends. Blocking still wins: a blocked member is never a peer, and their events are hidden. | Every lower layer keys on "contact", and the pair secret needs nothing but the two IDs. So the smallest way to let strangers in a Space talk is to let them be contacts of a kind that means nothing else. Discord server members can see you're online and message you; here they can do neither unless you're friends. |
-| S3 | **Channels.** A channel is a conversation inside the Space, with its own ID from the Space and a random value, its own segments, read marker and typing. There are two switches. **Post:** everyone, or admins only. **See:** everyone, or admins only. Events of an admins-only channel go only to admin devices, live, by mail and in history. Categories are names that channels sit under, in order. | It's what small servers use: announcements and a mods' room. Per-role access beyond admins is custom roles, which comes later. |
-| S4 | **Encryption is per device over Olm, as group DMs** (e2ee D6 as changed 2026-11-11). A Space event is encrypted for each current member device, in one `encrypt_device_batch`. *This changes e2ee D6's "Spaces keep sender chains" for this version (Question 3).* | It's what's built and tested, and it lets mail stay per pair (S9). At 50 members of about 2 devices, a line is roughly 100 Olm encryptions. Test 9 measures it. Megolm encrypts once, but then offline members need a shared Space box at the seed and a key-share round on every removal, which is a seed change and more machinery than 50 members need. |
-| S5 | **Space events are signed by the author's device key** over (Space, channel, event), and checked against the author's device list. dm events carry no signature because the envelope proves the sender (dm D1). In a Space, others pass events on (history, S10), so the event has to prove its author by itself. A signature that doesn't check means the event is refused. | Without it, a member serving history could put words in anyone's mouth. Ed25519 over a small event is cheap. |
-| S6 | **Joining.** (a) **Add by ID:** a member whose role allows it adds one of their friends. Members can add by default; the owner can make it admins only. (b) **Space invite code:** a friend code (identity D4, social D1) whose sealed request, a knock, asks to join the Space instead of to be friends. The inviter's device collects knocks as it does friend requests (every 5 minutes while unlocked, social D7). If the code is live and the inviter may still add people, it admits the sender with a signed add change. A knock for an expired or revoked code, or from a banned ID, is dropped. | Both reuse what exists: (a) is group DM's add, and (b) is the whole friend-code path with one more purpose. The cost is that a join waits for the inviter's device to be online. Discord is instant. |
-| S7 | **Roles and the change chain.** dm D7's chain, with roles instead of "the creator". **The owner** (the creator) can do everything: make and unmake admins, transfer ownership, and delete the Space. **Admins:** channels and categories, kick, ban, delete messages, invite settings, and the Space's name. **Members:** post where allowed, react, leave, and add friends or make invite codes if allowed. A change counts only if it follows the newest change held and its author has the right in that version. **On a fork, the branch containing an owner change wins; then the one containing an admin change, by the lower (`seq`, event ID) of its first such change; then the lower event ID.** A removed admin's change can only fork from before the removal, and the owner's or the earlier admin's decision stands. | The same proof as dm D7 (review F): membership is judged by the version a change follows, which nobody can back-date. Ranking branches by role is the one new rule. |
-| S8 | **Moderation.** *Delete:* an admin's `Delete` of anyone's event, signed, checked against the role in force, and honoured by honest clients as dm D3. *Kick:* remove a member; they may rejoin. *Ban:* remove a member and add their ID to the ban list. From then on, their events, knocks and adds are refused everywhere, and every member drops them as a peer. | Discord's three basic tools. As everywhere in Mesh, a modified client can keep what it already has (map). |
-| S9 | **Space events are mailed in batches.** For a reader device with no open connection, a Space's waiting events go by mail at the next refresh (30 minutes) or at lock and quit (the flush), **in one envelope per reader device**, packed up to the envelope's limit. Receipts and counters are as mailbox M9 and dm D5. *This changes mailbox M2's "right after an event is stored" for Space events (Question 4).* | The seed allows 600 puts an hour per key (`PUTS_PER_KEY`). One put per event per offline device would let a 50-member Space post about 6 lines an hour. Batching makes the cost about two puts an hour per offline device, whatever is said. The delay costs nothing: a reader who comes back sooner meets the sender live, or a member (S10). |
-| S10 | **Catch-up and history come from any member.** On joining, and whenever a member device returns after more than mail covers (30 days, or past dm D5's 2,000 events), it asks the first member device it reaches for the channels it may see. Each channel comes newest first, in batches of 200, by a per-(Space, channel) counter like own-device sync (dm D8), so it resumes where it stopped. The events carry their authors' signatures (S5). A member serves only channels the asker's current role may see. | The map's "history comes from other members". A pull is resumable and costs nothing while nobody asks. Serving only what the role allows keeps the admins' channel closed. |
+| S1 | **A Space is a signed log of changes plus channels of events.** Its ID is `blake3::derive_key("mesh/v1/space", creator ID ‖ random)`, as a group DM's is (dm D7), so nobody else can make a creation for it. The log holds: the name; the channels and categories, each with its post switch; the members, each with their role and the display name they joined with; the bans; whether members may add people; and each member's device removals (S5). | The group DM's design, which is built and tested, with more kinds of change. |
+| S2 | **Members are "Space peers", a new kind of contact.** For each member it shares a Space with, a device keeps an account entry of kind `space`. That kind publishes address and mail records, allows the handshake, and reads their records, exactly like `outgoing`. But **a connection with one never makes a friend** (social D8 excluded), and it gets no presence and no DMs. Leaving or being removed drops the entry, unless the two share another Space or are friends. Blocking still wins: a blocked member is never a peer, and their events are hidden. **Peers count against `MAX_CONTACTS` (1,000), once per person** however many Spaces you share. An add that would take anyone past 1,000 is refused for them, with that reason. With `SPACES_PER_ACCOUNT` at 10, Spaces alone use at most 490, which leaves at least 510 for friends. | Every lower layer keys on "contact", and the pair secret needs only the two IDs, so this is the smallest way to let strangers in a Space talk. Counting against the one cap keeps the seed's limits true: `MOST_BOXES`, the record put and get limits and the address puts are all sized from `MAX_CONTACTS + 1`. 20 Spaces of 50 would be 980 peers before any friend, so the Space cap drops to 10. |
+| S3 | **Channels.** A channel is a conversation inside the Space, with its own ID (from the Space ID and a random value), its own segments, read marker and typing. One switch: **post** for everyone, or admins only. Every member sees every channel. Categories are names that channels sit under, in order. | Announcements are the one per-channel rule small servers rely on. Hidden channels are cut (above). |
+| S4 | **Encryption is per device over Olm, as group DMs** (e2ee D6 as changed 2026-11-11; Q3). A Space event is encrypted for each current member device in one `encrypt_device_batch`. | It's what's built and tested, and it lets mail stay per pair (S9). At 50 members of about 2 devices, a line is roughly 100 Olm encryptions; test 9 measures it. Megolm encrypts once, but offline members then need a shared Space box at the seed and a key-share round on every removal. That's a seed change and more than 50 members need. |
+| S5 | **Space events are signed, and checked in three parts:** <br>(a) **The author's device:** the event carries the signing device's `DeviceCert`, which is signed by the author's ID (identity) and checks with nothing else, so an event stays checkable after the author has removed that device or left. <br>(b) **The device was in use then:** removing a device makes the author's remaining device post a signed `device-out` change (the device key and the removal time) in each Space they're in. An event signed by that device counts only if its `seq` is before that time. If a member's device list shows a device revoked and no `device-out` for it has arrived yet, events signed by it wait until one does. <br>(c) **The author could post there then:** every event names the newest change its author held (`after`). It counts only if, in that version, the author was a member allowed to post in the channel. Live, the author must also still be a member in the version you hold now. In history (S10), someone who has since left or been removed is judged by their `after` version alone. | (a) A device list can't do this alone: it lists current devices and revoked keys with no time, so once C removes a device, nothing would say which of its lines came first. (b) gives that time, written by the only person who knows it. (c) is the membership rule dm D7 uses, judged by the chain, which can't be back-dated. History is what the serving member stored when it accepted each event live, so post-removal lines never enter an honest member's store (*Known limits* says what a colluding pair can still do). |
+| S6 | **Joining is add-by-ID only** (Q5). A member whose role allows it adds one of their friends with a signed add change. Members may add by default, and the owner can make it admins only. The add carries the new member's display name. Every member's device, on accepting the change, makes the new member a peer (S2). | Group DM's add, which is built. Invite codes are cut. |
+| S7 | **Roles and the change chain.** dm D7's chain, with roles instead of "the creator". <br>**The owner** (the creator) can do everything, and is the only one who removes, bans or demotes an admin, makes admins, transfers ownership, or deletes the Space. **Admins:** channels and categories, kicking and banning members, deleting messages, whether members may add, and the Space's name. **Members:** post where allowed, react, leave, add friends if allowed, and post their own `device-out`. <br>A change counts only if it follows the newest change held and its author has the right in that version. **On a fork, the branch containing an owner change wins.** If both do, the lower (`seq`, event ID) of each branch's first owner change wins. Then the same with admin changes, then with any change. <br>**Honest changes on a losing branch are redone:** a device whose own change was dropped makes it again after the winner's newest change, if it's still allowed and still changes something; otherwise the device shows it as undone. Each dropped change is redone at most once. | **The ex-admin hole is closed:** only the owner removes an admin, so an ex-admin's fork must start before an owner change, and its branch, holding no owner change of its own, always loses. The ex-admin can't author one, and grinding IDs changes nothing. If an owner device made a change on the ex-admin's branch, both branches hold owner changes, and the tie-break compares the owner's own `seq` and IDs, which only the owner controls. **What a current admin can still undo with a late fork:** any admin or member change made after a fork point of their choosing (kicks, bans and unbans of members, channel changes, renames, adds), by grinding a lower ID and back-dating `seq`. Never an owner change, and never an admin's removal. That's no power beyond what an admin has openly, since they could revert each change anyway, but it's quieter. And redo puts honest changes back once their authors next come online, so a late fork buys delay, not a lasting result. The owner can then remove that admin. |
+| S8 | **Moderation.** *Delete:* an admin's `Delete` of anyone's event, signed, checked against the role in force, and honoured by honest clients as dm D3 (change 5, approved). *Kick:* remove a member; they may be added again. *Ban:* remove a member and add their ID to the ban list. From then on, their events and any add of them are refused everywhere, and every member drops them as a peer. Removing, banning or demoting an admin is the owner's alone (S7). | Discord's three basic tools. As everywhere in Mesh, a modified client keeps what it already has (map). |
+| S9 | **Space events are mailed in batches** (Q4). For a reader device with no open connection, the events waiting for it **from every Space you share** go at the next refresh (30 minutes) or at lock and quit (the flush), **in one envelope per reader device**, packed up to the envelope limit. DMs are unchanged (mailbox M2: right after the event). Receipts and counters are as mailbox M9 and dm D5. <br>**The worst case against `PUTS_PER_KEY` (600 an hour):** you're in 10 full Spaces, which is 490 peers of about 2 devices, everyone is away, and you post in all of them. That's up to 980 puts per refresh, so about 1,960 an hour, plus one put per DM event per away device. **At the limit**, the seed answers `slow-down` to the rest. Those events stay waiting on the sender, with their counters unmoved (dm D5), and go at the next refresh, in the next hour's window. The order is DMs first, then the reader devices mailed longest ago, so none starves. Nothing is lost. The worst extra delay is a refresh or two (about an hour) for the last devices. The beta case is about ten people: a person in two Spaces of ten has about 40 devices to mail, about 80 puts an hour. | One put per event per away device would let a 50-member Space post about 6 lines an hour while people are away. Batching makes the cost about two puts an hour per away device, however much is said. The delay costs nothing that matters: a reader who comes back sooner meets the sender live, or another member (S10). |
+| S10 | **Catch-up and history come from any member** (Q2: everything). On joining, and whenever a member device comes back after more than mail covers (30 days, or past dm D5's 2,000 events), it asks the first member device it reaches. Each channel comes newest first, in batches of 200, by a per-(Space, channel) counter like own-device sync (dm D8), so it resumes where it stopped. The changes come first, so S5's checks have the versions and `device-out` times they need. | The map's "history comes from other members". A pull is resumable and costs nothing while nobody asks. |
 | S11 | **A Space's log is read when the Space is first used, not at unlock.** dm's device-wide log (every stored event's number and every deleted ID) stays for 1:1 chats and group DMs. Each Space gets its own, read the first time the Space is opened, sent to or received in during that unlock. | The map's open question: "before `spaces` reuses the dm store, it must change how the history log is held." This is the smallest change that keeps unlock flat (test 10). A Space's log in memory is about 16 MB per 100,000 events (PLAN-dm Task 15), bounded by the Space, not the account. |
-| S12 | **Mentions and unread.** A `Text` event may list mentioned member IDs, and `@everyone` if its author is an admin. Unread counts are per channel from the read marker (dm D9). A mention also shows on the Space in the rail. One switch mutes a whole Space. | What makes a busy server usable. A mention list in the event costs bytes, not design. |
-| S13 | **Nothing identifying is logged.** No Space IDs, channel names, member IDs or contents, only counts. | As routing D10, social D15, dm D15. |
+| S12 | **Mentions and unread.** A `Text` event may list mentioned member IDs, and `@everyone` if its author is an admin. Unread counts are per channel, from the read marker (dm D9). A mention also shows on the Space in the rail. One switch mutes a whole Space. | What makes a busy server usable. |
+| S13 | **Nothing identifying is logged.** No Space IDs, channel names, member IDs or contents, only counts. | As routing D10, social D15 and dm D15. |
+| S14 | **Connections: dialled to send, closed when quiet.** <br>**Who dials:** a device with Space events for a member's device dials it then, as dm D5 does for a friend (reach: a cached address, else the seed's record), in parallel for every member device it has events for. Space peers aren't dialled at unlock or at each refresh, as friends are for presence. <br>**When connections close:** 60 s after the last stream on it, the helper closes a connection to a device that's only a Space peer (no friend, not your own). Friends' connections stay open as now. <br>**How a line reaches 49 members live:** it's encrypted for each member device (S4) and sent on each open connection, dialling the rest in parallel. A cold dial took 0.64 s on the routing smoke test. Members already in the conversation within the minute reuse their connection. Members who are away get it by mail (S9). <br>**How many are open:** at 50 members, while a channel is busy, up to 49 times their online devices (about 75 at 1.5 devices online each), plus friends. At rest, none for peers. At the limit of 10 busy Spaces, up to about 735. Past the helper's 256 open connections (transport `Limits`), new incoming ones are refused, and the events for those devices wait and go by mail at the next refresh. The cap stays, and test 9 records the count and memory. <br>**A relay-only member** (no hole punch) sends and receives everything through their home relay. A line they post is one envelope per member device, about 1 KB each, so about 100 KB up through the relay for a full Space. They receive each line once per device of theirs. That costs the relay's operator bandwidth (100 lines a day is about 10 MB), adds the relay's round trip to every line, and is capped per client at 2 MB/s (`relay.toml`). | Dialling every peer at unlock, as friends are dialled, would hold up to 490 connections open all day for nothing, past the 256 cap. Dialling to send costs one dial per quiet minute and keeps the count at the people you're actually talking with. |
 
 ## Limits
 
 | Name | Value | Why |
 |---|---|---|
-| `SPACE_MAX_MEMBERS` | 50 (*Question 1*) | S4 and S9 are sized for it |
+| `SPACE_MAX_MEMBERS` | 50 (Q1) | S4, S9 and S14 are sized for it |
+| `SPACES_PER_ACCOUNT` | 10 | 490 peers at most, inside `MAX_CONTACTS` with room for friends (S2) |
 | `SPACE_MAX_CHANNELS` | 100, in up to 20 categories | Discord's own cap is 500 |
-| `SPACES_PER_ACCOUNT` | 20 | Bounds peers, so mail buckets and unlock stay small |
+| `PEER_IDLE` | 60 s | S14 |
 | `HISTORY_BATCH` | 200 events | As dm D8 |
 | Text, files, reactions | dm D14, D12 | Unchanged |
 
+## Known limits
+
+- **Every member can learn every other member's network address and when
+  they're online.** "No presence" holds only for an honest client.
+  - A member's device publishes address records for every peer (S2), so a
+    member can read your records whenever they like. Records exist only
+    while you're unlocked, so that tells them when you're online. Dialling
+    you tells them too.
+  - A direct connection (after hole punching) shows them your IP address.
+  - The record itself names only your home relay, not your IP.
+  - **What hiding it would cost:**
+    - *IP:* peers would connect through a relay only, never directly.
+      Every Space line would cross a relay, with its bandwidth and round
+      trip, and the relay's operator sees the addresses instead.
+    - *Online times:* no address records for peers at all. Live chat
+      between non-friends would go, and everything would travel by mail and
+      member pull, with a delay of up to the 30-minute refresh.
+
+    Neither is in this version. A Space is for people you're willing to be
+    reachable by, as a Discord server's members can see you're online and
+    message you.
+- **History is only as honest as the member who serves it.** Signatures stop
+  anyone forging another person's lines. But a removed member who signs
+  back-dated lines with an old `after`, together with a current member who
+  serves them, can put that ex-member's lines into a new member's history.
+  Honest members never stored them, so only the new member sees them.
+- **A removed device that's still unlocked** can sign lines back-dated before
+  its `device-out` time (S5b). Existing members see such a line marked
+  *arrived late* (dm D2). A new member can't tell it from history. This is
+  identity's open "move to a new ID" question, which is not in this version
+  (your call, 2026-11-14).
+
 ## Changes to approved decisions
 
-Each needs your OK. Each would be written into its own spec, dated, once
-this one is approved.
+Each would be written into its own spec, dated, once this one is approved.
 
-1. **routing D9:** the handshake also lets in `space` peers (S2), not only
-   contacts and your own devices.
+1. **routing D9:** the handshake also lets in `space` peers (S2). *Waiting
+   for your OK.*
 2. **social D8:** a new account kind, `space`, that a connection never turns
-   into `friend`. It's synced between your own devices (social D11) like the
-   other kinds.
+   into `friend`, counted against `MAX_CONTACTS` and synced between your own
+   devices (social D11) like the other kinds. *Waiting.*
 3. **e2ee D6:** Spaces use per-device Olm in this version, not sender chains
-   (S4). Megolm returns with the path past 50.
-4. **mailbox M2:** Space events are mailed in batches (S9).
-5. **dm D3:** in a Space, an admin may delete anyone's message (S8). DMs are
-   unchanged.
+   (S4). Megolm returns with the path past 50. *Waiting* (Q3 answered yes).
+4. **mailbox M2:** Space events are mailed in batches (S9). *Waiting* (Q4
+   answered yes).
+5. **dm D3:** in a Space, an admin may delete anyone's message (S8).
+   *Approved 2026-11-14.*
 
 ## The path past 50
 
@@ -205,30 +265,17 @@ signed events (S5) and the member pull (S10) stay as they are.
 
 ## What it needs from you
 
-1. **Answers to the questions below**, and your OK on the five changes
-   above.
-2. **The open question in the map, "Move to a new ID?",** is marked "settle
-   before `spaces`". My recommendation is to settle it as **not in this
-   version**. Removing someone from a Space is by ID, which works as it is.
-   A stolen, unlocked device of a member can read a Space until that member
-   removes the device, as with DMs. Your call.
-3. **For the gate (test 12): three people on two networks**, and a seed
+1. **Review of this revision**, and your OK on changes 1 to 4.
+2. **For the gate (test 12): three people on two networks**, and a seed
    reachable from outside (the VPS). The process tests need neither.
-4. **A look at the screens** (test 13), on Linux and Windows.
+3. **A look at the screens** (test 13), on Linux and Windows.
 
-## Questions
+## Questions (answered 2026-11-14)
 
-1. **The size cap.** Recommended: **50 members** for this version. Small
-   Discord servers are mostly under that, and it keeps S4 and S9 simple. The
-   alternative is 100 now, at about twice the encryptions and puts per line.
-2. **History for new members.** Recommended: **yes, everything**, newest
-   first (S10, e2ee Q4's default). The alternative is from their join on, as
-   group DMs work, which is simpler but unlike Discord.
-3. **Per-device Olm instead of Megolm for now.** Recommended: **yes** (S4).
-   It changes e2ee D6.
-4. **Batched mail for Space events.** Recommended: **yes** (S9). Without it,
-   the seed's per-key limit caps a Space at a few lines an hour while
-   members are away.
-5. **Invite codes in this version, or add by ID only?** Recommended: **both**
-   (S6). Codes reuse the friend-code path almost whole, and a server you can
-   join only by first befriending a member isn't much of a server.
+1. **The size cap:** 50 members.
+2. **History for new members:** yes, everything.
+3. **Per-device Olm instead of Megolm for now:** yes.
+4. **Batched mail for Space events:** yes.
+5. **Invite codes:** no. Joining is add-by-ID only.
+
+Also decided: **"move to a new ID" is not in this version.**
