@@ -1,0 +1,335 @@
+# Plan: `spaces` (Mesh)
+
+Status: **DRAFT 2026-11-14, for your review.** No code until you approve it.
+Built from [SPEC-spaces.md](SPEC-spaces.md) (approved 2026-11-14,
+revision 3). Test numbers below are the spec's.
+
+## Overview
+
+The pure parts come first, in `mesh-dm` with unit tests: the signed event,
+the chain with roles, forks and redo, the history check, and the store.
+Then the contact kind and routing. Then the helper: live delivery, batched
+mail, history pull and moderation, ending in the process tests and the
+measurements. The Mesh-Voice screens come last.
+
+There are three checkpoints:
+- **A**, after the pure parts: a short report, no stop.
+- **B**, after the process tests and measurements: a hard stop with the
+  figures, before any screen work.
+- **C**, after the screens: by hand, added to *Before beta*.
+
+## Architecture decisions
+
+- **Spaces live in `mesh-dm`**, next to group DMs: a `space` module for the
+  event, chain and check, and the store's existing segments for channels.
+  There's no new crate, because Spaces share the event format, ordering,
+  counters and store with dm.
+- **The chain is dm's group chain generalised, not a copy.** `group.rs`
+  gains roles and the role-ranked fork rule. Group DMs use it with two
+  roles, the creator and members, and their tests keep passing unchanged.
+  Redo is Space-only (spec S7), so group DMs still drop a losing branch's
+  changes, as dm D7 says.
+- **The per-Space log** (S11) is the device-wide log type in `history.rs`,
+  one instance per Space, opened on first use. 1:1 chats and group DMs keep
+  the one they have.
+- **Space peers** are an account `Kind` in `mesh-identity` (`account.rs`).
+  Routing, mail and the handshake already take "contacts"; the change is
+  which kinds count as contacts, plus `MAX_CONTACTS` counting each person
+  once.
+- **The helper gains one service**, `space-history` (S10). Live Space events
+  ride the existing `e2ee` service, as group DMs do.
+- **The modified clients in the forging tests** (tests 5 and 7) are a
+  test-only helper command, `spaceForge`, like `--crash-at`. It's compiled
+  only into test builds and forges what the test names: a ground-low ID, a
+  back-dated `seq`, an altered history line, or a line into an
+  admins-post-only channel. *Question 1.*
+- **No new crate dependencies.**
+
+## Task list
+
+### Phase 0: The approved changes, written into their specs
+
+- [ ] **Task 0: Four dated notes, docs only.**
+  - **What:** a dated "Changed 2026-11-14 by `spaces`" section in each of:
+    - SPEC-routing: D9 lets in `space` peers;
+    - SPEC-social: D8's `space` kind, counted once against `MAX_CONTACTS`;
+    - SPEC-e2ee: D6, per-device Olm for Spaces in this version;
+    - SPEC-mailbox: M2, Space events mailed in batches;
+    - SPEC-dm: D3, an admin may delete anyone's message in a Space.
+
+    Plus CAPABILITY-MAP's status line.
+  - **Accept:** each note names the spec row it changes, and nothing else in
+    those specs moves.
+  - **Files:** the five specs and the map, in Mesh-Voice.
+  - Size XS.
+
+### Phase 1: The pure parts (`mesh-dm`)
+
+- [ ] **Task 1: The signed Space event** (S1, S3, S5, S12)
+  - **What:**
+    - `SpaceEvent`: Space ID, channel ID, dm's `Body` (with a mention list
+      on `Text`), and the signing device's `DeviceCert`, signed by that
+      device over all of it (domain `mesh/v1/space-event`).
+    - The change kinds:
+      - create;
+      - add and leave;
+      - kick and ban;
+      - make admin, demote and transfer;
+      - rename;
+      - channel create, rename, move, delete and post switch;
+      - category create, rename, move and delete;
+      - whether members may add.
+    - Each change is signed with its author's ID key, as group changes are.
+    - Size checks against dm D14 and the Space limits.
+  - **Accept:** unit tests cover:
+    - sign and verify round trips;
+    - an altered byte fails;
+    - a certificate from another ID fails;
+    - each limit is refused at its edge;
+    - postcard round trips.
+  - **Files:** `mesh-dm/src/space.rs` (new), `event.rs`.
+  - Size M.
+
+- [ ] **Task 2: The chain with roles, forks and redo** (S7, S8)
+  - **What:** `group.rs`'s chain takes a role table: who may make each kind
+    of change in a version. Group DMs keep creator and members. Spaces get
+    the owner, admins and members, with only the owner removing, banning or
+    demoting an admin.
+    - **The fork rule:** a branch with an owner change wins. If both have
+      one, the lower (`seq`, ID) of each branch's first owner change wins.
+      Then the same with admin changes, then with any change.
+    - **Redo:** after each re-pick of the winner, the chain reports which of
+      *our own* changes were dropped and are still allowed and still change
+      something. The caller redoes them, once per fork lost.
+  - **Accept:** unit tests cover:
+    - every right and every refusal in the role table;
+    - an ex-admin's fork with a ground-low ID and a back-dated `seq` losing
+      to the owner's removal (7.1);
+    - two admins apart, both changes kept after redo (7.2);
+    - a late fork that drops a ban, with the ban redone (7.3);
+    - a redone change dropped by a second fork and redone again;
+    - no redo when the change no longer changes anything;
+    - group DMs' existing chain tests, unchanged and passing.
+  - **Files:** `mesh-dm/src/group.rs`, `space.rs`.
+  - Size L.
+
+- [ ] **Task 3: The history check** (S5)
+  - **What:** `check_live(event, current lists, version)` and
+    `check_history(event, chain)`:
+    - **live:** the device is on the author's current list, and the author
+      may post in that channel now;
+    - **history:** the certificate and signature check, the author is a
+      member in some version of the chain, and the author may post in that
+      channel in some version of it.
+  - **Accept:** unit tests cover:
+    - a removed device's line refused live and taken in history;
+    - a departed author's line taken in history;
+    - an altered line refused;
+    - a never-admin's line in an admins-post-only channel refused in
+      history;
+    - an ex-admin's line there taken (the known limit, asserted as such).
+  - **Files:** `mesh-dm/src/space.rs`.
+  - Size S.
+
+- [ ] **Task 4: The Space store and its log** (S3, S11)
+  - **What:**
+    - a Space folder in `<data>/dm/`, with one chat per channel (segments,
+      index, read marker), and the chain saved beside them;
+    - a per-Space `History` log, opened on first use;
+    - formats numbered, as every saved file is.
+  - **Accept:**
+    - unit tests: round trips across reopen, a channel deleted, and a log
+      opened only when used;
+    - an `--ignored` measurement: unlock-side open time with a 100,000-event
+      Space against an empty one (test 10's pure half).
+  - **Files:** `mesh-dm/src/store.rs`, `history.rs`, `space.rs`.
+  - Size M.
+
+**Checkpoint A (a short report, no stop):** the unit test counts, and Task
+4's numbers.
+
+### Phase 2: Contacts and routing
+
+- [ ] **Task 5: The `space` kind** (S2)
+  - **What:**
+    - `Kind::Space` in `account.rs`, synced between own devices like the
+      other kinds (social D11);
+    - it counts against `MAX_CONTACTS` once per person;
+    - a connection never makes it `friend`; it gets no presence and no DMs;
+    - blocking wins;
+    - the entry is dropped when no shared Space is left, unless they're a
+      friend;
+    - an add that would pass 1,000 is refused for the person it would
+      affect, with that reason.
+  - **Accept:**
+    - unit tests in `mesh-identity`: counting, sync, the promotion that
+      mustn't happen, block over space;
+    - the social and routing process tests still pass.
+  - **Files:** `mesh-identity/src/account.rs`, `keystore.rs`,
+    `mesh-node/src/social.rs`.
+  - Size M.
+
+- [ ] **Task 6: Peers on the wire** (S14)
+  - **What:**
+    - the handshake allow-list and records cover `space` peers;
+    - peers are dialled to send, not at unlock or refresh;
+    - `PEER_IDLE`: the helper closes a peer-only connection 60 s after its
+      last stream (friends' connections untouched);
+    - `PEER_RETRY`: no lookup of an away person for 30 minutes.
+  - **Accept:** a routing process test covers:
+    - two peers connecting, then disconnecting after `PEER_IDLE` (with a
+      test-short setting);
+    - a friend's connection staying up;
+    - an away peer looked up once per `PEER_RETRY` (counted at the seed).
+  - **Files:** `mesh-node/src/routing.rs`, `helper.rs`.
+  - Size M.
+
+### Phase 3: The helper
+
+- [ ] **Task 7: Spaces, live** (S1, S4, S6, S12)
+  - **What:** helper commands:
+    - `spaceCreate`, `spaceAdd`, `spaceLeave`;
+    - channel and category commands;
+    - `spaceSend`, `spaceEdit`, `spaceDelete`, `spaceReact`, `spaceRead`;
+    - `spaceTyping`, `spaceMute`;
+    - and notifications for each.
+
+    Sending encrypts for every current member device in one
+    `encrypt_device_batch`, over the `e2ee` service. Delivery counters are
+    dm D5's. Own-device sync carries Spaces as dm D8 does.
+  - **Accept:** process tests 1 and 6 (roles and the post switch).
+  - **Files:** `mesh-node/src/dm.rs` (or a new `spaces.rs` beside it),
+    `helper.rs`, `tests/spaces.rs` (new).
+  - Size L.
+
+- [ ] **Task 8: Batched mail** (S9)
+  - **What:**
+    - for each away reader device, the events waiting for it from every
+      Space go in one envelope at the refresh and at the flush;
+    - DMs keep mailbox M2;
+    - the order at the limit is DMs first, then the devices mailed longest
+      ago;
+    - `slow-down` leaves events waiting, with counters unmoved.
+  - **Accept:**
+    - process test 2, with at most one put per away device for three lines;
+    - a unit test of the order at the limit;
+    - a flush test: events that don't fit stay waiting, and go at the next
+      unlock's first refresh.
+  - **Files:** `mesh-node/src/mail.rs`, `tests/spaces.rs`.
+  - Size M.
+
+- [ ] **Task 9: History from any member** (S10)
+  - **What:**
+    - the `space-history` service: changes first, then each channel newest
+      first, in batches of 200, by a per-(Space, channel) counter;
+    - asked on joining, and after more than mail covers;
+    - served only to a current member;
+    - each event checked with `check_history` (Task 3).
+  - **Accept:** process tests 3, 4 and 5. Test 5 includes the announcements
+    case, with `spaceForge` (Question 1).
+  - **Files:** `mesh-node/src/dm.rs` or `spaces.rs`, `helper.rs`,
+    `tests/spaces.rs`.
+  - Size M.
+
+- [ ] **Task 10: Moderation and forks end to end** (S7, S8)
+  - **What:**
+    - admin delete, kick, ban, and the owner-only admin changes, through
+      the helper;
+    - a ban drops the person as a peer everywhere (unless they're a friend);
+    - redo wired to Task 2's report.
+  - **Accept:** process tests 7 (all three parts, with `spaceForge`) and 8.
+  - **Files:** as Task 9.
+  - Size M.
+
+- [ ] **Task 11: Measurements** (tests 9, 10, 11)
+  - **What:** `--ignored` process tests:
+    - a 50-member Space, one device each: a line to all 49; unlock with 5
+      such Spaces; for one line, the sender's CPU and bytes, open
+      connections and seed puts; and over an hour (clock offset) with 45
+      away, the seed's address lookups;
+    - unlock with a 100,000-event Space against an empty one;
+    - a check that no ID or text is logged, as the other modules have.
+  - **Accept:** numbers recorded here. If a line to 49 takes over 1 s on
+    this box, or unlock with 5 Spaces is over 1 s after "online", stop at
+    Checkpoint B with the figures.
+  - **Files:** `tests/spaces.rs`.
+  - Size M.
+
+**Checkpoint B (hard stop, needs your review):** the process tests pass,
+and Task 11's figures are recorded here. No screen work before your OK.
+
+### Phase 4: Mesh-Voice
+
+- [ ] **Task 12: The rail and channels** (tests 1, 13)
+  - **What:**
+    - Mesh Spaces on the existing rail, beside Matrix spaces and Discord
+      guilds (the rail groups by space already);
+    - the channel list with categories;
+    - each channel's timeline using the existing chat view and composer;
+    - unread counts, mention badges, and muting a Space.
+  - **Accept:**
+    - `cargo test -p mesh-app` passes, with no new clippy findings and no
+      rustfmt diffs (no whole-repo reformat);
+    - the checkpoint test's Spaces step (Task 14) drives it.
+  - **Files:** `crates/mesh-app/src/mesh_dm.rs`, `mesh_ui.rs`, `main.rs`.
+  - Size L.
+
+- [ ] **Task 13: Members and settings**
+  - **What:**
+    - the member list with roles (presence for friends only);
+    - "Add member" from your friends;
+    - Space settings: name, channels and categories, the post switch,
+      whether members may add, and admins (owner only);
+    - kick, ban and unban, transfer ownership, delete the Space, leave.
+  - **Accept:** as Task 12.
+  - **Files:** as Task 12.
+  - Size M.
+
+- [ ] **Task 14: The checkpoint test's Spaces step**
+  - **What:** `checkpoint.rs` gains a step. O creates a Space with two
+    channels and adds B and C, who aren't friends. They post, react and
+    reply. C locks and gets mail on unlock. O deletes a line. B can't post
+    in the announcements channel.
+  - **Accept:** `cargo test -p mesh-app checkpoint -- --ignored` passes.
+  - **Files:** `crates/mesh-app/src/checkpoint.rs`.
+  - Size S.
+
+**Checkpoint C (by hand, added to *Before beta*):** test 13, the solo look
+on Linux and Windows; and test 12, the gate with three people on two
+networks, once the outside seed is up.
+
+## Order and size
+
+Task 0 first. Tasks 1 to 4 in order (2 needs 1, 3 needs 2, 4 needs 1). Then
+Tasks 5 and 6. Tasks 7 to 10 in order. Task 11. Checkpoint B. Then Tasks
+12 to 14.
+
+Roughly 4,000 lines in Mesh-Node (a third of them tests) and 1,200 in
+Mesh-Voice.
+
+## Risks and mitigations
+
+| Risk | Impact | Mitigation |
+|---|---|---|
+| Encrypting for about 100 devices per line is slow | Medium | Task 11 measures; Checkpoint B stops on over 1 s. The path past 50 (Megolm) is the fix, not a tweak. |
+| More than 256 open connections in a busy account | Low | `PEER_IDLE` keeps the count to people talking now; past it, mail (S14). Task 11 records the count. |
+| Generalising the chain breaks group DMs | Medium | Task 2 keeps every group DM chain test unchanged and passing. Redo is Space-only. |
+| Redo loops between two honest devices | Low | Redo happens only after seeing a winning branch that lacks the change, once per fork lost. Task 2 tests a second fork. |
+| History pull of a long Space is heavy | Medium | Batches of 200, newest first, resumable. A 100,000-event Space is about 30 MB (dm D11). |
+| The mail limit is hit in a busy account | Low for the beta | S9's order and waiting. Task 8 tests the order. |
+| Test-only forging code leaks into a release | Medium | `spaceForge` compiles only into test builds; a release-build test checks the command is unknown (Question 1). |
+
+## Needs a new dependency
+
+None.
+
+## Open questions
+
+1. **`spaceForge`, a test-only helper command for the modified clients in
+   tests 5 and 7?** Recommended: yes, compiled only into test builds, as
+   `--crash-at` is. The other way builds forged events in the test itself
+   with `mesh-dm` and a raw client, which you've preferred to avoid.
+2. **Should Spaces share the rail with Matrix spaces and Discord guilds?**
+   Recommended: yes, as one more group on the existing rail, since that's
+   the Discord layout Mesh-Voice already has. The other way is a separate
+   Mesh section on the rail.
