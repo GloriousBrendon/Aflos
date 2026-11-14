@@ -116,6 +116,14 @@ differs from the rows above, this wins.
   group as it stands, so a removal applied first drops the removed member's
   earlier messages.)
 
+### Changed 2026-11-14 by `spaces`
+
+Approved with [SPEC-spaces.md](SPEC-spaces.md) (revision 3). Where this
+differs from the rows above, this wins.
+
+- **D3:** in a Space, an admin may also delete anyone's message (spaces S8).
+  DMs and group DMs are unchanged: only the author deletes.
+
 ### Options compared: the history store (D11)
 
 | Option | New crates | Encrypted at rest | Notes |

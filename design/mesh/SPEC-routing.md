@@ -102,6 +102,15 @@ differs from the rows above, this wins.
   network twice that; everyone through a relay, 100 times. Mail records
   count against the seed's `MAIL_STORE_MAX` (seed), not `MAX_RECORDS`.
 
+### Changed 2026-11-14 by `spaces`
+
+Approved with [SPEC-spaces.md](SPEC-spaces.md) (revision 3). Where this
+differs from the rows above, this wins.
+
+- **D9:** the handshake also lets in a Space's members (spaces S2), and
+  records are posted for them as for contacts. They aren't friends: no
+  presence, and no DMs.
+
 ## Behaviour
 
 ### Seed side (D5, D6)

@@ -336,6 +336,16 @@ every 2 s (the tests' 8 s records) the helper never catches up: 300
 contacts held, 1,000 didn't in half the runs. Tests above 300 contacts use
 records of 120 s or more.
 
+## Changed 2026-11-14 by `spaces`
+
+Approved with [SPEC-spaces.md](SPEC-spaces.md) (revision 3). Where this
+differs from the rows above, this wins.
+
+- **M2:** Space events aren't mailed right after they're stored. For each
+  reader device with no open connection, the waiting events from every Space
+  you share go at the next refresh, or at lock and quit, in one envelope
+  (spaces S9). DMs are unchanged.
+
 ## Behaviour
 
 ### Sending

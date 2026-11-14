@@ -136,6 +136,15 @@ removed while the owner is offline. Olm and Megolm need no order at all. The
 hand-rolled version would be the lightest, but this is the one place where
 writing our own is the risk the rest of the design exists to avoid.
 
+### Changed 2026-11-14 by `spaces`
+
+Approved with [SPEC-spaces.md](SPEC-spaces.md) (revision 3). Where this
+differs from the rows above, this wins.
+
+- **D6:** Spaces too use per-device Olm in their first version, as group
+  DMs do, not sender chains (spaces S4, for Spaces of up to 50). Megolm comes
+  back with spaces' path past 50.
+
 ## Behaviour
 
 ### Keys (D3, D4)
