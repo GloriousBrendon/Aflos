@@ -106,15 +106,19 @@ and **Y** are admins.
    - a line reaches all 49 others;
    - unlock with 5 such Spaces is under 1 s after "online";
    - recorded: for one line, the sender's CPU time and bytes, the
-     connections open and the seed puts; and over an hour with 45 members
-     away, the seed's address lookups (S14).
+     connections open and the seed puts; over an hour with 45 members
+     away, the seed's address lookups (S14); and for a returning device's
+     hello, its lookups and how long it takes to reach everyone online.
+12. **A returning member catches up live** (S14, *added 2026-11-14*). C
+    comes back while A and B are talking. C sees A's next line in under 5 s,
+    without posting anything.
 10. **Unlock doesn't read Space history.** Unlock takes the same time with a
     Space holding 100,000 events as with an empty one (S11).
 11. **Nothing identifying is logged.** The seed's files and logs and the
     helper's stderr hold no Space ID, channel name, member ID or message text.
-12. **By hand, on the gate** (three machines, two networks, an outside seed):
+13. **By hand, on the gate** (three machines, two networks, an outside seed):
     the above with real people, in Mesh-Voice.
-13. **By hand, a solo look** at the screens: the Space rail, channels and
+14. **By hand, a solo look** at the screens: the Space rail, channels and
     categories, the member list with roles, Space settings, adding a member,
     unread counts and mentions, and the narrow layout.
 
@@ -212,7 +216,7 @@ stays unused in this version. It's what the path past 50 uses.
 | S11 | **A Space's log is read when the Space is first used, not at unlock.** dm's device-wide log (every stored event's number and every deleted ID) stays for 1:1 chats and group DMs. Each Space gets its own, read the first time the Space is opened, sent to or received in during that unlock. | The map's open question: "before `spaces` reuses the dm store, it must change how the history log is held." This is the smallest change that keeps unlock flat (test 10). A Space's log in memory is about 16 MB per 100,000 events (PLAN-dm Task 15), bounded by the Space, not the account. |
 | S12 | **Mentions and unread.** A `Text` event may list mentioned member IDs, and `@everyone` if its author is an admin. Unread counts are per channel, from the read marker (dm D9). A mention also shows on the Space in the rail. One switch mutes a whole Space. | What makes a busy server usable. |
 | S13 | **Nothing identifying is logged.** No Space IDs, channel names, member IDs or contents, only counts. | As routing D10, social D15 and dm D15. |
-| S14 | **Connections: dialled to send, closed when quiet.** <br>**Who dials:** a device with Space events for a member's device dials it then, as dm D5 does for a friend (reach: a cached address, else the seed's record), in parallel for every member device it has events for. Space peers aren't dialled at unlock or at each refresh, as friends are for presence. <br>**When connections close:** 60 s after the last stream on it, the helper closes a connection to a device that's only a Space peer (no friend, not your own). Friends' connections stay open as now. <br>**How a line reaches 49 members live:** it's encrypted for each member device (S4) and sent on each open connection, dialling the rest in parallel. A cold dial took 0.64 s on the routing smoke test. Members already in the conversation within the minute reuse their connection. Members who are away get it by mail (S9). <br>**Looking up a peer who can't be reached:** one address lookup at the seed covers all of a person's devices (routing D2). After a lookup that finds no record or a failed dial, that person isn't looked up again for 30 minutes (`PEER_RETRY`), whatever is sent meanwhile. Their events wait and go by mail. A busy 50-member Space with 45 members away costs **45 lookups in the minute it gets busy, then about 90 an hour**, against the seed's 120 a minute per device (`GETS_PER_DEVICE`, so 7,200 an hour). At the limit of 10 busy Spaces, 441 away peers would want looking up in the same minute. Past 120, the seed answers `slow-down`, and the rest are tried in the following minutes. That delays only a live try for people who are away anyway. Steady state is then about 880 an hour. A peer who comes back while the sender is quiet gets the lines at the sender's next refresh by mail, or live on the sender's next line once `PEER_RETRY` has passed: up to 30 minutes either way. <br>**How many are open:** at 50 members, while a channel is busy, up to 49 times their online devices (about 75 at 1.5 devices online each), plus friends. At rest, none for peers. At the limit of 10 busy Spaces, up to about 735. Past the helper's 256 open connections (transport `Limits`), new incoming ones are refused, and the events for those devices wait and go by mail at the next refresh. The cap stays, and test 9 records the count and memory. <br>**A relay-only member** (no hole punch) sends and receives everything through their home relay. A line they post is one envelope per member device, about 1 KB each, so about 100 KB up through the relay for a full Space. They receive each line once per device of theirs. That costs the relay's operator bandwidth (100 lines a day is about 10 MB), adds the relay's round trip to every line, and is capped per client at 2 MB/s (`relay.toml`). | Dialling every peer at unlock, as friends are dialled, would hold up to 490 connections open all day for nothing, past the 256 cap. Dialling to send costs one dial per quiet minute and keeps the count at the people you're actually talking with. |
+| S14 | **Connections: dialled to send, closed when quiet.** <br>**Who dials:** a device with Space events for a member's device dials it then, as dm D5 does for a friend (reach: a cached address, else the seed's record), in parallel for every member device it has events for. Space peers aren't dialled at unlock or at each refresh, as friends are for presence. <br>**When connections close:** 60 s after the last stream on it, the helper closes a connection to a device that's only a Space peer (no friend, not your own). Friends' connections stay open as now. <br>**How a line reaches 49 members live:** it's encrypted for each member device (S4) and sent on each open connection, dialling the rest in parallel. A cold dial took 0.64 s on the routing smoke test. Members already in the conversation within the minute reuse their connection. Members who are away get it by mail (S9). <br>**Looking up a peer who can't be reached:** one address lookup at the seed covers all of a person's devices (routing D2). After a lookup that finds no record or a failed dial, that person isn't looked up again for 30 minutes (`PEER_RETRY`), whatever is sent meanwhile. Their events wait and go by mail. A busy 50-member Space with 45 members away costs **45 lookups in the minute it gets busy, then about 90 an hour**, against the seed's 120 a minute per device (`GETS_PER_DEVICE`, so 7,200 an hour). At the limit of 10 busy Spaces, 441 away peers would want looking up in the same minute. Past 120, the seed answers `slow-down`, and the rest are tried in the following minutes. That delays only a live try for people who are away anyway. Steady state is then about 880 an hour. A peer who comes back while the sender is quiet gets the lines at the sender's next refresh by mail, or live on the sender's next line once `PEER_RETRY` has passed: up to 30 minutes either way. *Replaced 2026-11-14 at your review of the plan by the hello below.* <br>**A returning device says hello** (*added 2026-11-14*). When a device comes online, it dials each of its Spaces' members once: that's the hello, an ordinary connection with no new message. Lookups stay under `GETS_PER_DEVICE` (at most 100 a minute, `HELLO_LOOKUPS`). At most 32 dials are under way at once (`HELLO_DIALS`), and dialling pauses while open connections are above 192 (`HELLO_ROOM`, three quarters of the 256 cap). <br>On the other side, an incoming connection from a person clears `PEER_RETRY` for them, and dm D5's "when a connection opens" sends them what waits. The connection then closes at `PEER_IDLE` as any other, and the sender's next line dials them again, because the retry was cleared. Members who are away cost one lookup each. A full Space of 49 others is 49 lookups and up to 49 dials, about 30 s at the 100-a-minute pace. Ten full Spaces (490 peers) is about 5 minutes, which test 9 records. <br>**How many are open:** at 50 members, while a channel is busy, up to 49 times their online devices (about 75 at 1.5 devices online each), plus friends. At rest, none for peers. At the limit of 10 busy Spaces, up to about 735. Past the helper's 256 open connections (transport `Limits`), new incoming ones are refused, and the events for those devices wait and go by mail at the next refresh. The cap stays, and test 9 records the count and memory. <br>**A relay-only member** (no hole punch) sends and receives everything through their home relay. A line they post is one envelope per member device, about 1 KB each, so about 100 KB up through the relay for a full Space. They receive each line once per device of theirs. That costs the relay's operator bandwidth (100 lines a day is about 10 MB), adds the relay's round trip to every line, and is capped per client at 2 MB/s (`relay.toml`). | Dialling every peer at unlock, as friends are dialled, would hold up to 490 connections open all day for nothing, past the 256 cap. Dialling to send costs one dial per quiet minute and keeps the count at the people you're actually talking with. |
 
 ## Limits
 
@@ -223,6 +227,9 @@ stays unused in this version. It's what the path past 50 uses.
 | `SPACE_MAX_CHANNELS` | 100, in up to 20 categories | Discord's own cap is 500 |
 | `PEER_IDLE` | 60 s | S14 |
 | `PEER_RETRY` | 30 minutes | S14: one lookup per away person per refresh |
+| `HELLO_LOOKUPS` | 100 a minute | S14: under the seed's 120 (`GETS_PER_DEVICE`) |
+| `HELLO_DIALS` | 32 at once | S14 |
+| `HELLO_ROOM` | 192 open connections | S14: hello pauses above three quarters of the 256 cap |
 | `HISTORY_BATCH` | 200 events | As dm D8 |
 | Text, files, reactions | dm D14, D12 | Unchanged |
 
@@ -287,9 +294,9 @@ signed events (S5) and the member pull (S10) stay as they are.
 ## What it needs from you
 
 1. **Review of PLAN-spaces.md.**
-2. **For the gate (test 12): three people on two networks**, and a seed
+2. **For the gate (test 13): three people on two networks**, and a seed
    reachable from outside (the VPS). The process tests need neither.
-3. **A look at the screens** (test 13), on Linux and Windows.
+3. **A look at the screens** (test 14), on Linux and Windows.
 
 ## Questions (answered 2026-11-14)
 

@@ -1,6 +1,12 @@
 # Plan: `spaces` (Mesh)
 
-Status: **DRAFT 2026-11-14, for your review.** No code until you approve it.
+Status: **APPROVED 2026-11-14**, with three fixes:
+- a returning device says hello (spec S14, test 12);
+- `spaceForge` truly kept out of release builds;
+- what an engine without Spaces does (*Mixed versions*), with group DMs'
+  formats unchanged (Task 2).
+
+Both questions are answered yes. Building, in plan order.
 Built from [SPEC-spaces.md](SPEC-spaces.md) (approved 2026-11-14,
 revision 3). Test numbers below are the spec's.
 
@@ -38,21 +44,71 @@ There are three checkpoints:
   once.
 - **The helper gains one service**, `space-history` (S10). Live Space events
   ride the existing `e2ee` service, as group DMs do.
-- **The modified clients in the forging tests** (tests 5 and 7) are a
-  test-only helper command, `spaceForge`, like `--crash-at`. It's compiled
-  only into test builds and forges what the test names: a ground-low ID, a
+- **The modified clients in the forging tests** (tests 5 and 7) are a helper
+  command, `spaceForge`. It forges what the test names: a ground-low ID, a
   back-dated `seq`, an altered history line, or a line into an
-  admins-post-only channel. *Question 1.*
+  admins-post-only channel.
+  - **It's behind `#[cfg(debug_assertions)]`,** so `cargo build --release`
+    leaves it out entirely: the command, its parsing and its code. The
+    process tests run the debug binary that `cargo test` builds, so they
+    have it. `cargo test --release` would not, and those tests say so when
+    they fail. *(Question 1, yes.)*
+  - *Corrected 2026-11-14:* the draft said `--crash-at` is test-only. It
+    isn't. It's parsed in every build (`main.rs`) and only documented as
+    for tests. `spaceForge` doesn't follow it.
 - **No new crate dependencies.**
 
 ## Task list
+
+## Mixed versions
+
+Friends will run 0.2.0, which has no Spaces, while Spaces is built. What
+such an engine does:
+
+- **A Space add or event** reaches it as an ordinary e2ee message, so the
+  session is unharmed. Its body uses the friend layout's next version
+  (`FRIEND_VERSION` 2), and forwards to your own devices use
+  `FORWARD_VERSION` 2. A 0.2.0 engine reads that first byte as "newer"
+  (`is_newer`, within `NEWER_WITHIN`) and answers `failed`, as built
+  (bb5ae79). It never answers `ok`, so the sender's counter doesn't move
+  past it. The sender keeps the event and resends it on dm D5's schedule
+  (live on each connection, by mail with `failed`'s back-off), until the
+  other side updates or D5's 30 days or 2,000 events run out. Nothing it
+  has stored changes.
+- **Batched Space mail** (Task 8) is one more body layout of the same kind,
+  with a version byte first, so the same holds: `failed` in the receipt.
+- **What the adder is shown:** the new member stays *added, waiting* in the
+  member list until one of their devices answers a Space event `ok`. If
+  every answer so far is `failed`, it reads *waiting: they may need to update
+  Mesh*. Other members show the same for them.
+- **Group DMs** are untouched: their events keep `VERSION` 1 and the
+  friend layout 1. Task 2 keeps both formats byte for byte, and checks that
+  bytes written before the change still read.
+- **The account state is where it would break** (*found 2026-11-14 while
+  writing this; needs your OK before Task 5*):
+  - Spec S2, as approved, makes Space peers a new account `Kind`, synced
+    between your own devices (social D11).
+  - The account syncs as one postcard value. A 0.2.0 device can't parse an
+    account holding a kind it doesn't know, so the whole sync to it would
+    fail: friends, blocks and status included.
+  - **Proposed:** peers aren't kept in the account at all. They're computed
+    from the Spaces held: every member of every Space you're in, less
+    friends and blocks. Routing, mail and the handshake take account
+    contacts plus that set, and `MAX_CONTACTS` counts the union once per
+    person.
+  - Own devices learn Spaces through own-device sync (dm D8) anyway, so they
+    compute the same set, and nothing new is synced.
+  - This changes S2's mechanism and approved change 2 (social D8): no new
+    kind, and social's account format is untouched. Phase 1 doesn't depend
+    on it. **I stop at Checkpoint A for your answer before Task 5.**
 
 ### Phase 0: The approved changes, written into their specs
 
 - [ ] **Task 0: Four dated notes, docs only.**
   - **What:** a dated "Changed 2026-11-14 by `spaces`" section in each of:
     - SPEC-routing: D9 lets in `space` peers;
-    - SPEC-social: D8's `space` kind, counted once against `MAX_CONTACTS`;
+    - SPEC-social: D8's `space` kind, counted once against `MAX_CONTACTS`
+      (*held 2026-11-14: waits on the account question in Mixed versions*);
     - SPEC-e2ee: D6, per-device Olm for Spaces in this version;
     - SPEC-mailbox: M2, Space events mailed in batches;
     - SPEC-dm: D3, an admin may delete anyone's message in a Space.
@@ -109,7 +165,10 @@ There are three checkpoints:
     - a late fork that drops a ban, with the ban redone (7.3);
     - a redone change dropped by a second fork and redone again;
     - no redo when the change no longer changes anything;
-    - group DMs' existing chain tests, unchanged and passing.
+    - group DMs' existing chain tests, unchanged and passing;
+    - **group DMs' wire and saved formats unchanged:** fixed bytes of a
+      group change event, a friend-layout body and a saved chain, captured
+      before the change, still read the same and still write the same.
   - **Files:** `mesh-dm/src/group.rs`, `space.rs`.
   - Size L.
 
@@ -175,12 +234,17 @@ There are three checkpoints:
     - peers are dialled to send, not at unlock or refresh;
     - `PEER_IDLE`: the helper closes a peer-only connection 60 s after its
       last stream (friends' connections untouched);
-    - `PEER_RETRY`: no lookup of an away person for 30 minutes.
+    - `PEER_RETRY`: no lookup of an away person for 30 minutes;
+    - **the hello** (S14): on coming online, each Space member is dialled
+      once, with lookups at most `HELLO_LOOKUPS` a minute, `HELLO_DIALS` at
+      once, and a pause above `HELLO_ROOM`. An incoming connection from a
+      person clears their `PEER_RETRY`.
   - **Accept:** a routing process test covers:
     - two peers connecting, then disconnecting after `PEER_IDLE` (with a
       test-short setting);
     - a friend's connection staying up;
-    - an away peer looked up once per `PEER_RETRY` (counted at the seed).
+    - an away peer looked up once per `PEER_RETRY` (counted at the seed);
+    - the hello's pace held to its limits (counted at the seed).
   - **Files:** `mesh-node/src/routing.rs`, `helper.rs`.
   - Size M.
 
@@ -197,7 +261,8 @@ There are three checkpoints:
     Sending encrypts for every current member device in one
     `encrypt_device_batch`, over the `e2ee` service. Delivery counters are
     dm D5's. Own-device sync carries Spaces as dm D8 does.
-  - **Accept:** process tests 1 and 6 (roles and the post switch).
+  - **Accept:** process tests 1, 6 (roles and the post switch) and 12 (a
+    returning member sees A's next line in under 5 s without posting).
   - **Files:** `mesh-node/src/dm.rs` (or a new `spaces.rs` beside it),
     `helper.rs`, `tests/spaces.rs` (new).
   - Size L.
@@ -226,7 +291,7 @@ There are three checkpoints:
     - served only to a current member;
     - each event checked with `check_history` (Task 3).
   - **Accept:** process tests 3, 4 and 5. Test 5 includes the announcements
-    case, with `spaceForge` (Question 1).
+    case, with `spaceForge`.
   - **Files:** `mesh-node/src/dm.rs` or `spaces.rs`, `helper.rs`,
     `tests/spaces.rs`.
   - Size M.
@@ -246,7 +311,8 @@ There are three checkpoints:
     - a 50-member Space, one device each: a line to all 49; unlock with 5
       such Spaces; for one line, the sender's CPU and bytes, open
       connections and seed puts; and over an hour (clock offset) with 45
-      away, the seed's address lookups;
+      away, the seed's address lookups; a returning device's hello, its
+      lookups and its time to reach everyone online;
     - unlock with a 100,000-event Space against an empty one;
     - a check that no ID or text is logged, as the other modules have.
   - **Accept:** numbers recorded here. If a line to 49 takes over 1 s on
@@ -260,7 +326,7 @@ and Task 11's figures are recorded here. No screen work before your OK.
 
 ### Phase 4: Mesh-Voice
 
-- [ ] **Task 12: The rail and channels** (tests 1, 13)
+- [ ] **Task 12: The rail and channels** (tests 1, 14)
   - **What:**
     - Mesh Spaces on the existing rail, beside Matrix spaces and Discord
       guilds (the rail groups by space already);
@@ -294,8 +360,8 @@ and Task 11's figures are recorded here. No screen work before your OK.
   - **Files:** `crates/mesh-app/src/checkpoint.rs`.
   - Size S.
 
-**Checkpoint C (by hand, added to *Before beta*):** test 13, the solo look
-on Linux and Windows; and test 12, the gate with three people on two
+**Checkpoint C (by hand, added to *Before beta*):** test 14, the solo look
+on Linux and Windows; and test 13, the gate with three people on two
 networks, once the outside seed is up.
 
 ## Order and size
@@ -317,19 +383,16 @@ Mesh-Voice.
 | Redo loops between two honest devices | Low | Redo happens only after seeing a winning branch that lacks the change, once per fork lost. Task 2 tests a second fork. |
 | History pull of a long Space is heavy | Medium | Batches of 200, newest first, resumable. A 100,000-event Space is about 30 MB (dm D11). |
 | The mail limit is hit in a busy account | Low for the beta | S9's order and waiting. Task 8 tests the order. |
-| Test-only forging code leaks into a release | Medium | `spaceForge` compiles only into test builds; a release-build test checks the command is unknown (Question 1). |
+| Forging code leaks into a release | Medium | `spaceForge` is behind `cfg(debug_assertions)`, so a release build has none of it. Task 11 checks a release binary answers it `unknown`. |
+| An old engine on a friend's PC breaks a Space or a session | Medium | *Mixed versions*: newer layouts get `failed`, not garbage; the account stays as it is. |
 
 ## Needs a new dependency
 
 None.
 
-## Open questions
+## Open questions (answered 2026-11-14)
 
-1. **`spaceForge`, a test-only helper command for the modified clients in
-   tests 5 and 7?** Recommended: yes, compiled only into test builds, as
-   `--crash-at` is. The other way builds forged events in the test itself
-   with `mesh-dm` and a raw client, which you've preferred to avoid.
-2. **Should Spaces share the rail with Matrix spaces and Discord guilds?**
-   Recommended: yes, as one more group on the existing rail, since that's
-   the Discord layout Mesh-Voice already has. The other way is a separate
-   Mesh section on the rail.
+1. **`spaceForge`:** yes, behind `cfg(debug_assertions)`.
+2. **The rail:** yes, the existing one.
+
+Open: the account question in *Mixed versions*, before Task 5.
