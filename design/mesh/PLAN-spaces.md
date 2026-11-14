@@ -104,7 +104,7 @@ such an engine does:
 
 ### Phase 0: The approved changes, written into their specs
 
-- [ ] **Task 0: Four dated notes, docs only.**
+- [x] **Task 0: Four dated notes, docs only.**
   - **What:** a dated "Changed 2026-11-14 by `spaces`" section in each of:
     - SPEC-routing: D9 lets in `space` peers;
     - SPEC-social: D8's `space` kind, counted once against `MAX_CONTACTS`
@@ -121,7 +121,7 @@ such an engine does:
 
 ### Phase 1: The pure parts (`mesh-dm`)
 
-- [ ] **Task 1: The signed Space event** (S1, S3, S5, S12)
+- [x] **Task 1: The signed Space event** (S1, S3, S5, S12)
   - **What:**
     - `SpaceEvent`: Space ID, channel ID, dm's `Body` (with a mention list
       on `Text`), and the signing device's `DeviceCert`, signed by that
@@ -146,7 +146,7 @@ such an engine does:
   - **Files:** `mesh-dm/src/space.rs` (new), `event.rs`.
   - Size M.
 
-- [ ] **Task 2: The chain with roles, forks and redo** (S7, S8)
+- [x] **Task 2: The chain with roles, forks and redo** (S7, S8)
   - **What:** `group.rs`'s chain takes a role table: who may make each kind
     of change in a version. Group DMs keep creator and members. Spaces get
     the owner, admins and members, with only the owner removing, banning or
@@ -172,7 +172,7 @@ such an engine does:
   - **Files:** `mesh-dm/src/group.rs`, `space.rs`.
   - Size L.
 
-- [ ] **Task 3: The history check** (S5)
+- [x] **Task 3: The history check** (S5)
   - **What:** `check_live(event, current lists, version)` and
     `check_history(event, chain)`:
     - **live:** the device is on the author's current list, and the author
@@ -190,7 +190,7 @@ such an engine does:
   - **Files:** `mesh-dm/src/space.rs`.
   - Size S.
 
-- [ ] **Task 4: The Space store and its log** (S3, S11)
+- [x] **Task 4: The Space store and its log** (S3, S11)
   - **What:**
     - a Space folder in `<data>/dm/`, with one chat per channel (segments,
       index, read marker), and the chain saved beside them;
@@ -206,6 +206,47 @@ such an engine does:
 
 **Checkpoint A (a short report, no stop):** the unit test counts, and Task
 4's numbers.
+
+**Checkpoint A, reached 2026-11-14** (Mesh-Node `4533f1c` to `cbcb7f7`,
+Mesh-Voice `4792c4c`):
+- **Tests:** `mesh-dm` has 100 unit tests passing (2 ignored measurements),
+  up from 81. 19 are new:
+  - 5 for the event (Task 1);
+  - 10 for the chain (Task 2), plus the group DM format test;
+  - 2 for the checks (Task 3);
+  - 3 for the store (Task 4).
+
+  Every group DM test passes unchanged, and the full workspace, clippy and
+  fmt are clean.
+- **Task 4's measurement** (release, NVMe under `target/`):
+  - unlock reads only the list of Spaces: 23 µs with a 100,000-event Space,
+    against 15 µs with an empty one;
+  - the Space's first use reads its log and changes in 176 ms, then
+    `#general`'s newest segment in 0.8 ms.
+- **Changed from this plan while building:**
+  - **Changes are signed like every Space event**, by the author's device,
+    with its certificate. They're not signed with the ID key as group
+    changes are. One check covers everything, and the ID signs the
+    certificate. Every device holds the root key anyway (identity D2), so a
+    stolen device could sign either way.
+  - **`n` counts per channel**, not per Space, as dm's `Chat` checks it per
+    chat.
+  - **The store is its own file**, `space_store.rs`, on dm's `Store`, `Log`
+    and `Chat`, not a `History` per Space. `History` keeps dm `Event`s, which
+    would drop the signatures that history (S10) passes on, and its group
+    rules would refuse channel events.
+  - **The history check reads the versions on the winning line**, not every
+    branch held. A dishonest admin's losing fork can't then open an
+    announcements channel to members' forged lines.
+  - **Storing one event at a time costs about 1.9 ms**, because each store
+    syncs the channel file and the log. That's fine live, but 100,000 took
+    187 s. Task 9 stores history in batches, synced once, as dm's intake
+    does.
+  - **Test first:** Task 2's format test was captured and passing before the
+    refactor. For Tasks 1, 3 and 4 the tests were written with the code, not
+    run failing first.
+- **Stopping here** for the account question in *Mixed versions*, before
+  Task 5.
 
 ### Phase 2: Contacts and routing
 
