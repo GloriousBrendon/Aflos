@@ -95,6 +95,20 @@ on both sides.
 | D14 | **Names.** A friend's display name comes from their request (or their sync of it) and is only a hint (identity: "self-chosen, not unique"). Your nickname for them wins when set. **Verified** is a flag you set after comparing the safety number, and it's synced (D11). | Identity left showing "verified" to `social`. |
 | D15 | **Nothing identifying is logged**, on the seed or in the helper's stderr: no IDs, lookup IDs, names or notes, only counts. | Same rule as routing D10. |
 
+### Changed 2026-11-14 by `spaces`
+
+Approved with [SPEC-spaces.md](SPEC-spaces.md) (revision 3, S2 as changed
+2026-11-14). The decisions above don't change.
+
+- **D8 and D11 are unchanged.** Members of your Spaces aren't account
+  entries, so nothing new is synced and the account's format is the same.
+  Routing, mail and the handshake take your contacts plus the members of the
+  Spaces you hold (spaces S2). A connection with someone who's only a Space
+  member never makes them a friend, because they have no `outgoing` entry.
+- **`MAX_CONTACTS` (1,000)** counts contacts and Space members together, once
+  per person. An add to a Space that would take you past it is refused for
+  you, with that reason.
+
 ## Behaviour
 
 ### Seed side (D1, D3, D6)

@@ -99,8 +99,8 @@ such an engine does:
   - Own devices learn Spaces through own-device sync (dm D8) anyway, so they
     compute the same set, and nothing new is synced.
   - This changes S2's mechanism and approved change 2 (social D8): no new
-    kind, and social's account format is untouched. Phase 1 doesn't depend
-    on it. **I stop at Checkpoint A for your answer before Task 5.**
+    kind, and social's account format is untouched. **Approved 2026-11-14**,
+    written into S2, decision change 2 and the social note (Task 0).
 
 ### Phase 0: The approved changes, written into their specs
 
@@ -108,7 +108,8 @@ such an engine does:
   - **What:** a dated "Changed 2026-11-14 by `spaces`" section in each of:
     - SPEC-routing: D9 lets in `space` peers;
     - SPEC-social: D8's `space` kind, counted once against `MAX_CONTACTS`
-      (*held 2026-11-14: waits on the account question in Mixed versions*);
+      (*written 2026-11-14 to match S2 as changed: D8 and D11 unchanged,
+      Space members counted against `MAX_CONTACTS` with contacts*);
     - SPEC-e2ee: D6, per-device Olm for Spaces in this version;
     - SPEC-mailbox: M2, Space events mailed in batches;
     - SPEC-dm: D3, an admin may delete anyone's message in a Space.
@@ -250,23 +251,36 @@ Mesh-Voice `4792c4c`):
 
 ### Phase 2: Contacts and routing
 
-- [ ] **Task 5: The `space` kind** (S2)
+- [ ] **Task 5: Peers worked out from the Spaces held** (S2 as changed
+  2026-11-14)
   - **What:**
-    - `Kind::Space` in `account.rs`, synced between own devices like the
-      other kinds (social D11);
-    - it counts against `MAX_CONTACTS` once per person;
-    - a connection never makes it `friend`; it gets no presence and no DMs;
-    - blocking wins;
-    - the entry is dropped when no shared Space is left, unless they're a
-      friend;
-    - an add that would pass 1,000 is refused for the person it would
-      affect, with that reason.
-  - **Accept:**
-    - unit tests in `mesh-identity`: counting, sync, the promotion that
-      mustn't happen, block over space;
+    - **The peer set at unlock:** unlock reads the list of Spaces, and for
+      each Space only its changes (the chain). It doesn't read the event
+      log, which S11 leaves to first use. The set is every member of every
+      Space's current version, less yourself, your contacts and blocked
+      IDs. It's kept again whenever a change is stored.
+    - **Peers' routing state** (their device list and the address that last
+      worked) is a `Contact` held by the helper in memory, not in the
+      keystore. It's learned again from records after each unlock.
+    - **One list for the lower layers:** routing, mail and the handshake
+      take contacts plus peers. Every one of the helper's 22 uses of
+      `store.contacts()` is reviewed, and each one that means "who may reach
+      us and whom we reach" takes both.
+    - **The cap:** `MAX_CONTACTS` counts contacts and peers together, once
+      per person. A Space add that would take this device past it is refused
+      here, with that reason.
+    - No account kind, so social sees nothing new: a peer is never promoted
+      to friend, because promotion needs an `outgoing` entry.
+  - **Tests first:**
+    - `mesh-dm`: the chain read without the log matches the full open's
+      version, and reads no channel or log file;
+    - `mesh-node` unit tests: the set is worked out less self, contacts and
+      blocks; the union cap refuses at 1,000; storing a change updates the
+      set;
     - the social and routing process tests still pass.
-  - **Files:** `mesh-identity/src/account.rs`, `keystore.rs`,
-    `mesh-node/src/social.rs`.
+  - **Files:** `mesh-dm/src/space_store.rs`, `mesh-identity/src/contacts.rs`
+    (a public constructor for a peer's `Contact`), `mesh-node/src/spaces.rs`
+    (new), `helper.rs`, `routing.rs`, `mail.rs`, `mailrec.rs`.
   - Size M.
 
 - [ ] **Task 6: Peers on the wire** (S14)
@@ -354,7 +368,9 @@ Mesh-Voice `4792c4c`):
       connections and seed puts; and over an hour (clock offset) with 45
       away, the seed's address lookups; a returning device's hello, its
       lookups and its time to reach everyone online;
-    - unlock with a 100,000-event Space against an empty one;
+    - **test 10, kept honest:** unlock with a 100,000-event Space against an
+      empty one, both with the peer set worked out (the list, then each
+      chain), so the time includes what unlock really reads;
     - a check that no ID or text is logged, as the other modules have.
   - **Accept:** numbers recorded here. If a line to 49 takes over 1 s on
     this box, or unlock with 5 Spaces is over 1 s after "online", stop at
@@ -436,4 +452,8 @@ None.
 1. **`spaceForge`:** yes, behind `cfg(debug_assertions)`.
 2. **The rail:** yes, the existing one.
 
-Open: the account question in *Mixed versions*, before Task 5.
+The account question in *Mixed versions*: answered yes, peers worked out
+from the Spaces held (2026-11-14).
+
+**From Task 5 on, tests are written first and run failing before the code**
+(your rule, restated 2026-11-14).
