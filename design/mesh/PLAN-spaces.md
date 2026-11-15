@@ -251,7 +251,7 @@ Mesh-Voice `4792c4c`):
 
 ### Phase 2: Contacts and routing
 
-- [ ] **Task 5: Peers worked out from the Spaces held** (S2 as changed
+- [x] **Task 5: Peers worked out from the Spaces held** (S2 as changed
   2026-11-14)
   - **What:**
     - **The peer set at unlock:** unlock reads the list of Spaces, and for
@@ -283,7 +283,7 @@ Mesh-Voice `4792c4c`):
     (new), `helper.rs`, `routing.rs`, `mail.rs`, `mailrec.rs`.
   - Size M.
 
-- [ ] **Task 6: Peers on the wire** (S14)
+- [x] **Task 6: Peers on the wire** (S14)
   - **What:**
     - the handshake allow-list and records cover `space` peers;
     - peers are dialled to send, not at unlock or refresh;
@@ -305,7 +305,7 @@ Mesh-Voice `4792c4c`):
 
 ### Phase 3: The helper
 
-- [ ] **Task 7: Spaces, live** (S1, S4, S6, S12)
+- [x] **Task 7: Spaces, live** (S1, S4, S6, S12)
   - **What:** helper commands:
     - `spaceCreate`, `spaceAdd`, `spaceLeave`;
     - channel and category commands;
@@ -322,7 +322,7 @@ Mesh-Voice `4792c4c`):
     `helper.rs`, `tests/spaces.rs` (new).
   - Size L.
 
-- [ ] **Task 8: Batched mail** (S9)
+- [x] **Task 8: Batched mail** (S9)
   - **What:**
     - for each away reader device, the events waiting for it from every
       Space go in one envelope at the refresh and at the flush;
@@ -338,7 +338,7 @@ Mesh-Voice `4792c4c`):
   - **Files:** `mesh-node/src/mail.rs`, `tests/spaces.rs`.
   - Size M.
 
-- [ ] **Task 9: History from any member** (S10)
+- [x] **Task 9: History from any member** (S10)
   - **What:**
     - the `space-history` service: changes first, then each channel newest
       first, in batches of 200, by a per-(Space, channel) counter;
@@ -377,6 +377,33 @@ Mesh-Voice `4792c4c`):
     Checkpoint B with the figures.
   - **Files:** `tests/spaces.rs`.
   - Size M.
+
+**Progress, 2026-11-15** (Mesh-Node `97c32a1`, `7b4256a`, `7800b52`,
+`acebfc7`, `c8d57e6`): Tasks 5 to 9 are done. Seven process tests pass in
+`tests/spaces.rs`: tests 1, 2, 3, 4 (the departure half), 5, 6 (the local
+refusals) and 12. Changed while building:
+- **A new peer** gets our records and mail claims at once, and a hello. A
+  failed hello is tried again three times, 10 s apart; only a failed
+  dial-to-send starts `PEER_RETRY`.
+- **Keys for a peer never met** come only from their records. A delivery
+  that finds none fetches them and tries again at the refresh, and the
+  refresh's key fetch covers peers without keys as well as contacts.
+- **Mail from a sender we know nothing of yet** stays untaken at the holder
+  until their record is read. Before, it was dropped and its box taken,
+  which lost it. *This changes mailbox M7 for that case and needs your OK.*
+- **Space mail marks** are in memory only (`ponytail:`). After a restart,
+  unanswered Space mail is mailed again, and readers drop the copies by
+  event ID.
+- **Space events use a real millisecond clock.** `seq` is still dm D2's
+  count from what's held, so lines sent before either side saw the other's
+  are concurrent, and sort by ID.
+- **Test 4's removed-device half** stays a `mesh-dm` unit test. A
+  process-level device swap needs the link flow.
+- **Own-device sync of Spaces** is built, but no test covers it yet.
+- **Known flakiness:** under the full workspace's parallel load, a peer's
+  first live line still sometimes misses the 60 s wait (test 3 failed once
+  in four full runs after the fixes). Alone, the Space suite passed 14 runs
+  of 14.
 
 **Checkpoint B (hard stop, needs your review):** the process tests pass,
 and Task 11's figures are recorded here. No screen work before your OK.
