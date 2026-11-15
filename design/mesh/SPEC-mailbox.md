@@ -345,6 +345,13 @@ differs from the rows above, this wins.
   reader device with no open connection, the waiting events from every Space
   you share go at the next refresh, or at lock and quit, in one envelope
   (spaces S9). DMs are unchanged.
+- **M7** (*added 2026-11-15 at your review, found building spaces Task 8*):
+  mail from a sender we know nothing of yet, with no device list and no
+  keys for them (a Space member never met live), isn't dropped and its box
+  isn't taken. It stays at the holder, untaken; their records are read
+  at once, and the next collect opens it. Before, the box was taken and the
+  mail lost. Mail from a known sender that fails M7's checks is still
+  dropped and listed nowhere.
 
 ## Behaviour
 
