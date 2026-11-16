@@ -76,7 +76,10 @@ code, and every piece must link the runtime the same way:
       when that variable changes, so a tree that built Opus before would
       keep the DLL-runtime one.
     - D4 is unchanged: every binary still links the static runtime.
-    - Not yet known: whether it links (your Windows session is checking).
+    - **Passed with fallback (a), 2026-11-16:** `mesh-dc` and `mesh-node`
+      built with the static runtime, and no `dumpbin` list names
+      `VCRUNTIME`, `MSVCP` or `api-ms-win-crt`. Task 5's "no missing-DLL
+      dialog" is still to come.
 
 - [x] **Task 2: `build.ps1` and `mesh.iss` for a friend's setup. (Alone.)**
   - **What:** all in `installer\`, no app code:
@@ -178,6 +181,10 @@ code, and every piece must link the runtime the same way:
 *Tonight's short sitting (2026-11-16):* steps 1, 2, 3, 5, 6 and 7 only.
 Step 4 is skipped, so steps 5 and 7.1 check against step 2's SHA-256.
 Steps 4 and 8 to 12 stay owed.
+- **The relay's 443 forward (SPEC-seed D0, dated 2026-11-16):** the home
+  machine's other sites now answer only the LAN, Tailscale and its own
+  containers. The refusal check passed on 2026-11-16: from a phone on mobile
+  data, another site refuses and the relay answers.
 
 Run these at your Windows PC, top to bottom. Each step says what to send
 me. If a step marked **stop** fails, stop there and send me what it says;
