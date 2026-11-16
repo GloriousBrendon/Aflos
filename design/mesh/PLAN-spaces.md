@@ -361,7 +361,7 @@ Mesh-Voice `4792c4c`):
   - **Files:** as Task 9.
   - Size M.
 
-- [ ] **Task 11: Measurements** (tests 9, 10, 11)
+- [x] **Task 11: Measurements** (tests 9, 10, 11)
   - **What:** `--ignored` process tests:
     - a 50-member Space, one device each: a line to all 49; unlock with 5
       such Spaces; for one line, the sender's CPU and bytes, open
@@ -443,7 +443,7 @@ and reproduced under 28 busy loops on 16 cores.
   | That Space's first use (release / debug) | 183 ms / 9.9 s |
   | A join with the real refresh, 4 people | every line within 0.92 s of the add |
   | Test 11: nothing identifying in the seed's files and log, or stderr | passes |
-  | Fifty members (test 9) | **doesn't finish**: the set-up does (924 s), the first line to all doesn't; see below |
+  | Fifty members (test 9) | the set-up finishes (871 s at the last run, 0 address gets refused); the first line to all 49 doesn't reach every member in 300 s: **a known limit**, see *Checkpoint B passed* below |
 
 **Checkpoint B review, 2026-11-16** (Mesh-Node `a8d9c16` to `fdfbc52`,
 not pushed; Mesh-Voice `680f429`):
@@ -547,6 +547,22 @@ and `14afdec`):
 
 **Checkpoint B (hard stop, needs your review):** the process tests pass,
 and Task 11's figures are recorded here. No screen work before your OK.
+
+**Checkpoint B passed, 2026-11-16, at your review.** Small Spaces pass every
+check. The 50-member first line is a **known limit** for version 1, not a
+blocker. Test 9 stays as the record, `--ignored`.
+- **The last run** (Mesh-Node `51b272e`): the set-up took 871 s with 0
+  address gets refused. The first line reached m0 and m2, but m3 wasn't
+  told in 300 s.
+  - B's failed sends to m3: 3 "couldn't connect" and 3 "stream broke".
+  - Over all 50 helpers: couldn't connect 6,070, no keys 3,804, stream
+    broke 3,709, failed answer 357, answer timed out 294; 1,896 sends
+    outstanding, 184 given up.
+  - "Space not held" refusals: 8,574, all changes passed on by non-friends,
+    which the adder sends itself, so no spec change.
+- **Waiting, not started:** counting on the receiving side why connections
+  fail or break (an unverified lead: a member may not yet be allowed to
+  connect to someone who doesn't hold the Space).
 
 ### Phase 4: Mesh-Voice
 
