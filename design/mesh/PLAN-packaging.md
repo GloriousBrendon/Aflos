@@ -158,6 +158,10 @@ code, and every piece must link the runtime the same way:
 
 ## The sitting
 
+*Tonight's short sitting (2026-11-16):* steps 1, 2, 3, 5, 6 and 7 only.
+Step 4 is skipped, so steps 5 and 7.1 check against step 2's SHA-256.
+Steps 4 and 8 to 12 stay owed.
+
 Run these at your Windows PC, top to bottom. Each step says what to send
 me. If a step marked **stop** fails, stop there and send me what it says;
 the rest waits. *Corrected 2026-11-14 at your review:*
@@ -167,8 +171,8 @@ the rest waits. *Corrected 2026-11-14 at your review:*
 - P2's broken engine fails in seconds.
 
 1. **Pull.** In both checkouts, `git pull`, then `git status`. Both must
-   say clean (untracked files are fine). Mesh-Voice must be at `1f0e9a1` or
-   later, and Mesh-Node at `d437a51` or later.
+   say clean (untracked files are fine). Mesh-Voice must be at `c470498` or
+   later, and Mesh-Node at `7f60145` or later. *(IDs updated 2026-11-16.)*
 2. **Build (Task 1, stop).** Use a **normal PowerShell window**, not
    "Developer PowerShell for VS": that one defaults to a 32-bit
    environment, which can break a 64-bit link. In the Mesh-Voice folder, run
