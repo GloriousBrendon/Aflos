@@ -197,6 +197,17 @@ Steps 4 and 8 to 12 stay owed.
   machine's other sites now answer only the LAN, Tailscale and its own
   containers. The refusal check passed on 2026-11-16: from a phone on mobile
   data, another site refuses and the relay answers.
+- **The setup, 2026-11-16** (Mesh-Voice `9f3ad8a`, Mesh-Node `7f60145`):
+  `Mesh-Setup-0.2.0.0.exe`, 43,887,035 bytes, SHA-256
+  `D5285751538AACA33553D1F90E8C69013F83F5D81579729F8DBC099DB580BF0D`.
+  Steps 2, 3 and 5 passed:
+  - step 2: it built, and the whole build log has no LNK warnings;
+  - step 3: no program depends on `VCRUNTIME`, `MSVCP` or `api-ms-win-crt`;
+  - step 5: Product version reads "0.2.0.0 (app 9f3ad8a, engine 7f60145)".
+
+  Step 4 (P2's four cases) wasn't run and stays owed.
+
+  This SHA-256 is the one steps 5 and 7.1 check against.
 
 Run these at your Windows PC, top to bottom. Each step says what to send
 me. If a step marked **stop** fails, stop there and send me what it says;
