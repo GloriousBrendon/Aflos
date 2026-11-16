@@ -443,7 +443,7 @@ and reproduced under 28 busy loops on 16 cores.
   | That Space's first use (release / debug) | 183 ms / 9.9 s |
   | A join with the real refresh, 4 people | every line within 0.92 s of the add |
   | Test 11: nothing identifying in the seed's files and log, or stderr | passes |
-  | Fifty members (test 9) | **doesn't finish**: see below |
+  | Fifty members (test 9) | **doesn't finish**: the set-up does (924 s), the first line to all doesn't; see below |
 
 **Checkpoint B review, 2026-11-16** (Mesh-Node `a8d9c16` to `fdfbc52`,
 not pushed; Mesh-Voice `680f429`):
@@ -492,6 +492,58 @@ not pushed; Mesh-Voice `680f429`):
   keys for the person (9,896 in all, O 1,218), though every record was
   put once (2,500 puts). Why some members don't get each other's keys
   isn't found.
+
+**Checkpoint B review, 2026-11-16, second sitting** (Mesh-Node `c5ca152`
+to `7f60145`; Mesh-Voice `a0f0b7e` to `cb81612`; pushed up to `5e94ce9`
+and `14afdec`):
+- **A post from history is news within 2 minutes** of the add's time
+  (`JOIN_CLOCK_TOLERANCE`, S10 dated note: a second use of the sender's
+  time, which dm D2 calls display-only). Space times follow
+  `--clock-offset`. Tested with an author a minute slow (told) and one
+  five minutes slow writing before the add (not told).
+- **A budget per seed:** each seed counts its own limit, so each has its
+  own 110 gets a minute (S14).
+- **`spaceCounts`** (debug builds), numbers only:
+  - sends failed by reason, and sends given up;
+  - events refused (answered ok) and kept (answered `failed`), by reason;
+  - peers with no keys, sends outstanding, and peers in `PEER_RETRY`;
+  - finds by purpose and result.
+
+  Test 9 prints every helper's counts after the set-up, and again when a
+  step fails. It names the member a line is waited on for, and a wait now
+  runs to its own limit, not 90 s of quiet.
+- **A miss backs off to the refresh** (S14): a failed Space send and a
+  hello that found nobody wait 10 s, then double up to 1,280 s, and then
+  the refresh takes over. Before, both gave up after about a minute.
+- **One find serves keys and the dial** (S14):
+  - a dial's records teach the keys, whether or not a device answered;
+  - a send's dial tries an address a key lookup gave before looking them
+    up again;
+  - a hello and a send's dial no longer run side by side.
+
+  The unlock's key fetch for contacts stays its own find. Skipping it broke
+  `a_message_before_the_add_shows_once_it_lands` (3 runs in 4).
+- **Fifty members, three runs today** (all with the real refresh, and 0
+  address gets refused):
+
+  | Run | Set-up | Finds (all helpers) | First line to all |
+  |---|---|---|---|
+  | 40-minute wait | 1,060 s | not counted | one member heard nothing for 90 s |
+  | With counts | 1,242 s | 20,256 (about 8.3 a peer) | one member not told in 300 s |
+  | Back-off and one find | 924 s | 10,580 (about 4.3 a peer) | m2 not told in 300 s |
+
+  The set-up always finished before the 30-minute refresh: the old 600 s
+  wait was the limit, not the refresh. In the last run:
+  - **B (m1):** 29 sends outstanding and still backing off (none given up,
+    none in `PEER_RETRY`). Its "no answer" failures rose from 138 to 193
+    during the wait.
+  - **m2:** kept nothing. It refused 1,331 events as "Space not held":
+    they came from other members before O's add reached it, and each was
+    answered ok, so it's never sent again. It had no keys for 17 peers
+    after the set-up, and 0 at the end.
+  - **All 50 helpers:** 1,910 sends outstanding, 165 given up, 13,620
+    events refused, 0 kept.
+- **Not found:** why B's sends to members it has keys for get no answer.
 
 **Checkpoint B (hard stop, needs your review):** the process tests pass,
 and Task 11's figures are recorded here. No screen work before your OK.
