@@ -205,9 +205,23 @@ Steps 4 and 8 to 12 stay owed.
   - step 3: no program depends on `VCRUNTIME`, `MSVCP` or `api-ms-win-crt`;
   - step 5: Product version reads "0.2.0.0 (app 9f3ad8a, engine 7f60145)".
 
-  Step 4 (P2's four cases) wasn't run and stays owed.
+  Step 4 (P2's four cases) wasn't run that sitting.
+- **Step 4, 2026-11-16, later** (on your PC, by the Windows session;
+  Mesh-Voice `3517bb2`, Mesh-Node `51b272e`): all four cases passed.
+  - 4.1: built in 191 s with no LNK warnings.
+    `Mesh-Setup-0.2.0.0.exe`, 43,884,735 bytes, "app 3517bb2, engine
+    51b272e", SHA-256
+    `8549935D866EDB07439B1E7B88EFF8735CCAF93F6C21641862EED39D12E35207`.
+  - 4.2: stopped with "uncommitted changes" naming `README.md`.
+  - 4.3: stopped with "no Mesh-Node checkout at C:\nowhere".
+  - 4.4: stopped with "cargo build failed" in the broken clone; `dist\`
+    unchanged. It took 152 s, not seconds: the Task 1 fallback rebuilds
+    Opus in `mesh-wa` and `mesh-dc` on every run, before the engine is
+    reached. The engine itself failed at once.
 
-  This SHA-256 is the one steps 5 and 7.1 check against.
+  **4.1's SHA-256 above is the one steps 5 and 7.1 now check against.**
+  Step 5 was run on the earlier setup; its Product version for this one
+  should read "0.2.0.0 (app 3517bb2, engine 51b272e)".
 
 Run these at your Windows PC, top to bottom. Each step says what to send
 me. If a step marked **stop** fails, stop there and send me what it says;
