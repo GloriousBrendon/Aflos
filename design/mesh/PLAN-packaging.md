@@ -60,6 +60,23 @@ code, and every piece must link the runtime the same way:
       next to `Mesh.exe` in `{app}`. Microsoft allows this "app-local" copy,
       and it needs no admin prompt.
   - Size M for you (four release builds from scratch).
+  - **Result, 2026-11-16 (tonight's sitting, step 2):** stopped here, as the
+    risk below said. `mesh-app` and `mesh-wa` built. `mesh-dc` failed to
+    link: `LNK4098` (defaultlib `MSVCRT` conflicts) and `LNK2001`
+    (`__imp_floor` in `libopus_sys`'s objects).
+    - **Cause:** `libopus_sys` 0.3.3's bundled Opus sets
+      `CMAKE_MSVC_RUNTIME_LIBRARY` to the DLL runtime unless its option
+      `OPUS_STATIC_RUNTIME` is on (`opus/CMakeLists.txt`, lines 101 and
+      275), and its `build.rs` never sets it.
+    - **Your choice: fallback (a).** `installer\opus-static.cmake` sets
+      `OPUS_STATIC_RUNTIME` on. `build.ps1` points `CMAKE_TOOLCHAIN_FILE`
+      at it for the `mesh-dc` build only, since `cmake` 0.1.58 reads it from
+      the environment, and puts it back afterwards. The same step runs
+      `cargo clean -p libopus_sys` first: its build script doesn't rerun
+      when that variable changes, so a tree that built Opus before would
+      keep the DLL-runtime one.
+    - D4 is unchanged: every binary still links the static runtime.
+    - Not yet known: whether it links (your Windows session is checking).
 
 - [x] **Task 2: `build.ps1` and `mesh.iss` for a friend's setup. (Alone.)**
   - **What:** all in `installer\`, no app code:

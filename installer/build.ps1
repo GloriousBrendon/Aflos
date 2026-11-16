@@ -28,6 +28,17 @@ try {
         try {
             if ($dir -eq $root) { cargo build --release --target $target -p mesh-app }
             elseif ($dir -eq $node) { cargo build --release --target $target -p mesh-node }
+            elseif ($dir -eq "$root\mesh-dc") {
+                # libopus_sys's bundled Opus links the DLL runtime unless OPUS_STATIC_RUNTIME is on, which its build.rs never sets (Task 1, fallback a).
+                $oldToolchain = $env:CMAKE_TOOLCHAIN_FILE
+                $env:CMAKE_TOOLCHAIN_FILE = "$PSScriptRoot\opus-static.cmake" -replace '\\', '/'
+                try {
+                    # Its build script doesn't rerun when this variable changes: rebuild Opus.
+                    cargo clean --release --target $target -p libopus_sys
+                    if ($LASTEXITCODE) { throw "cargo clean failed in $dir" }
+                    cargo build --release --target $target
+                } finally { $env:CMAKE_TOOLCHAIN_FILE = $oldToolchain }
+            }
             else { cargo build --release --target $target }
             if ($LASTEXITCODE) { throw "cargo build failed in $dir" }
         } finally { Pop-Location }
