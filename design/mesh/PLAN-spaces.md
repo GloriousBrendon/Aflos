@@ -564,6 +564,29 @@ blocker. Test 9 stays as the record, `--ignored`.
   fail or break (an unverified lead: a member may not yet be allowed to
   connect to someone who doesn't hold the Space).
 
+- [ ] **Task 11b: The helper's channel API, to a DM's** (S12; *added
+  2026-11-16 at your review*). Found when starting Task 12: Space events
+  already carry edits, deletes, reactions, replies, files, mentions and read
+  markers (Tasks 1 to 4), but the helper only sends text and deletes, and a
+  channel page has only each line's ID, sender, text and edited flag. S12
+  says a channel has everything a DM has. One commit each, tests first:
+  1. Channel pages as DM pages: time, sent, reply, reactions, attachments,
+     late; paged with `before` and `more`.
+  2. `spaceEdit` and `spaceReact`.
+  3. Replies and mentions on `spaceSend`; `@everyone` counts only from an
+     admin (S12).
+  4. `spaceRead`, and each channel's unread and mention counts in
+     `meshSpaces`; `meshSpaceNotify` says whether it mentions you. A post's
+     mentions are kept for this (they were dropped when folding into a
+     chat).
+  5. Typing in a channel.
+  6. Files in a channel, through dm's blob store.
+  - **Accept:** each one's process test in `tests/spaces.rs` (or a
+    `mesh-dm` unit test), the usual Mesh-Node checks.
+  - **Files:** Mesh-Node `crates/mesh-node/src/spaces.rs`, `mesh-dm`'s
+    `space_store.rs` and `chat.rs`, `tests/spaces.rs`.
+  - Size L.
+
 ### Phase 4: Mesh-Voice
 
 - [ ] **Task 12: The rail and channels** (tests 1, 14)
