@@ -80,6 +80,15 @@ code, and every piece must link the runtime the same way:
       built with the static runtime, and no `dumpbin` list names
       `VCRUNTIME`, `MSVCP` or `api-ms-win-crt`. Task 5's "no missing-DLL
       dialog" is still to come.
+    - **`mesh-wa` too, 2026-11-16:** the full build then showed `mesh-wa`
+      linking with `LNK4098` and `LNK4217` (`floor`, `malloc`, `free` and
+      others imported by `opusic-sys`'s objects). `opusic-sys` 0.7.5's
+      bundled Opus has the same `OPUS_STATIC_RUNTIME` option (line 110, off
+      by default), and its `build.rs` never sets it. The `mesh-wa` build now
+      gets the same treatment: the toolchain file, after
+      `cargo clean -p opusic-sys`. Not for `mesh-app`: aws-lc builds through
+      CMake there, and its Opus (`audiopus_sys`) doesn't override the
+      runtime.
 
 - [x] **Task 2: `build.ps1` and `mesh.iss` for a friend's setup. (Alone.)**
   - **What:** all in `installer\`, no app code:
