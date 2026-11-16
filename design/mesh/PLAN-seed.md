@@ -161,7 +161,10 @@ project in its own folder.
    the router hairpins: from the LAN, a connection to it reaches Caddy. No
    Pi-hole record needed. *Wrong, found in Task 6: the router doesn't
    hairpin, so it got a Pi-hole local record like the other names.*
-2. **Router: nothing** (D0).
+   *Corrected 2026-11-16: no `cloudflare-ddns` runs on the homelab, and none
+   is needed: the home IP is static, so the wildcard stays right.*
+2. **Router: nothing** (D0). *Changed 2026-11-16: 443 is to be forwarded
+   for the relay, for the first outside test (SPEC-seed D0's dated note).*
 3. **A new folder**, `~/docker/mesh`: the Mesh-Node source copied from this
    box (no `target/`, no `.git`), and `deploy/.env` with the relay URL and
    `PROXY_NETWORK=searxng_web` (the network Caddy is on).
