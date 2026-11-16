@@ -26,6 +26,8 @@ pub(crate) struct Mesh {
     pub social: mesh::Social,
     /// The chat list (SPEC-dm), newest activity first.
     pub chats: Vec<mesh::Chat>,
+    /// The Spaces held (SPEC-spaces), as `meshSpaces` lists them.
+    pub spaces: Vec<mesh::Space>,
     /// Who's typing, by name, in which chat, and when it was heard.
     pub typing: Option<(String, Vec<String>, std::time::Instant)>,
     /// The last received file clicked, and what that did (`mesh_dm::on_click`).
@@ -377,6 +379,9 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
         }
         // Taken above (mesh_dm).
         mesh::Event::DmChats(_) | mesh::Event::DmMessages(_) | mesh::Event::DmNotify(_) | mesh::Event::DmTyping { .. } | mesh::Event::DmFile(_) => {}
+        mesh::Event::Spaces(spaces) => m.spaces = spaces,
+        // ponytail: a channel's page, posts and typing reach the screens with Task 12.
+        mesh::Event::SpaceMessages(_) | mesh::Event::SpaceNotify(_) | mesh::Event::SpaceTyping { .. } => {}
         mesh::Event::Disconnected => {
             m.node = None;
             m.identity = None;

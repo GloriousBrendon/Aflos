@@ -56,8 +56,23 @@ pub enum Event {
         id: String,
         who: Vec<String>,
     },
-    /// A file is ready to open, decrypted to `path` (`Node::dm_fetch`).
+    /// A file is ready to open, decrypted to `path` (`Node::dm_fetch`, or
+    /// `Node::space_fetch` with the Space's ID as `id`).
     DmFile(DmFile),
+    /// The Spaces held (`Node::space_list`); comes by itself whenever one
+    /// changes (SPEC-spaces).
+    Spaces(Vec<Space>),
+    /// A page of an open channel, newest last (`Node::space_open`); comes
+    /// again while it's open when it changes.
+    SpaceMessages(SpacePage),
+    /// A new post by someone else in a channel.
+    SpaceNotify(SpaceNotify),
+    /// Someone is typing in a channel: their IDs.
+    SpaceTyping {
+        space: String,
+        channel: String,
+        who: Vec<String>,
+    },
     /// The helper exited; it's restarted by itself.
     Disconnected,
 }
@@ -140,6 +155,73 @@ pub struct DmFile {
     pub message: String,
     pub index: usize,
     pub path: String,
+}
+
+/// A `meshSpaces` row: a Space held, with its channels and members.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Space {
+    pub id: String,
+    pub name: String,
+    /// Ours: `owner`, `admin` or `member`; `None` while it's on its way.
+    pub role: Option<String>,
+    pub channels: Vec<SpaceChannel>,
+    pub members: Vec<SpaceMember>,
+}
+
+impl Space {
+    /// Unread lines across its channels.
+    pub fn unread(&self) -> u64 {
+        self.channels.iter().map(|c| c.unread).sum()
+    }
+    /// Unread lines that mention us, across its channels (S12).
+    pub fn mentions(&self) -> u64 {
+        self.channels.iter().map(|c| c.mentions).sum()
+    }
+}
+
+/// A Space's text channel, in the order the Space lists them.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SpaceChannel {
+    pub id: String,
+    pub name: String,
+    pub category: Option<String>,
+    /// Only admins may post (an announcements channel).
+    pub admins_post: bool,
+    #[serde(default)]
+    pub unread: u64,
+    #[serde(default)]
+    pub mentions: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SpaceMember {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+}
+
+/// A `meshSpaceMessages`: one channel's page, oldest first, its lines as a
+/// DM page's.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SpacePage {
+    pub space: String,
+    pub channel: String,
+    pub events: Vec<DmMessage>,
+    /// Older lines exist (`Node::space_open` with `before`).
+    #[serde(default)]
+    pub more: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SpaceNotify {
+    pub space: String,
+    pub channel: String,
+    pub from: String,
+    pub text: String,
+    /// It names us, or says `@everyone` from an admin (S12).
+    #[serde(default)]
+    pub mention: bool,
 }
 
 /// Where the identity on this install stands. Only `Unlocked` says anything
@@ -544,6 +626,57 @@ impl Node {
         self.call("dmFetch", &[chat, message, &index.to_string()]);
     }
 
+    /// The Spaces held; answers with `Spaces`.
+    pub fn space_list(&self) {
+        self.call("spaceList", &[]);
+    }
+    /// Opens a channel: its newest page, or the one before `before`;
+    /// answers with `SpaceMessages`.
+    pub fn space_open(&self, space: &str, channel: &str, before: Option<&str>) {
+        match before {
+            Some(before) => self.call("spaceOpen", &[space, channel, before]),
+            None => self.call("spaceOpen", &[space, channel]),
+        }
+    }
+    /// Posts a line, maybe as a reply, naming members (or `@everyone`, an
+    /// admin's only); answers with `SpaceMessages`, or `Error`
+    /// (`not-allowed`, `bad-args`).
+    pub fn space_send(&self, space: &str, channel: &str, text: &str, reply_to: Option<&str>, mentions: &[String]) {
+        let mut args = vec![space, channel, text, reply_to.unwrap_or("")];
+        args.extend(mentions.iter().map(String::as_str));
+        self.call("spaceSend", &args);
+    }
+    /// Edits one of our lines; answers with `SpaceMessages` or `Error` (`not-allowed`).
+    pub fn space_edit(&self, space: &str, channel: &str, message: &str, text: &str) {
+        self.call("spaceEdit", &[space, channel, message, text]);
+    }
+    /// Deletes our line, or anyone's as an admin; answers with `SpaceMessages`.
+    pub fn space_delete(&self, space: &str, channel: &str, message: &str) {
+        self.call("spaceDelete", &[space, channel, message]);
+    }
+    /// Adds or takes back a reaction; answers with `SpaceMessages`.
+    pub fn space_react(&self, space: &str, channel: &str, message: &str, emoji: &str, on: bool) {
+        self.call("spaceReact", &[space, channel, message, emoji, if on { "true" } else { "false" }]);
+    }
+    /// Marks a channel read up to a line; answers with `Spaces`.
+    pub fn space_read(&self, space: &str, channel: &str, up_to: &str) {
+        self.call("spaceRead", &[space, channel, up_to]);
+    }
+    /// Says we're typing in a channel; answers with nothing.
+    pub fn space_typing(&self, space: &str, channel: &str) {
+        self.call("spaceTyping", &[space, channel]);
+    }
+    /// Posts the file at `path`, with an optional picture preview file;
+    /// answers with `SpaceMessages` or `Error` (`too-long` past 100 MB).
+    pub fn space_send_file(&self, space: &str, channel: &str, path: &str, preview: Option<&str>) {
+        self.call("spaceSendFile", &[space, channel, path, preview.unwrap_or("")]);
+    }
+    /// Gets a line's file; answers with `DmFile` (its `id` the Space's), or
+    /// `Error` (`unavailable`).
+    pub fn space_fetch(&self, space: &str, channel: &str, message: &str, index: usize) {
+        self.call("spaceFetch", &[space, channel, message, &index.to_string()]);
+    }
+
     fn call(&self, function: &str, args: &[&str]) {
         let _ = self.commands.send(serde_json::json!({ "fn": function, "args": args }).to_string() + "\n");
     }
@@ -657,6 +790,24 @@ fn line_event(line: &str) -> Option<Event> {
             })
         }
         "meshDmFile" => serde_json::from_str(payload).ok().map(Event::DmFile),
+        "meshSpaces" => {
+            #[derive(Deserialize)]
+            struct Spaces {
+                spaces: Vec<Space>,
+            }
+            serde_json::from_str::<Spaces>(payload).ok().map(|s| Event::Spaces(s.spaces))
+        }
+        "meshSpaceMessages" => serde_json::from_str(payload).ok().map(Event::SpaceMessages),
+        "meshSpaceNotify" => serde_json::from_str(payload).ok().map(Event::SpaceNotify),
+        "meshSpaceTyping" => {
+            let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+            let who = v["who"].as_array()?.iter().filter_map(|w| w.as_str().map(str::to_owned)).collect();
+            Some(Event::SpaceTyping {
+                space: v["space"].as_str()?.to_owned(),
+                channel: v["channel"].as_str()?.to_owned(),
+                who,
+            })
+        }
         _ => None,
     }
 }
@@ -809,5 +960,47 @@ mod tests {
             panic!("no file")
         };
         assert_eq!((f.message.as_str(), f.index, f.path.as_str()), ("57dd", 0, "/data/files/57dd-0/map.png"));
+    }
+
+    /// The Space events (SPEC-spaces S12, PLAN-spaces Task 11b): the list
+    /// with each channel's counts, a channel's page (a DM page's lines),
+    /// notifications that say if they mention you, and typing.
+    #[test]
+    fn space_events() {
+        let spaces = r#"{"spaces":[{"id":"aa11","name":"club","role":"owner","changes":3,"channels":[{"id":"c1","name":"general","category":null,"adminsPost":false,"unread":2,"mentions":1},{"id":"c2","name":"news","category":"k1","adminsPost":true,"unread":0,"mentions":0}],"members":[{"id":"mesh1o","name":"owen","role":"owner"},{"id":"mesh1b","name":"bea","role":"member"}]}]}"#;
+        let Some(Event::Spaces(spaces)) = line_event(&line("meshSpaces", spaces)) else {
+            panic!("no spaces")
+        };
+        let club = &spaces[0];
+        assert_eq!((club.id.as_str(), club.name.as_str(), club.role.as_deref()), ("aa11", "club", Some("owner")));
+        let (general, news) = (&club.channels[0], &club.channels[1]);
+        assert_eq!(
+            (general.name.as_str(), general.category.as_deref(), general.unread, general.mentions),
+            ("general", None, 2, 1)
+        );
+        assert_eq!((news.category.as_deref(), news.admins_post), (Some("k1"), true));
+        assert_eq!((club.members[1].name.as_str(), club.members[1].role.as_str()), ("bea", "member"));
+        assert_eq!((club.unread(), club.mentions()), (2, 1));
+
+        let page = r#"{"space":"aa11","channel":"c1","more":false,"events":[{"id":"57dd","from":"mesh1b","text":"hi","edited":false,"replyTo":null,"attachments":[],"reactions":[],"late":false,"time":5,"sent":false}]}"#;
+        let Some(Event::SpaceMessages(page)) = line_event(&line("meshSpaceMessages", page)) else {
+            panic!("no page")
+        };
+        assert_eq!(
+            (page.space.as_str(), page.channel.as_str(), page.more, page.events[0].text.as_str()),
+            ("aa11", "c1", false, "hi")
+        );
+
+        let n = r#"{"space":"aa11","channel":"c1","from":"mesh1b","text":"cal?","mention":true}"#;
+        let Some(Event::SpaceNotify(n)) = line_event(&line("meshSpaceNotify", n)) else {
+            panic!("no notify")
+        };
+        assert_eq!((n.space.as_str(), n.channel.as_str(), n.text.as_str(), n.mention), ("aa11", "c1", "cal?", true));
+
+        let t = r#"{"space":"aa11","channel":"c1","who":["mesh1b"]}"#;
+        let Some(Event::SpaceTyping { space, channel, who }) = line_event(&line("meshSpaceTyping", t)) else {
+            panic!("no typing")
+        };
+        assert_eq!((space.as_str(), channel.as_str(), who), ("aa11", "c1", vec!["mesh1b".to_string()]));
     }
 }
