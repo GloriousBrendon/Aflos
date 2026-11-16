@@ -351,7 +351,7 @@ Mesh-Voice `4792c4c`):
     `tests/spaces.rs`.
   - Size M.
 
-- [ ] **Task 10: Moderation and forks end to end** (S7, S8)
+- [x] **Task 10: Moderation and forks end to end** (S7, S8)
   - **What:**
     - admin delete, kick, ban, and the owner-only admin changes, through
       the helper;
@@ -404,6 +404,94 @@ refusals) and 12. Changed while building:
   first live line still sometimes misses the 60 s wait (test 3 failed once
   in four full runs after the fixes). Alone, the Space suite passed 14 runs
   of 14.
+
+**Progress, 2026-11-15, second sitting** (Mesh-Node `798bd36` to
+`3928dce`, pushed): Task 10 is done, and Task 11's tests are written.
+**The stuck line, tracked down (2026-11-15, at your review):** two lost or
+stuck messages, both found with every helper's stderr printed on a timeout
+and reproduced under 28 busy loops on 16 cores.
+- **A post that came in history wasn't told.** At a join, the history
+  pulled from a member could already hold a line written after the add. It
+  was stored silently; its live copy then came as a duplicate, so the new
+  member was never told (test 1's "no meshSpaceNotify", your trace: the
+  frames answered `failed`, sent again, all taken). History now tells the
+  posts by others written at or after the change that added us. Test:
+  `a_line_after_the_add_is_told_even_from_history`.
+- **A peer whose mail record was read too early was never mailed.** Two
+  people who become peers read each other's pair record at the same moment;
+  if one reads before the other has put it, the reader knew no device of
+  theirs, so Space mail skipped them and never asked again (test 2, about 1
+  in 4 under load). Now a member with no known device has their record read
+  at each mail round, the flush at lock waits for it, and a new peer's keys
+  are fetched at once.
+- **Five tests asserted timing, not the spec:** test 1's 1 s budget (now a
+  Task 11 figure), test 1's look at O's channel before C's line could reach
+  O, test 2's exact count of mail rounds (now: one envelope per away device
+  in each round, S9), and test 5's "D asked C first" (now O and B are away
+  while D joins, then O comes back).
+- **A peer's retry** clears when we reach them too, and a send to a peer in
+  `PEER_RETRY` still tries their last known address, which costs no lookup.
+- **Own-device sync of Spaces** has a process test.
+- **Task 10:** an admin deletes anyone's message, plus kick, ban, rename
+  and redo after a fork, through the helper. Tests 6 (every device), 7.1
+  to 7.3 and 8 pass; with redo off, 7.2 and 7.3 fail.
+- **Task 11 figures** (this box, 16 cores):
+
+  | Measurement | Result |
+  |---|---|
+  | Test 10: unlock with a 100,000-event Space, peers worked out (release) | 68 µs, against 21 µs empty |
+  | That Space's first use (release / debug) | 183 ms / 9.9 s |
+  | A join with the real refresh, 4 people | every line within 0.92 s of the add |
+  | Test 11: nothing identifying in the seed's files and log, or stderr | passes |
+  | Fifty members (test 9) | **doesn't finish**: see below |
+
+**Checkpoint B review, 2026-11-16** (Mesh-Node `a8d9c16` to `fdfbc52`,
+not pushed; Mesh-Voice `680f429`):
+- **The fifty-member stall was the seed's get limit.** A lookup is two
+  address gets (today's and yesterday's record), the hello counted people
+  against a limit in gets, and the key lookup and a send's dial asked too.
+  The seed now counts refused address gets in its hourly line: the
+  set-up at the real refresh had 21,816 of 39,988 refused, and stalled
+  after 768 s.
+- **One budget for every address get** (S14, dated edit): 110 in any 60 s,
+  a sliding minute; what doesn't fit waits its turn, in order. The hello
+  leaves 20 for sends and key lookups: 45 people a minute, so 490 peers
+  take about 11 minutes after unlock.
+- **A refused get isn't "away":** asked again after 10 s, three times,
+  then `Slowed`. It starts no `PEER_RETRY`, costs no hello try, and the
+  person is dialled again soon.
+- **One lookup per person at a time** for key lookups, contact dials, a
+  send's dial and our own devices' sync, so refreshes can't pile them up.
+  Failed Space sends are tried again 10 s apart, six times, before the
+  refresh takes over.
+- **Two hangs the budget brought out,** both fixed: waiters woke out of
+  order, so a ping could wait behind every refresh; and `seen` was set
+  only by a dial through an address, so a ping over a connection the
+  friend had opened left it empty. A ping over an open connection now
+  marks them seen. Test waits for social and net events give up after
+  90 s instead of hanging while events keep coming.
+- **Tests clean up:** a passing test removes its folders; a failing one
+  keeps them.
+- **Not done: a post from history told when its live copy comes**
+  (your item 6). Members send a new member's device every past post, so a
+  live copy after history is often an old post: the test told D "old
+  news". af1a417's clock comparison stays until you choose.
+- **More fixes the 20-run bar brought out:** a lookup asked for while
+  one is out runs once more when it ends (test 2: B had no keys for C
+  and mailed one batch, not two); a banned member's send is tested once
+  it has heard of the ban; and reading a helper's next event, or quitting
+  it, gives up after 90 s.
+- **The bar:** 20 full workspace runs under 28 busy loops with no Space
+  failure. One mailbox test failed once
+  (`the_next_holder_takes_what_the_first_wont`) and passed 40 of 40 with
+  the change and 40 of 40 without.
+- **Fifty members at the real refresh, again:** the seed refused no
+  address gets (21,816 before), and answered 38,618 in 16 minutes, about
+  48 a helper a minute. The set-up still didn't finish: one member never
+  held all five Spaces within 600 s. Every helper logged sends with no
+  keys for the person (9,896 in all, O 1,218), though every record was
+  put once (2,500 puts). Why some members don't get each other's keys
+  isn't found.
 
 **Checkpoint B (hard stop, needs your review):** the process tests pass,
 and Task 11's figures are recorded here. No screen work before your OK.
