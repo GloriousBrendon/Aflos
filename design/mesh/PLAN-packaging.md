@@ -222,6 +222,12 @@ Steps 4 and 8 to 12 stay owed.
   **4.1's SHA-256 above is the one steps 5 and 7.1 now check against.**
   Step 5 was run on the earlier setup; its Product version for this one
   should read "0.2.0.0 (app 3517bb2, engine 51b272e)".
+- **The file your friend gets, 2026-11-16:** `dist\` now holds 4.1's setup
+  (app `3517bb2`, engine `51b272e`, SHA-256 `8549935D…E35207` as above). The
+  file tested outside tonight (app `9f3ad8a`, engine `7f60145`,
+  `D5285751…580BF0D`) was overwritten by step 4.1. The two differ only in
+  docs (app) and in two engine commits that count why Space sends fail
+  (`cc38fcc`, `51b272e`); nothing a 1:1 chat uses changed.
 
 Run these at your Windows PC, top to bottom. Each step says what to send
 me. If a step marked **stop** fails, stop there and send me what it says;
