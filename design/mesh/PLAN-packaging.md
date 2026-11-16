@@ -158,6 +158,26 @@ code, and every piece must link the runtime the same way:
     - the line sent while the Sandbox was closed arrives when it reopens,
       and your PC's "sending" mark clears;
     - the seed's mail counts move as item 7's table says.
+  - **From your friend's first install instead** (*added 2026-11-16 at
+    your review*): his PC is the clean machine, and he only installs and
+    uses. Ask him afterwards, in your own words:
+    1. Apart from the blue "Windows protected your PC" screen, did Windows
+       ask for an administrator password, or "Do you want to allow this
+       app to make changes"? (P4: no.)
+    2. Did any error box name a missing `.dll`, such as `VCRUNTIME140.dll`?
+       (P4: no.)
+    3. Did a Matrix login appear? (P4: no.)
+    4. From clicking "I understand, create it", about how long until Your
+       ID said "Online"? (P5: 10 s or less.)
+    5. Did Windows ask about the firewall, and which button did he click?
+    6. Did a message from you, sent while his Mesh was closed, show when
+       he opened it again? (item 7's mail; he does nothing extra: you send
+       one while he's away.)
+
+    Answers 1 to 4 and your chat both ways tick P4 and P5's first run. I
+    read the seed's hourly line for that hour against item 7's table.
+    Still owed after it: the run with the other firewall answer (5 tells
+    which one he gave), and your PC's move to 0.2.0 if it hasn't happened.
   - Size S.
 
 - [ ] **Task 6: P6, an update. (At your PC and in Windows Sandbox.)**
