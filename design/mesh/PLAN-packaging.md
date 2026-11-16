@@ -97,8 +97,11 @@ code, and every piece must link the runtime the same way:
       `target\x86_64-pc-windows-msvc\release\` (passed as `/DTarget=`).
     - **The commits (P3):** `build.ps1` passes the two short commit IDs to
       ISCC (`/DAppCommit=… /DNodeCommit=…`). `mesh.iss` puts them in
-      `VersionInfoProductTextVersion` and `VersionInfoComments`, as
-      "0.2.0.0 (app abc1234, engine def5678)". `VersionInfoVersion` is set
+      `VersionInfoProductTextVersion`, as
+      "0.2.0.0 (app abc1234, engine def5678)". *Corrected 2026-11-16:
+      Inno Setup has no Comments directive (`VersionInfoComments` stopped
+      ISCC at tonight's build), so the commits are under Product version
+      only.* `VersionInfoVersion` is set
       to the app's version. `AppVerName` stays "Mesh <version>".
     - **The hash (P1):** the last two lines print the setup's path, size
       and commits, then its SHA-256.
@@ -242,8 +245,9 @@ the rest waits. *Corrected 2026-11-14 at your review:*
       `Remove-Item Env:MESH_NODE`.
 5. **Details and hash (P1, P3).** Right-click
    `dist\Mesh-Setup-0.2.0.0.exe` → Properties → Details.
-   - **Send me:** Product version, File version and Comments. Product
-     version should read "0.2.0.0 (app …, engine …)".
+   - **Send me:** Product version and File version. Product version should
+     read "0.2.0.0 (app …, engine …)"; that's the only place the commits
+     are (*corrected 2026-11-16*: there's no Comments field).
    - Run `Get-FileHash dist\Mesh-Setup-0.2.0.0.exe`. It matches step 4.1's
      SHA-256.
 6. **Your PC to 0.2.0.**

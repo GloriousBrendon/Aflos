@@ -32,7 +32,6 @@ AppPublisherURL=https://github.com/GloriousBrendon/Mesh-Voice
 VersionInfoDescription=Mesh Setup
 VersionInfoVersion={#AppVersion}
 VersionInfoProductTextVersion={#Built}
-VersionInfoComments=Mesh {#Built}
 PrivilegesRequired=lowest
 DefaultDirName={localappdata}\Programs\Mesh
 DisableProgramGroupPage=yes
