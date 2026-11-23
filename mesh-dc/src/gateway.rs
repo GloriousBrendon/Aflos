@@ -361,10 +361,10 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
             let rows = st.member_lists.entry(gid.to_owned()).or_default();
             apply_list_ops(rows, d.get("ops").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default());
             for row in rows.iter() {
-                if let Some(u) = row.get("member").and_then(|m| m.get("user")) {
-                    if let Some(id) = u.get("id").and_then(Value::as_str) {
-                        st.users.entry(id.to_owned()).or_insert_with(|| u.clone());
-                    }
+                if let Some(u) = row.get("member").and_then(|m| m.get("user"))
+                    && let Some(id) = u.get("id").and_then(Value::as_str)
+                {
+                    st.users.entry(id.to_owned()).or_insert_with(|| u.clone());
                 }
             }
             true

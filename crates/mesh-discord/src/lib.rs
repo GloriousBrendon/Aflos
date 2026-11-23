@@ -39,6 +39,11 @@ pub enum Event {
     Video(Video),
     /// How an `Engine::sign_in` is going (native helper only).
     SignIn(SignIn),
+    /// Our DM with someone is ready (`Engine::open_dm`): its channel id.
+    DmOpened {
+        id: String,
+        user: String,
+    },
     /// Lost it (browser closed, page gone); reconnects on its own.
     Disconnected,
 }
@@ -90,6 +95,15 @@ impl Engine {
     /// Joins a server from an invite link or code; answers with `Event::Invite`.
     pub fn accept_invite(&self, link: &str) {
         self.call("acceptInvite", &[link]);
+    }
+    /// Asks for a server's member list; it comes in the snapshots after
+    /// (native helper only).
+    pub fn members(&self, guild_id: &str) {
+        self.call("members", &[guild_id]);
+    }
+    /// Our DM with a user, made if need be; answers with `Event::DmOpened`.
+    pub fn open_dm(&self, user_id: &str) {
+        self.call("openDm", &[user_id]);
     }
     /// Shows a text channel or DM in Mesh: its messages stream back as
     /// `Event::Messages` until another channel is opened or it's closed.
@@ -269,6 +283,22 @@ pub struct Guild {
     #[serde(default)]
     pub text_channels: Vec<TextChannel>,
     pub voice_channels: Vec<VoiceChannel>,
+    /// Its member list once asked for (`Engine::members`): group headers
+    /// and members, in order.
+    #[serde(default)]
+    pub member_list: Vec<ListRow>,
+}
+
+/// A member list row: a group (`group`, `count`) or a member.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ListRow {
+    pub group: Option<String>,
+    pub count: Option<u64>,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub avatar: Option<String>,
+    /// `online`, `idle`, `dnd` or `offline`.
+    pub status: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -429,6 +459,13 @@ fn binding_event(name: &str, payload: &str) -> Option<Event> {
         "meshQr" => engine::qr(payload).map(Event::Qr),
         "meshVideo" => engine::video(payload).map(Event::Video),
         "meshLogin" => serde_json::from_str(payload).ok().map(Event::SignIn),
+        "meshDmOpened" => {
+            let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+            Some(Event::DmOpened {
+                id: v["id"].as_str()?.to_owned(),
+                user: v["user"].as_str()?.to_owned(),
+            })
+        }
         _ => None,
     }
 }

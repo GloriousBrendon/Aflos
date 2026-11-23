@@ -1265,6 +1265,8 @@ enum Message {
     /// The text chat of the Discord voice channel we're in, from anywhere:
     /// its server in the channel pane, its messages in the chat pane.
     DiscordVoiceChat,
+    /// Our DM with this Discord user (from a server's member list).
+    DiscordOpenDm(String),
     /// A Mesh Space on the rail (its ID).
     MeshSpaceSelected(String),
     /// Mutes or unmutes a Mesh Space (its ID), kept in config.toml.
@@ -2506,6 +2508,23 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                         notify(n.title, n.body);
                     }
                 }
+                mesh_discord::Event::DmOpened { id, user } => {
+                    let guilds = state.discord_state.iter().flat_map(|d| &d.guilds);
+                    let rows = guilds.flat_map(|g| &g.member_list);
+                    let name = rows
+                        .filter(|r| r.id.as_deref() == Some(user.as_str()))
+                        .find_map(|r| r.name.clone())
+                        .unwrap_or_else(|| "DM".to_string());
+                    return update(
+                        state,
+                        Message::WebChatSelected(WebChat {
+                            network: Network::Discord,
+                            id,
+                            name,
+                            dm: true,
+                        }),
+                    );
+                }
                 mesh_discord::Event::Invite(result) => {
                     if let Screen::LoggedIn(session) = &mut state.screen
                         && let Some(dialog) = &mut session.join_server
@@ -3197,18 +3216,38 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::DiscordVoiceChat => {
             let voice = state.discord_state.as_ref().map(|d| &d.voice);
-            let Some((channel, name)) = voice.and_then(|v| Some((v.channel_id.clone()?, v.channel_name.clone().unwrap_or_default()))) else {
+            let Some((channel, name)) = voice.and_then(|v| {
+                Some((
+                    v.channel_id.clone()?,
+                    v.channel_name.clone().unwrap_or_default(),
+                ))
+            }) else {
                 return Task::none();
             };
             let guild = voice.and_then(|v| v.guild_id.clone());
-            let chat = WebChat { network: Network::Discord, id: channel, name, dm: guild.is_none() };
+            let chat = WebChat {
+                network: Network::Discord,
+                id: channel,
+                name,
+                dm: guild.is_none(),
+            };
             let shown = match guild {
                 Some(g) => update(state, Message::GuildSelected(g)),
                 None => Task::none(),
             };
             Task::batch([shown, update(state, Message::WebChatSelected(chat))])
         }
+        Message::DiscordOpenDm(user) => {
+            if let Some(engine) = &state.discord {
+                engine.open_dm(&user);
+            }
+            Task::none()
+        }
         Message::GuildSelected(guild) => {
+            // Its member list, for the pane beside its channels.
+            if let Some(engine) = &state.discord {
+                engine.members(&guild);
+            }
             if let Screen::LoggedIn(session) = &mut state.screen {
                 session.active_space = None;
                 session.active_guild = Some(guild);
@@ -4356,6 +4395,11 @@ fn session_view<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message
             if session.show_members && session.selected_room.is_some() && wide {
                 let members = member_pane(session, p, x.show_network_tags);
                 panes = panes.push(tile(session, Pane::Members, members, 236.0, p, l, x));
+            } else if let Some(guild) = active_guild(session, discord)
+                .filter(|g| session.show_members && wide && !g.member_list.is_empty())
+            {
+                let members = discord_members_pane(session, guild, p, l);
+                panes = panes.push(tile(session, Pane::Members, members, 236.0, p, l, x));
             }
             panes.into()
         };
@@ -5340,7 +5384,14 @@ fn locked_row<'a>(name: &str, icon: ui::Icon, p: &theme::Palette) -> Element<'a,
         container(text("You don't have access to this channel").size(12)).padding([4, 8]),
         iced::widget::tooltip::Position::Right,
     );
-    container(tip).padding(iced::Padding { top: 6.0, right: 8.0, bottom: 6.0, left: 10.0 }).into()
+    container(tip)
+        .padding(iced::Padding {
+            top: 6.0,
+            right: 8.0,
+            bottom: 6.0,
+            left: 10.0,
+        })
+        .into()
 }
 
 fn voice_channel<'a>(
@@ -5365,7 +5416,11 @@ fn voice_channel<'a>(
         line = line.push(ui::mono("connected", 10.0, p.success()));
     }
     // The one we're in opens its text chat, as Discord's does.
-    let press = if here { Message::DiscordVoiceChat } else { Message::DiscordJoin(channel.id.clone()) };
+    let press = if here {
+        Message::DiscordVoiceChat
+    } else {
+        Message::DiscordJoin(channel.id.clone())
+    };
     let mut col = column![ui::row_button(line, press, here, p, l)].spacing(2);
     for member in &channel.members {
         col = col.push(container(voice_member(member, web_picture(session, member.avatar.as_deref()), 22.0, p)).padding(iced::Padding { left: 30.0, ..iced::Padding::ZERO }));
@@ -5410,18 +5465,38 @@ fn guild_pane<'a>(
 ) -> Element<'a, Message> {
     let footer = user_panel(session, discord.map(|d| &d.voice), p, l);
     let Some(guild) = active_guild(session, discord) else {
-        let body = container(text("Discord isn't running, or you left this server.").size(13).color(p.text_muted()))
-            .padding(14)
-            .height(Length::Fill);
+        let body = container(
+            text("Discord isn't running, or you left this server.")
+                .size(13)
+                .color(p.text_muted()),
+        )
+        .padding(14)
+        .height(Length::Fill);
         return column![body, ui::hline(p), footer].into();
     };
     let header = column![
         ui::sans(&guild.name, 15.0, Weight::Semibold, p.text_bright()),
-        ui::mono(format!("{} channels", guild.text_channels.len() + guild.voice_channels.len()), 11.0, p.text_muted()),
-        row![ui::mono(Network::Discord.tag(), 11.0, net_color(Network::Discord, p)), ui::mono("from your Discord account", 11.0, p.text_muted())].spacing(6),
+        ui::mono(
+            format!(
+                "{} channels",
+                guild.text_channels.len() + guild.voice_channels.len()
+            ),
+            11.0,
+            p.text_muted()
+        ),
+        row![
+            ui::mono(Network::Discord.tag(), 11.0, net_color(Network::Discord, p)),
+            ui::mono("from your Discord account", 11.0, p.text_muted())
+        ]
+        .spacing(6),
     ]
     .spacing(4)
-    .padding(iced::Padding { top: 14.0, right: 14.0, bottom: 10.0, left: 14.0 });
+    .padding(iced::Padding {
+        top: 14.0,
+        right: 14.0,
+        bottom: 10.0,
+        left: 14.0,
+    });
 
     // Categories in the order Discord lists them; uncategorised first.
     let mut categories: Vec<Option<&str>> = Vec::new();
@@ -5439,19 +5514,39 @@ fn guild_pane<'a>(
         if let Some(name) = category {
             list = list.push(ui::section(name, p));
         }
-        for channel in guild.text_channels.iter().filter(|c| c.category.as_deref() == category) {
+        for channel in guild
+            .text_channels
+            .iter()
+            .filter(|c| c.category.as_deref() == category)
+        {
             if channel.locked {
                 list = list.push(locked_row(&channel.name, ui::Icon::Hash, p));
                 continue;
             }
-            let open = WebChat { network: Network::Discord, id: channel.id.clone(), name: channel.name.clone(), dm: false };
+            let open = WebChat {
+                network: Network::Discord,
+                id: channel.id.clone(),
+                name: channel.name.clone(),
+                dm: false,
+            };
             list = list.push(web_chat_row(session, open, None, false, 0, p, l));
         }
-        for channel in guild.voice_channels.iter().filter(|c| c.category.as_deref() == category) {
+        for channel in guild
+            .voice_channels
+            .iter()
+            .filter(|c| c.category.as_deref() == category)
+        {
             list = list.push(voice_channel(session, channel, current, p, l));
         }
     }
-    column![header, ui::hline(p), scrollable(list).height(Length::Fill), ui::hline(p), footer].into()
+    column![
+        header,
+        ui::hline(p),
+        scrollable(list).height(Length::Fill),
+        ui::hline(p),
+        footer
+    ]
+    .into()
 }
 
 /// Someone in a Discord call: avatar (ringed while talking), name, mute/deaf.
@@ -5994,6 +6089,56 @@ fn emoji_picker<'a>(p: &'a theme::Palette, l: &theme::Layout) -> Element<'a, Mes
         .into()
 }
 
+/// A Discord server's member list, as its sidebar shows it: groups (a role
+/// shown apart, online, offline) and their members; clicking one opens
+/// your DM with them.
+fn discord_members_pane<'a>(
+    session: &'a Session,
+    guild: &'a mesh_discord::Guild,
+    p: &'a theme::Palette,
+    l: &theme::Layout,
+) -> Element<'a, Message> {
+    let mut list = column![].spacing(2);
+    for row in &guild.member_list {
+        if let Some(group) = &row.group {
+            let label = match row.count {
+                Some(n) => format!("{group} — {n}"),
+                None => group.clone(),
+            };
+            list = list.push(ui::section(&label, p));
+            continue;
+        }
+        let (Some(id), Some(name)) = (&row.id, &row.name) else {
+            continue;
+        };
+        let dot = match row.status.as_deref() {
+            Some("online") => p.success(),
+            Some("idle" | "dnd") => p.warning(),
+            _ => p.text_muted(),
+        };
+        let line = row![
+            ui::avatar(
+                name,
+                web_picture(session, row.avatar.as_deref()),
+                22.0,
+                net_color(Network::Discord, p),
+                p,
+                None
+            ),
+            ui::sans(name.clone(), 13.0, Weight::Normal, p.text()).width(Length::Fill),
+            ui::swatch(dot, 8.0, 8.0, 4.0),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
+        list = list.push(
+            ui::row_button(line, Message::DiscordOpenDm(id.clone()), false, p, l).padding([4, 8]),
+        );
+    }
+    scrollable(list.padding([10, 8]))
+        .height(Length::Fill)
+        .into()
+}
+
 fn member_pane<'a>(session: &'a Session, p: &theme::Palette, tags: bool) -> Element<'a, Message> {
     let mut list = column![ui::section(&format!("members — {}", session.members.len()), p)].spacing(2);
     for member in &session.members {
@@ -6029,7 +6174,12 @@ fn discord_call_bar<'a>(
 ) -> Element<'a, Message> {
     let mut people = row![].spacing(10).align_y(iced::Alignment::Center);
     for member in &voice.members {
-        people = people.push(voice_member(member, web_picture(session, member.avatar.as_deref()), 26.0, p));
+        people = people.push(voice_member(
+            member,
+            web_picture(session, member.avatar.as_deref()),
+            26.0,
+            p,
+        ));
     }
     let status = if voice.connection.contains("CONNECTED") && !voice.connection.contains("DIS") {
         p.success()
@@ -6041,55 +6191,82 @@ fn discord_call_bar<'a>(
         row![
             ui::icon(ui::Icon::Voice, 17.0, status),
             ui::mono_bold(Network::Discord.tag(), 12.0, net_color(Network::Discord, p)),
-            button(ui::sans(voice.channel_name.as_deref().unwrap_or("call"), 14.0, Weight::Semibold, p.text_bright()))
-                .on_press(Message::DiscordVoiceChat)
-                .padding(0)
-                .style(button::text)
-                .width(Length::Fill),
+            button(ui::sans(
+                voice.channel_name.as_deref().unwrap_or("call"),
+                14.0,
+                Weight::Semibold,
+                p.text_bright()
+            ))
+            .on_press(Message::DiscordVoiceChat)
+            .padding(0)
+            .style(button::text)
+            .width(Length::Fill),
             iced::widget::tooltip(
                 ui::icon_button(ui::Icon::Hash, Some(Message::DiscordVoiceChat), false, p, l),
                 container(text("The call's text chat").size(12)).padding([4, 8]),
                 iced::widget::tooltip::Position::Bottom,
             ),
             ui::icon_button(
-                if voice.self_mute { ui::Icon::MicOff } else { ui::Icon::Mic },
+                if voice.self_mute {
+                    ui::Icon::MicOff
+                } else {
+                    ui::Icon::Mic
+                },
                 Some(Message::ToggleMute),
                 voice.self_mute,
                 p,
                 l,
             ),
             ui::icon_button(
-                if voice.self_video { ui::Icon::Video } else { ui::Icon::VideoOff },
+                if voice.self_video {
+                    ui::Icon::Video
+                } else {
+                    ui::Icon::VideoOff
+                },
                 Some(Message::ToggleVideo),
                 !voice.self_video,
                 p,
                 l,
             ),
             ui::icon_button(
-                if voice.self_stream { ui::Icon::ScreenShare } else { ui::Icon::ScreenShareOff },
+                if voice.self_stream {
+                    ui::Icon::ScreenShare
+                } else {
+                    ui::Icon::ScreenShareOff
+                },
                 Some(Message::ToggleScreenShare),
                 !voice.self_stream,
                 p,
                 l,
             ),
-
             ui::icon_button(ui::Icon::PhoneOff, Some(Message::DiscordLeave), true, p, l),
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center),
         scrollable(people).direction(iced::widget::scrollable::Direction::Horizontal(
-            iced::widget::scrollable::Scrollbar::new().width(2).scroller_width(2),
+            iced::widget::scrollable::Scrollbar::new()
+                .width(2)
+                .scroller_width(2),
         )),
     ]
     .spacing(8);
     // Other people's screen shares: Discord only sends one once you watch it.
     if !voice.streams.is_empty() {
-        let mut shares = row![ui::mono("sharing:", 11.0, p.text_muted())].spacing(8).align_y(iced::Alignment::Center);
+        let mut shares = row![ui::mono("sharing:", 11.0, p.text_muted())]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
         for stream in &voice.streams {
-            let label = if stream.watching { format!("■ stop watching {}", stream.name) } else { format!("▶ watch {}", stream.name) };
+            let label = if stream.watching {
+                format!("■ stop watching {}", stream.name)
+            } else {
+                format!("▶ watch {}", stream.name)
+            };
             shares = shares.push(
                 button(text(label).size(12).color(p.text_bright()))
-                    .on_press(Message::WatchStream(stream.owner_id.clone(), !stream.watching))
+                    .on_press(Message::WatchStream(
+                        stream.owner_id.clone(),
+                        !stream.watching,
+                    ))
                     .padding([4, 10])
                     .style(flat_button_style(p)),
             );
@@ -6100,14 +6277,14 @@ fn discord_call_bar<'a>(
         body = body.push(tiles);
     }
     container(body)
-    .padding(12)
-    .width(Length::Fill)
-    .style(move |_| container::Style {
-        background: Some(fill.into()),
-        border: iced::border::rounded(8).color(edge).width(1),
-        ..container::Style::default()
-    })
-    .into()
+        .padding(12)
+        .width(Length::Fill)
+        .style(move |_| container::Style {
+            background: Some(fill.into()),
+            border: iced::border::rounded(8).color(edge).width(1),
+            ..container::Style::default()
+        })
+        .into()
 }
 
 /// WhatsApp's call: ringing (answer / decline) or under way (mute, camera,
