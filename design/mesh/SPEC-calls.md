@@ -1,6 +1,6 @@
 # Spec: `calls` (Mesh)
 
-Status: **DRAFT 2026-11-16, for your review.** Module 10 of the build order
+Status: **APPROVED 2026-11-23** with every recommended answer (Q1–Q6); see [PLAN-calls.md](PLAN-calls.md) for the choices made while planning. Module 10 of the build order
 in [CAPABILITY-MAP.md](CAPABILITY-MAP.md). It depends on
 [`transport`](SPEC-transport.md), [`routing`](SPEC-routing.md),
 [`social`](SPEC-social.md), [`dm`](SPEC-dm.md) and
