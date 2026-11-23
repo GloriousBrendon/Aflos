@@ -643,7 +643,7 @@ blocker. Test 9 stays as the record, `--ignored`.
     per device in `config.toml`, not the plan's `spaceMute`, so it doesn't
     follow you to another device.
 
-- [ ] **Task 14: The checkpoint test's Spaces step**
+- [x] **Task 14: The checkpoint test's Spaces step**
   - **What:** `checkpoint.rs` gains a step. O creates a Space with two
     channels and adds B and C, who aren't friends. They post, react and
     reply. C locks and gets mail on unlock. O deletes a line. B can't post
@@ -651,6 +651,17 @@ blocker. Test 9 stays as the record, `--ignored`.
   - **Accept:** `cargo test -p mesh-app checkpoint -- --ignored` passes.
   - **Files:** `crates/mesh-app/src/checkpoint.rs`.
   - Size S.
+  - **Done 2026-11-23** (step 8): A makes "club" with New Space, adds
+    #general and an admins-only #news in Settings, and adds B and a fourth
+    copy D (A's friend only, so B and D aren't friends). B posts, D replies,
+    A reacts; D locks and gets B's line on unlock; A deletes B's line; B's
+    post in #news is refused. Passed twice, about 61 s for the whole test.
+  - **Found by it, fixed in Mesh-Node:** a post from someone else didn't
+    resend `meshSpaces`, so unread counts and badges didn't move until
+    something else changed; and an open channel refreshed only for new
+    posts, not others' edits, deletes or reactions. Tests
+    `a_post_moves_the_unread_count_live` and
+    `an_open_channel_shows_a_reaction_live`.
 
 **Checkpoint C (by hand, added to *Before beta*):** test 14, the solo look
 on Linux and Windows; and test 13, the gate with three people on two

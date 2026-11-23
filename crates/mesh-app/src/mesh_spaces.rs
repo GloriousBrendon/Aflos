@@ -325,8 +325,8 @@ pub(crate) enum Msg {
 /// A pick list's entry: an ID (`None`: no category), and its label.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct Pick {
-    id: Option<String>,
-    label: String,
+    pub id: Option<String>,
+    pub label: String,
 }
 
 impl std::fmt::Display for Pick {

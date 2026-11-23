@@ -1,5 +1,6 @@
-//! PLAN-dm Checkpoint B, steps 1 to 6, and PLAN-mailbox Task 17 (step 7:
-//! the mailbox spec's test 1), by machine: three copies of the app,
+//! PLAN-dm Checkpoint B, steps 1 to 6, PLAN-mailbox Task 17 (step 7:
+//! the mailbox spec's test 1) and PLAN-spaces Task 14 (step 8, with a
+//! fourth copy), by machine: three copies of the app,
 //! each with a real `mesh-node`, a loopback relay and a seed, driven with the
 //! messages Mesh's buttons send, and checked through the app's own state (the
 //! chat list the sidebar draws, unread counts, timeline rows and their
@@ -11,6 +12,7 @@
 
 use super::*;
 use crate::mesh_dm::Click;
+use crate::mesh_spaces::Msg as SpaceMsg;
 use crate::mesh_ui::Msg;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -448,7 +450,145 @@ fn checkpoint_b_steps_1_to_6() {
     open(&mut a, &id_b, true);
     world.until(&mut a, "\"by mail\" sent", |app| has_row(app, "by mail") && mark(app, "by mail").is_empty());
 
-    for copy in [a, b, c] {
+    // 8. PLAN-spaces Task 14: A makes a Space with #general and an
+    // admins-only #news, and adds B and D, who aren't friends. They post,
+    // reply and react; D locks and gets B's line by mail on unlock; A, the
+    // owner, deletes B's line; B can't post in #news.
+    let mut d = world.open("dave");
+    world.create(&mut d);
+    let id_d = d.id.clone();
+    world.add(&mut a, &id_d);
+    world.add(&mut d, &id_a);
+    world.until(&mut a, "D a friend", |app| is_friend(app, &id_d));
+    let space = |m: SpaceMsg| Message::MeshSpace(m);
+    for msg in [
+        SpaceMsg::NewSpace(true),
+        SpaceMsg::NewSpaceName("club".into()),
+        SpaceMsg::NewSpaceCreate,
+    ] {
+        let _ = update(&mut a.app, space(msg));
+    }
+    world.until(&mut a, "the Space on A's rail", |app| {
+        app.mesh.spaces.iter().any(|s| s.name == "club")
+    });
+    let s = a
+        .app
+        .mesh
+        .spaces
+        .iter()
+        .find(|s| s.name == "club")
+        .unwrap()
+        .id
+        .clone();
+    let _ = update(&mut a.app, Message::MeshSpaceSelected(s.clone()));
+    let _ = update(&mut a.app, space(SpaceMsg::Settings(Some(s.clone()))));
+    assert!(
+        mesh_spaces::settings(session(&a.app), &a.app).is_some(),
+        "settings in the chat pane"
+    );
+    for msg in [
+        SpaceMsg::ChannelName("general".into()),
+        SpaceMsg::ChannelCreate,
+        SpaceMsg::ChannelName("news".into()),
+        SpaceMsg::ChannelAdmins(true),
+        SpaceMsg::ChannelCreate,
+    ] {
+        let _ = update(&mut a.app, space(msg));
+    }
+    let club = |app: &App| app.mesh.spaces.iter().find(|x| x.name == "club").cloned();
+    let channel = |app: &App, name: &str| {
+        club(app).and_then(|x| x.channels.into_iter().find(|c| c.name == name))
+    };
+    world.until(&mut a, "two channels", |app| {
+        channel(app, "general").is_some() && channel(app, "news").is_some_and(|c| c.admins_post)
+    });
+    for who in [&id_b, &id_d] {
+        let pick = mesh_spaces::Pick {
+            id: Some(who.clone()),
+            label: String::new(),
+        };
+        let _ = update(&mut a.app, space(SpaceMsg::AddPick(pick)));
+        let _ = update(&mut a.app, space(SpaceMsg::Add));
+        world.until(&mut a, "the member in", |app| {
+            club(app).is_some_and(|x| x.members.iter().any(|m| m.id == *who))
+        });
+    }
+    for copy in [&mut b, &mut d] {
+        world.until(copy, "the club with three and two channels", |app| {
+            club(app).is_some_and(|x| x.members.len() == 3 && x.channels.len() == 2)
+        });
+    }
+    assert!(!is_friend(&b.app, &id_d), "B and D aren't friends");
+    let general = mesh_spaces::chat_id(&s, &channel(&a.app, "general").unwrap().id);
+    let news = mesh_spaces::chat_id(&s, &channel(&a.app, "news").unwrap().id);
+    let _ = update(&mut a.app, space(SpaceMsg::Settings(None)));
+
+    open(&mut b, &general, false);
+    send(&mut b, "hi club");
+    world.until(&mut d, "B's line unread on D", |app| {
+        channel(app, "general").is_some_and(|c| c.unread == 1)
+    });
+    open(&mut d, &general, false);
+    world.until(&mut d, "B's line on D", |app| has_row(app, "hi club"));
+    let hi = row(&d.app, "hi club").web_id.clone().unwrap();
+    let quote = mesh_core::Quote {
+        author: "bob".into(),
+        text: "hi club".into(),
+    };
+    let _ = update(&mut d.app, Message::ReplyTo(hi.clone(), quote));
+    send(&mut d, "hi bob");
+    world.until(&mut b, "D's reply on B", |app| has_row(app, "hi bob"));
+    assert_eq!(
+        row(&b.app, "hi bob")
+            .reply_to
+            .as_ref()
+            .map(|q| q.text.as_str()),
+        Some("hi club"),
+        "it quotes B"
+    );
+    open(&mut a, &general, false);
+    world.until(&mut a, "the lines on A", |app| has_row(app, "hi bob"));
+    let reply = row(&a.app, "hi bob").web_id.clone().unwrap();
+    let _ = update(
+        &mut a.app,
+        Message::React {
+            id: reply,
+            emoji: "👍".into(),
+        },
+    );
+    world.until(&mut b, "A's reaction on B", |app| {
+        has_row(app, "hi bob")
+            && row(app, "hi bob")
+                .reactions
+                .iter()
+                .any(|r| r.key == "👍" && !r.by_me)
+    });
+
+    world.lock(&mut d);
+    send(&mut b, "while dave is away");
+    world.until(&mut a, "B's line on A", |app| {
+        has_row(app, "while dave is away")
+    });
+    world.unlock(&mut d);
+    open(&mut d, &general, false);
+    world.until(&mut d, "the mailed line on D", |app| {
+        has_row(app, "while dave is away")
+    });
+
+    let _ = update(&mut a.app, Message::MeshDelete(hi, true));
+    world.until(&mut b, "the delete on B", |app| {
+        !has_row(app, "hi club") && has_row(app, "hi bob")
+    });
+
+    open(&mut b, &news, false);
+    send(&mut b, "not mine to post");
+    world.until(&mut b, "refused", |app| session(app).status.is_some());
+    assert!(
+        !has_row(&b.app, "not mine to post"),
+        "nothing posted in #news"
+    );
+
+    for copy in [a, b, c, d] {
         copy.helper.abort();
     }
     drop(world);
