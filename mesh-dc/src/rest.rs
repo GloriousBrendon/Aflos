@@ -88,6 +88,17 @@ impl Rest {
         Ok(v.get("guild").and_then(|g| g.get("name")).and_then(Value::as_str).map(str::to_owned))
     }
 
+    /// Our DM with a user, made if there's none yet: the channel object.
+    pub async fn open_dm(&self, user_id: &str) -> Result<Value> {
+        let resp = self
+            .req(reqwest::Method::POST, "/users/@me/channels")
+            .json(&json!({ "recipients": [user_id] }))
+            .send()
+            .await
+            .map_err(|e| anyhow!("open DM: {e}"))?;
+        resp.error_for_status().map_err(|e| anyhow!("open DM HTTP {e}"))?.json().await.map_err(|e| anyhow!("open DM: {e}"))
+    }
+
     /// Logs the account out, invalidating this token.
     pub async fn logout(&self) {
         let _ = self.req(reqwest::Method::POST, "/auth/logout").json(&json!({ "provider": Value::Null, "voip_provider": Value::Null })).send().await;
@@ -118,6 +129,52 @@ fn snowflake_ms(id: &str) -> u64 {
 }
 
 const TEXT_TYPES: [u64; 2] = [0, 5];
+/// Discord permission bits.
+const ADMINISTRATOR: u64 = 1 << 3;
+const VIEW_CHANNEL: u64 = 1 << 10;
+const CONNECT: u64 = 1 << 20;
+
+/// Whether we have every bit of `need` in channel `c` of guild `g`: the
+/// @everyone role and our roles, then the channel's overwrites for
+/// @everyone, our roles, and us (Discord's order). The owner and
+/// administrators have everything. With no roles to go on (an old READY),
+/// yes: better a channel that fails than one hidden by mistake.
+fn may(g: &Value, c: &Value, me: &str, mine: Option<&Vec<String>>, need: u64) -> bool {
+    let gid = g.get("id").and_then(Value::as_str).unwrap_or("");
+    if g.get("owner_id").and_then(Value::as_str) == Some(me) {
+        return true;
+    }
+    let (Some(roles), Some(mine)) = (g.get("roles").and_then(Value::as_array), mine) else {
+        return true;
+    };
+    let bits = |v: Option<&Value>| v.and_then(Value::as_str).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let mut perms = 0;
+    for r in roles {
+        let id = r.get("id").and_then(Value::as_str).unwrap_or("");
+        if id == gid || mine.iter().any(|m| m == id) {
+            perms |= bits(r.get("permissions"));
+        }
+    }
+    if perms & ADMINISTRATOR != 0 {
+        return true;
+    }
+    let overwrites: Vec<&Value> = c.get("permission_overwrites").and_then(Value::as_array).into_iter().flatten().collect();
+    let of = |id: &str| overwrites.iter().find(|o| o.get("id").and_then(Value::as_str) == Some(id));
+    if let Some(o) = of(gid) {
+        perms = (perms & !bits(o.get("deny"))) | bits(o.get("allow"));
+    }
+    let (mut allow, mut deny) = (0, 0);
+    for role in mine {
+        if let Some(o) = of(role) {
+            (allow, deny) = (allow | bits(o.get("allow")), deny | bits(o.get("deny")));
+        }
+    }
+    perms = (perms & !deny) | allow;
+    if let Some(o) = of(me) {
+        perms = (perms & !bits(o.get("deny"))) | bits(o.get("allow"));
+    }
+    perms & need == need
+}
 const VOICE_TYPES: [u64; 2] = [2, 13];
 
 fn category_name(parent: Option<&str>, s: &State) -> Value {
@@ -148,6 +205,54 @@ fn members(channel_id: &str, guild_key: &str, s: &State) -> Vec<Value> {
         .collect()
 }
 
+/// A guild's member list, once it's been asked for (`members`): its groups
+/// (online, offline, or a role shown apart) and their members, in order.
+fn member_list(gid: &str, g: &Value, s: &State) -> Vec<Value> {
+    let rows = s.member_lists.get(gid).map(Vec::as_slice).unwrap_or_default();
+    let role_name = |id: &str| {
+        (g.get("roles").and_then(Value::as_array).into_iter().flatten())
+            .find(|r| r.get("id").and_then(Value::as_str) == Some(id))
+            .and_then(|r| r.get("name").and_then(Value::as_str))
+            .map(str::to_owned)
+    };
+    (rows.iter())
+        .filter_map(|row| {
+            if let Some(group) = row.get("group") {
+                let id = group.get("id").and_then(Value::as_str).unwrap_or("");
+                let name = match id {
+                    "online" => "Online".to_owned(),
+                    "offline" => "Offline".to_owned(),
+                    other => role_name(other).unwrap_or_else(|| other.to_owned()),
+                };
+                return Some(json!({ "group": name, "count": group.get("count") }));
+            }
+            let m = row.get("member")?;
+            let u = m.get("user")?;
+            let id = u.get("id").and_then(Value::as_str)?;
+            let name = (m.get("nick").and_then(Value::as_str))
+                .or_else(|| u.get("global_name").and_then(Value::as_str))
+                .or_else(|| u.get("username").and_then(Value::as_str))
+                .unwrap_or(id);
+            let status = m.get("presence").and_then(|p| p.get("status")).and_then(Value::as_str).unwrap_or("offline");
+            Some(json!({ "id": id, "name": name, "avatar": user_obj(id, s)["avatar"], "status": status }))
+        })
+        .collect()
+}
+
+/// The first text channel of a guild we may see: the member list is asked
+/// for as seen from it.
+pub fn visible_text_channel(s: &State, gid: &str) -> Option<String> {
+    let g = s.guilds.get(gid)?;
+    let me = s.me_id().unwrap_or_default();
+    let mut chans: Vec<&Value> = (s.channels.values())
+        .filter(|c| c.get("guild_id").and_then(Value::as_str) == Some(gid))
+        .filter(|c| c.get("type").and_then(Value::as_u64).is_some_and(|t| TEXT_TYPES.contains(&t)))
+        .filter(|c| may(g, c, &me, s.my_roles.get(gid), VIEW_CHANNEL))
+        .collect();
+    chans.sort_by_key(|c| c.get("position").and_then(Value::as_i64).unwrap_or(0));
+    chans.first().and_then(|c| c.get("id").and_then(Value::as_str)).map(str::to_owned)
+}
+
 /// Builds the full Mesh snapshot from the current gateway state.
 pub fn snapshot(s: &State) -> Value {
     let me = s.me.as_ref().map(|m| {
@@ -160,25 +265,29 @@ pub fn snapshot(s: &State) -> Value {
         .values()
         .map(|g| {
             let gid = g.get("id").and_then(Value::as_str).unwrap_or("");
+            let me = s.me_id().unwrap_or_default();
+            let mine = s.my_roles.get(gid);
+            let locked = |c: &Value, need: u64| !may(g, c, &me, mine, need);
             let mut chans: Vec<&Value> = s.channels.values().filter(|c| c.get("guild_id").and_then(Value::as_str) == Some(gid)).collect();
             chans.sort_by_key(|c| c.get("position").and_then(Value::as_i64).unwrap_or(0));
             let text: Vec<Value> = chans
                 .iter()
                 .filter(|c| c.get("type").and_then(Value::as_u64).is_some_and(|t| TEXT_TYPES.contains(&t)))
-                .map(|c| json!({ "id": c["id"], "name": c["name"], "category": category_name(c.get("parent_id").and_then(Value::as_str), s) }))
+                .map(|c| json!({ "id": c["id"], "name": c["name"], "category": category_name(c.get("parent_id").and_then(Value::as_str), s), "locked": locked(c, VIEW_CHANNEL) }))
                 .collect();
             let voice: Vec<Value> = chans
                 .iter()
                 .filter(|c| c.get("type").and_then(Value::as_u64).is_some_and(|t| VOICE_TYPES.contains(&t)))
                 .map(|c| {
                     let cid = c.get("id").and_then(Value::as_str).unwrap_or("");
-                    json!({ "id": c["id"], "name": c["name"], "category": category_name(c.get("parent_id").and_then(Value::as_str), s), "members": members(cid, gid, s) })
+                    json!({ "id": c["id"], "name": c["name"], "category": category_name(c.get("parent_id").and_then(Value::as_str), s), "members": members(cid, gid, s), "locked": locked(c, VIEW_CHANNEL | CONNECT) })
                 })
                 .collect();
             json!({
                 "id": gid, "name": g.get("name").cloned().unwrap_or(Value::Null),
                 "icon": g.get("icon").and_then(Value::as_str).map(|h| json!(format!("https://cdn.discordapp.com/icons/{gid}/{h}.png?size=64"))).unwrap_or(Value::Null),
                 "text_channels": text, "voice_channels": voice,
+                "member_list": member_list(gid, g, s),
             })
         })
         .collect();
@@ -336,6 +445,41 @@ fn attachment(a: &Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Discord's order: @everyone and roles, then @everyone's, the roles'
+    /// and our own overwrites; the owner and admins see everything.
+    #[test]
+    fn who_may_see_and_join() {
+        let g = json!({ "id": "g", "owner_id": "boss", "roles": [
+            { "id": "g", "permissions": (VIEW_CHANNEL | CONNECT).to_string() },
+            { "id": "mod", "permissions": "0" },
+            { "id": "admin", "permissions": ADMINISTRATOR.to_string() },
+        ]});
+        let open = json!({ "id": "c1" });
+        let hidden = json!({ "id": "c2", "permission_overwrites": [
+            { "id": "g", "type": 0, "allow": "0", "deny": VIEW_CHANNEL.to_string() },
+            { "id": "mod", "type": 0, "allow": VIEW_CHANNEL.to_string(), "deny": "0" },
+        ]});
+        let mine_only = json!({ "id": "c3", "permission_overwrites": [
+            { "id": "g", "type": 0, "allow": "0", "deny": VIEW_CHANNEL.to_string() },
+            { "id": "me", "type": 1, "allow": VIEW_CHANNEL.to_string(), "deny": "0" },
+        ]});
+        let no_voice = json!({ "id": "c4", "permission_overwrites": [
+            { "id": "g", "type": 0, "allow": "0", "deny": CONNECT.to_string() },
+        ]});
+        let plain: Vec<String> = vec![];
+        let modr = vec!["mod".to_string()];
+        let admin = vec!["admin".to_string()];
+        assert!(may(&g, &open, "me", Some(&plain), VIEW_CHANNEL));
+        assert!(!may(&g, &hidden, "me", Some(&plain), VIEW_CHANNEL), "@everyone denied");
+        assert!(may(&g, &hidden, "me", Some(&modr), VIEW_CHANNEL), "a role's allow wins over @everyone's deny");
+        assert!(may(&g, &mine_only, "me", Some(&plain), VIEW_CHANNEL), "our own overwrite last");
+        assert!(may(&g, &no_voice, "me", Some(&plain), VIEW_CHANNEL));
+        assert!(!may(&g, &no_voice, "me", Some(&plain), VIEW_CHANNEL | CONNECT), "seen but can't join");
+        assert!(may(&g, &hidden, "me", Some(&admin), VIEW_CHANNEL | CONNECT), "admin");
+        assert!(may(&g, &hidden, "boss", Some(&plain), VIEW_CHANNEL), "owner");
+        assert!(may(&g, &hidden, "me", None, VIEW_CHANNEL), "no roles known: not locked");
+    }
 
     #[test]
     fn mentions_show_names() {

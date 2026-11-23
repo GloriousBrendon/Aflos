@@ -70,6 +70,9 @@ pub enum Cmd {
     LeaveVoice,
     /// Update our voice flags in place (mute/deaf/video) via op 4.
     VoiceFlags { self_mute: bool, self_deaf: bool, self_video: bool },
+    /// The member list of a guild, as seen from one of its channels (op 37,
+    /// what the official client sends for its member sidebar).
+    Members { guild_id: String, channel_id: String },
 }
 
 /// Everything the snapshot is built from, kept current by dispatch events.
@@ -102,6 +105,12 @@ pub struct State {
     session_id: Option<String>,
     /// The channel Mesh currently shows (for message refreshes).
     pub open_channel: Option<String>,
+    /// guild id -> our role ids there (READY's `merged_members`, then
+    /// `GUILD_MEMBER_UPDATE`s about us), for what we may see and join.
+    pub my_roles: HashMap<String, Vec<String>>,
+    /// guild id -> its member list's rows (groups and members), from
+    /// `GUILD_MEMBER_LIST_UPDATE`.
+    pub member_lists: HashMap<String, Vec<Value>>,
 }
 
 impl State {
@@ -209,6 +218,13 @@ async fn command_frame(cmd: Cmd, state: &tokio::sync::Mutex<State>) -> String {
             s.rtc_connected = false;
             json!({ "op": 4, "d": { "guild_id": guild, "channel_id": Value::Null, "self_mute": s.self_mute, "self_deaf": s.self_deaf, "self_video": false } }).to_string()
         }
+        Cmd::Members { guild_id, channel_id } => {
+            let mut channels = serde_json::Map::new();
+            channels.insert(channel_id, json!([[0, 99]]));
+            let mut subs = serde_json::Map::new();
+            subs.insert(guild_id, json!({ "typing": true, "activities": true, "threads": false, "channels": channels }));
+            json!({ "op": 37, "d": { "subscriptions": subs } }).to_string()
+        }
         Cmd::VoiceFlags { self_mute, self_deaf, self_video } => {
             s.self_mute = self_mute;
             s.self_deaf = self_deaf;
@@ -285,6 +301,14 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
             for g in d.get("guilds").and_then(Value::as_array).into_iter().flatten() {
                 index_guild(&mut s, g);
             }
+            // Our member in each guild, in the guilds' order.
+            let guilds = d.get("guilds").and_then(Value::as_array).into_iter().flatten();
+            let merged = d.get("merged_members").and_then(Value::as_array).into_iter().flatten();
+            for (g, members) in guilds.zip(merged) {
+                if let (Some(gid), Some(me)) = (g.get("id").and_then(Value::as_str), members.get(0)) {
+                    s.my_roles.insert(gid.to_owned(), role_ids(me));
+                }
+            }
             // A re-identify (reconnect without resume) sends READY again with the full list.
             s.dm_channels.clear();
             s.calls.clear();
@@ -330,6 +354,29 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
                 s.voice.remove(id);
             }
             true
+        }
+        "GUILD_MEMBER_LIST_UPDATE" => {
+            let Some(gid) = d.get("guild_id").and_then(Value::as_str) else { return false };
+            let st = &mut *s;
+            let rows = st.member_lists.entry(gid.to_owned()).or_default();
+            apply_list_ops(rows, d.get("ops").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default());
+            for row in rows.iter() {
+                if let Some(u) = row.get("member").and_then(|m| m.get("user")) {
+                    if let Some(id) = u.get("id").and_then(Value::as_str) {
+                        st.users.entry(id.to_owned()).or_insert_with(|| u.clone());
+                    }
+                }
+            }
+            true
+        }
+        "GUILD_MEMBER_UPDATE" => {
+            let me = s.me_id();
+            let ours = d.get("user").and_then(|u| u.get("id")).and_then(Value::as_str).map(str::to_owned) == me;
+            if let (true, Some(gid)) = (ours, d.get("guild_id").and_then(Value::as_str)) {
+                s.my_roles.insert(gid.to_owned(), role_ids(d));
+                return true;
+            }
+            false
         }
         "CHANNEL_CREATE" | "CHANNEL_UPDATE" => {
             if let Some(id) = d.get("id").and_then(Value::as_str) {
@@ -403,6 +450,60 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
 }
 
 /// Puts a guild and its channels into the index (channels carry `guild_id`).
+/// A member list's `SYNC`, `INSERT`, `UPDATE`, `DELETE` and `INVALIDATE`
+/// operations, applied in order to its rows.
+pub fn apply_list_ops(rows: &mut Vec<Value>, ops: &[Value]) {
+    for op in ops {
+        let index = op.get("index").and_then(Value::as_u64).map(|i| i as usize);
+        let range = (op.get("range").and_then(Value::as_array))
+            .and_then(|r| Some((r.first()?.as_u64()? as usize, r.get(1)?.as_u64()? as usize)));
+        match op.get("op").and_then(Value::as_str) {
+            Some("SYNC") => {
+                let (Some((from, _)), Some(items)) = (range, op.get("items").and_then(Value::as_array)) else { continue };
+                if rows.len() < from + items.len() {
+                    rows.resize(from + items.len(), Value::Null);
+                }
+                rows.splice(from..from + items.len(), items.iter().cloned());
+            }
+            Some("INSERT") => {
+                if let (Some(i), Some(item)) = (index, op.get("item")) {
+                    rows.insert(i.min(rows.len()), item.clone());
+                }
+            }
+            Some("UPDATE") => {
+                if let (Some(i), Some(item)) = (index, op.get("item")) {
+                    if let Some(row) = rows.get_mut(i) {
+                        *row = item.clone();
+                    }
+                }
+            }
+            Some("DELETE") => {
+                if let Some(i) = index.filter(|i| *i < rows.len()) {
+                    rows.remove(i);
+                }
+            }
+            Some("INVALIDATE") => {
+                if let Some((from, to)) = range {
+                    for row in rows.iter_mut().skip(from).take(to.saturating_sub(from) + 1) {
+                        *row = Value::Null;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    while rows.last().is_some_and(Value::is_null) {
+        rows.pop();
+    }
+}
+
+/// A member object's role ids.
+fn role_ids(member: &Value) -> Vec<String> {
+    (member.get("roles").and_then(Value::as_array).into_iter().flatten())
+        .filter_map(|r| r.as_str().map(str::to_owned))
+        .collect()
+}
+
 fn index_guild(s: &mut State, g: &Value) {
     let Some(gid) = g.get("id").and_then(Value::as_str) else { return };
     let mut slim = g.clone();
@@ -536,6 +637,28 @@ pub fn api() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    /// The member list's operations, as Discord sends them for a sidebar.
+    #[test]
+    fn member_list_ops() {
+        let m = |id: &str| json!({ "member": { "user": { "id": id } } });
+        let g = |id: &str| json!({ "group": { "id": id, "count": 1 } });
+        let mut rows = Vec::new();
+        super::apply_list_ops(&mut rows, &[json!({ "op": "SYNC", "range": [0, 99], "items": [g("online"), m("a"), m("b")] })]);
+        assert_eq!(rows.len(), 3);
+        super::apply_list_ops(
+            &mut rows,
+            &[
+                json!({ "op": "INSERT", "index": 2, "item": m("c") }),
+                json!({ "op": "UPDATE", "index": 1, "item": m("a2") }),
+                json!({ "op": "DELETE", "index": 3 }),
+            ],
+        );
+        let ids: Vec<&str> = rows.iter().filter_map(|r| r["member"]["user"]["id"].as_str()).collect();
+        assert_eq!(ids, ["a2", "c"]);
+        super::apply_list_ops(&mut rows, &[json!({ "op": "INVALIDATE", "range": [1, 99] })]);
+        assert_eq!(rows.len(), 1, "invalidated rows go");
+    }
+
     use super::*;
 
     #[test]

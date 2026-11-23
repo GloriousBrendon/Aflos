@@ -326,6 +326,38 @@ async fn handle(cmd: &Cmd, state: &Arc<Mutex<State>>, rest: &Rest, gw: &mpsc::Un
                 });
             }
         }
+        // The member list of a guild (shown beside its channels).
+        "members" => {
+            if let Some(gid) = arg(0) {
+                let channel = rest::visible_text_channel(&*state.lock().await, gid);
+                if let Some(channel_id) = channel {
+                    let _ = gw.send(gateway::Cmd::Members { guild_id: gid.to_owned(), channel_id });
+                }
+            }
+        }
+        // Our DM with a user, made if need be; answers with `meshDmOpened`.
+        "openDm" => {
+            if let Some(uid) = arg(0) {
+                let (rest, state, notify, uid) = (rest.clone(), state.clone(), notify.clone(), uid.to_owned());
+                tokio::spawn(async move {
+                    match rest.open_dm(&uid).await {
+                        Ok(ch) => {
+                            let id = ch.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
+                            {
+                                let mut s = state.lock().await;
+                                if !s.dm_channels.iter().any(|c| c.get("id").and_then(Value::as_str) == Some(id.as_str())) {
+                                    s.dm_channels.push(ch.clone());
+                                }
+                                s.channels.insert(id.clone(), ch);
+                            }
+                            let _ = notify.send(());
+                            emit("meshDmOpened", &json!({ "id": id, "user": uid }));
+                        }
+                        Err(e) => log::warn!("{e}"),
+                    }
+                });
+            }
+        }
         "acceptInvite" => {
             if let Some(link) = arg(0) {
                 emit("meshInvite", &json!({ "state": "waiting" }));

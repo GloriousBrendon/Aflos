@@ -1262,6 +1262,9 @@ enum Message {
     VideoPrune,
     /// Show a Discord server (by id) from the hidden client.
     GuildSelected(String),
+    /// The text chat of the Discord voice channel we're in, from anywhere:
+    /// its server in the channel pane, its messages in the chat pane.
+    DiscordVoiceChat,
     /// A Mesh Space on the rail (its ID).
     MeshSpaceSelected(String),
     /// Mutes or unmutes a Mesh Space (its ID), kept in config.toml.
@@ -3191,6 +3194,19 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.focused = Pane::Channels;
             }
             Task::none()
+        }
+        Message::DiscordVoiceChat => {
+            let voice = state.discord_state.as_ref().map(|d| &d.voice);
+            let Some((channel, name)) = voice.and_then(|v| Some((v.channel_id.clone()?, v.channel_name.clone().unwrap_or_default()))) else {
+                return Task::none();
+            };
+            let guild = voice.and_then(|v| v.guild_id.clone());
+            let chat = WebChat { network: Network::Discord, id: channel, name, dm: guild.is_none() };
+            let shown = match guild {
+                Some(g) => update(state, Message::GuildSelected(g)),
+                None => Task::none(),
+            };
+            Task::batch([shown, update(state, Message::WebChatSelected(chat))])
         }
         Message::GuildSelected(guild) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
@@ -5310,6 +5326,23 @@ fn voice_channels<'a>(
 }
 
 /// One voice channel row (click to join), with who's in it under it.
+/// A channel we can't see into or join: its name dimmed, a lock, and no
+/// click (Discord shows these the same way).
+fn locked_row<'a>(name: &str, icon: ui::Icon, p: &theme::Palette) -> Element<'a, Message> {
+    let tip = iced::widget::tooltip(
+        row![
+            ui::icon(icon, 14.0, p.text_muted()),
+            ui::sans(name.to_string(), 14.0, Weight::Normal, p.text_muted()).width(Length::Fill),
+            ui::mono("🔒", 11.0, p.text_muted()),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center),
+        container(text("You don't have access to this channel").size(12)).padding([4, 8]),
+        iced::widget::tooltip::Position::Right,
+    );
+    container(tip).padding(iced::Padding { top: 6.0, right: 8.0, bottom: 6.0, left: 10.0 }).into()
+}
+
 fn voice_channel<'a>(
     session: &'a Session,
     channel: &'a mesh_discord::VoiceChannel,
@@ -5317,6 +5350,9 @@ fn voice_channel<'a>(
     p: &theme::Palette,
     l: &theme::Layout,
 ) -> Element<'a, Message> {
+    if channel.locked {
+        return locked_row(&channel.name, ui::Icon::Voice, p);
+    }
     let here = current == Some(channel.id.as_str());
     let color = if here { p.success() } else { p.text() };
     let mut line = row![
@@ -5328,7 +5364,9 @@ fn voice_channel<'a>(
     if here {
         line = line.push(ui::mono("connected", 10.0, p.success()));
     }
-    let mut col = column![ui::row_button(line, Message::DiscordJoin(channel.id.clone()), here, p, l)].spacing(2);
+    // The one we're in opens its text chat, as Discord's does.
+    let press = if here { Message::DiscordVoiceChat } else { Message::DiscordJoin(channel.id.clone()) };
+    let mut col = column![ui::row_button(line, press, here, p, l)].spacing(2);
     for member in &channel.members {
         col = col.push(container(voice_member(member, web_picture(session, member.avatar.as_deref()), 22.0, p)).padding(iced::Padding { left: 30.0, ..iced::Padding::ZERO }));
     }
@@ -5402,6 +5440,10 @@ fn guild_pane<'a>(
             list = list.push(ui::section(name, p));
         }
         for channel in guild.text_channels.iter().filter(|c| c.category.as_deref() == category) {
+            if channel.locked {
+                list = list.push(locked_row(&channel.name, ui::Icon::Hash, p));
+                continue;
+            }
             let open = WebChat { network: Network::Discord, id: channel.id.clone(), name: channel.name.clone(), dm: false };
             list = list.push(web_chat_row(session, open, None, false, 0, p, l));
         }
@@ -5999,8 +6041,16 @@ fn discord_call_bar<'a>(
         row![
             ui::icon(ui::Icon::Voice, 17.0, status),
             ui::mono_bold(Network::Discord.tag(), 12.0, net_color(Network::Discord, p)),
-            ui::sans(voice.channel_name.as_deref().unwrap_or("call"), 14.0, Weight::Semibold, p.text_bright())
+            button(ui::sans(voice.channel_name.as_deref().unwrap_or("call"), 14.0, Weight::Semibold, p.text_bright()))
+                .on_press(Message::DiscordVoiceChat)
+                .padding(0)
+                .style(button::text)
                 .width(Length::Fill),
+            iced::widget::tooltip(
+                ui::icon_button(ui::Icon::Hash, Some(Message::DiscordVoiceChat), false, p, l),
+                container(text("The call's text chat").size(12)).padding([4, 8]),
+                iced::widget::tooltip::Position::Bottom,
+            ),
             ui::icon_button(
                 if voice.self_mute { ui::Icon::MicOff } else { ui::Icon::Mic },
                 Some(Message::ToggleMute),

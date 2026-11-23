@@ -277,6 +277,9 @@ pub struct TextChannel {
     pub name: String,
     /// The category it's under, if any.
     pub category: Option<String>,
+    /// We can't see into it: shown, but not opened.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -286,6 +289,9 @@ pub struct VoiceChannel {
     #[serde(default)]
     pub category: Option<String>,
     pub members: Vec<Member>,
+    /// We can't join it: shown, but not joined.
+    #[serde(default)]
+    pub locked: bool,
 }
 
 /// Someone's screen share (Go Live) in our voice channel.
