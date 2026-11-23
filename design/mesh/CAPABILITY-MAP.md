@@ -177,6 +177,19 @@ its steps are.
       claims or mail record puts stay at 0, the install still runs the
       old engine (step 1).
 
+8. **Spaces, a solo look** (PLAN-spaces Checkpoint C, added 2026-11-23):
+   the rail's Mesh folder, a Space's pane, Settings and New Space, how
+   they look and fit on Linux and Windows. The checkpoint test's step 8
+   drives them but draws nothing.
+9. **Calls, by hand** (PLAN-calls, added 2026-11-23):
+   1. A DM call between two PCs on the home network: the ring and
+      ringback, the bar, mute and deafen, who's speaking, real
+      microphones and speakers (headphones: there's no echo cancellation).
+   2. The same between your PC and your friend's on two networks (spec
+      test 10), once the outside seed is up.
+   3. A voice channel with the group for an evening (spec test 11): decide
+      then whether echo cancellation (Q2) is needed.
+
 e2ee Checkpoint B's step 4 (a window restored from a backup shows the
 notes) was skipped by hand; the dm process test now checks that a device
 restored from a backup gets the whole history, so it isn't listed.
