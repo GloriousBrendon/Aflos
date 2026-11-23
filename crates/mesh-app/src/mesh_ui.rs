@@ -32,6 +32,10 @@ pub(crate) struct Mesh {
     pub muted_spaces: Vec<String>,
     /// A Space's settings and New Space (mesh_spaces).
     pub space_form: crate::mesh_spaces::Form,
+    /// The call, while it's on (SPEC-calls).
+    pub call: Option<mesh::Call>,
+    /// Who's in each voice channel: by Space and channel ID.
+    pub voice: HashMap<(String, String), Vec<String>>,
     /// Who's typing, by name, in which chat, and when it was heard.
     pub typing: Option<(String, Vec<String>, std::time::Instant)>,
     /// The last received file clicked, and what that did (`mesh_dm::on_click`).
@@ -233,8 +237,26 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
     ) {
         return crate::mesh_dm::event(state, event);
     }
+    if let mesh::Event::Call(call) = event {
+        return crate::mesh_calls::event(state, call);
+    }
+    if let mesh::Event::Voice {
+        space,
+        channel,
+        people,
+    } = event
+    {
+        match people.is_empty() {
+            true => state.mesh.voice.remove(&(space, channel)),
+            false => state.mesh.voice.insert((space, channel), people),
+        };
+        return Task::none();
+    }
     if let mesh::Event::Error(error) = &event
-        && (error.func.starts_with("dm") || error.func.starts_with("space"))
+        && (error.func.starts_with("dm")
+            || error.func.starts_with("space")
+            || error.func.starts_with("call")
+            || error.func.starts_with("voice"))
     {
         crate::mesh_dm::failed(state, error);
         return Task::none();
@@ -249,7 +271,9 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             if !now_unlocked {
                 m.codes.clear();
                 m.social = mesh::Social::default();
-                (m.chats, m.spaces, m.typing, m.new_group) = (Vec::new(), Vec::new(), None, None);
+                (m.chats, m.spaces, m.typing, m.new_group, m.call) =
+                    (Vec::new(), Vec::new(), None, None, None);
+                m.voice.clear();
             } else if let Some(node) = &m.node {
                 // Unlocking doesn't send them by itself.
                 node.social();
@@ -398,7 +422,9 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
         | mesh::Event::Spaces(_)
         | mesh::Event::SpaceMessages(_)
         | mesh::Event::SpaceNotify(_)
-        | mesh::Event::SpaceTyping { .. } => {}
+        | mesh::Event::SpaceTyping { .. }
+        | mesh::Event::Call(_)
+        | mesh::Event::Voice { .. } => {}
         mesh::Event::Disconnected => {
             m.node = None;
             m.identity = None;
@@ -406,7 +432,9 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             m.net = None;
             m.codes.clear();
             m.social = mesh::Social::default();
-            (m.chats, m.spaces, m.typing, m.new_group) = (Vec::new(), Vec::new(), None, None);
+            (m.chats, m.spaces, m.typing, m.new_group, m.call) =
+                (Vec::new(), Vec::new(), None, None, None);
+            m.voice.clear();
             m.form.busy = false;
             m.settings = Settings::default();
         }

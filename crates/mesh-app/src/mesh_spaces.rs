@@ -221,6 +221,10 @@ pub(crate) fn pane<'a>(
             list = list.push(ui::section(name, p));
         }
         for channel in channels {
+            if channel.voice {
+                list = list.push(crate::mesh_calls::voice_row(mesh, space, channel, p, l));
+                continue;
+            }
             let open = WebChat {
                 network: Network::Mesh,
                 id: chat_id(&space.id, &channel.id),
@@ -282,6 +286,7 @@ pub(crate) struct Form {
     channel: String,
     channel_category: Option<String>,
     channel_admins: bool,
+    channel_voice: bool,
     category: String,
     add: Option<String>,
     /// `end`, `leave` or `transfer:<id>`, waiting for a second click.
@@ -298,6 +303,8 @@ pub(crate) enum Msg {
     ChannelName(String),
     ChannelCategory(Pick),
     ChannelAdmins(bool),
+    /// The new channel is a voice channel (SPEC-calls C8).
+    ChannelVoice(bool),
     ChannelCreate,
     ChannelDelete(String),
     /// A channel, and whether only admins post.
@@ -395,6 +402,7 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
         Msg::ChannelName(name) => f.channel = name,
         Msg::ChannelCategory(pick) => f.channel_category = pick.id,
         Msg::ChannelAdmins(on) => f.channel_admins = on,
+        Msg::ChannelVoice(on) => f.channel_voice = on,
         Msg::ChannelCreate if !f.channel.trim().is_empty() => {
             let who = if f.channel_admins {
                 "admins"
@@ -402,7 +410,11 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
                 "everyone"
             };
             let category = f.channel_category.clone().unwrap_or_default();
-            node.space_change("spaceChannel", &[s, f.channel.trim(), who, &category]);
+            if f.channel_voice {
+                node.space_change("spaceVoiceChannel", &[s, f.channel.trim(), &category]);
+            } else {
+                node.space_change("spaceChannel", &[s, f.channel.trim(), who, &category]);
+            }
             f.channel.clear();
         }
         Msg::ChannelDelete(channel) => node.space_change("spaceChannelDelete", &[s, &channel]),
@@ -675,6 +687,7 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
         }
         let at = picks.iter().find(|k| k.id == f.channel_category).cloned();
         let mark = if f.channel_admins { "☑" } else { "☐" };
+        let voice = if f.channel_voice { "☑" } else { "☐" };
         col = col.push(
             row![
                 input(
@@ -688,6 +701,12 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
                     format!("{mark} admins only"),
                     p.text(),
                     Some(Msg::ChannelAdmins(!f.channel_admins)),
+                    p
+                ),
+                act(
+                    format!("{voice} voice"),
+                    p.text(),
+                    Some(Msg::ChannelVoice(!f.channel_voice)),
                     p
                 ),
                 add("Add", Msg::ChannelCreate),

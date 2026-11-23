@@ -1,6 +1,6 @@
 //! PLAN-dm Checkpoint B, steps 1 to 6, PLAN-mailbox Task 17 (step 7:
-//! the mailbox spec's test 1) and PLAN-spaces Task 14 (step 8, with a
-//! fourth copy), by machine: three copies of the app,
+//! the mailbox spec's test 1), PLAN-spaces Task 14 (step 8, with a fourth
+//! copy) and PLAN-calls Task 8 (step 9), by machine: copies of the app,
 //! each with a real `mesh-node`, a loopback relay and a seed, driven with the
 //! messages Mesh's buttons send, and checked through the app's own state (the
 //! chat list the sidebar draws, unread counts, timeline rows and their
@@ -73,7 +73,22 @@ impl World {
         app.sounds.enabled = false;
         app.window_focused = true;
         let (tx, events) = tokio::sync::mpsc::unbounded_channel();
-        let helper = self.rt.spawn(mesh::run_with(self.exe.clone(), self.args.clone(), self.root.join(name), tx));
+        // Each copy's microphone is its own tone, and what it plays goes to
+        // a file: step 9 checks calls by those.
+        let mut args = self.args.clone();
+        let tone = 300 + 110 * name.len();
+        args.extend([
+            "--tone".into(),
+            tone.to_string(),
+            "--heard".into(),
+            heard(&self.root, name).display().to_string(),
+        ]);
+        let helper = self.rt.spawn(mesh::run_with(
+            self.exe.clone(),
+            args,
+            self.root.join(name),
+            tx,
+        ));
         Copy {
             app,
             events,
@@ -149,6 +164,16 @@ impl World {
         let known = |a: &App| (a.mesh.social.outgoing.iter()).chain(&a.mesh.social.blocked).any(|k| k.id == other) || is_friend(a, other);
         self.press_until(copy, "the add", || Message::MeshForm(Msg::AddById), known);
     }
+}
+
+/// Where a copy's helper writes what it plays (`--heard`).
+fn heard(root: &Path, name: &str) -> PathBuf {
+    root.join(format!("{name}-heard.raw"))
+}
+
+/// How much a copy has played, in bytes.
+fn played(root: &Path, name: &str) -> u64 {
+    std::fs::metadata(heard(root, name)).map_or(0, |m| m.len())
 }
 
 fn unlocked(app: &App) -> bool {
@@ -587,6 +612,73 @@ fn checkpoint_b_steps_1_to_6() {
         !has_row(&b.app, "not mine to post"),
         "nothing posted in #news"
     );
+
+    // 9. PLAN-calls Task 8: A calls B from their DM's call button; B's bar
+    // rings and B accepts; each plays the other's voice; A hangs up and the
+    // DM has the call's line. Then A, B and D join a voice channel in the
+    // club made in Settings, and each sees all three in it.
+    open(&mut a, &id_b, true);
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::Start(id_b.clone())),
+    );
+    world.until(&mut b, "the call ringing on B", |app| {
+        app.mesh.call.as_ref().is_some_and(|c| c.state == "ringing")
+            && mesh_calls::ring(app).is_some()
+    });
+    assert!(mesh_calls::bar(&b.app).is_some(), "the call bar");
+    let _ = update(&mut b.app, Message::MeshCall(mesh_calls::Msg::Answer));
+    let live = |app: &App| app.mesh.call.as_ref().is_some_and(|c| c.state == "live");
+    world.until(&mut a, "live on A", live);
+    world.until(&mut b, "live on B", live);
+    let (a0, b0) = (played(&root, "alice"), played(&root, "bob"));
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(
+        played(&root, "alice") > a0 + 96_000 && played(&root, "bob") > b0 + 96_000,
+        "both hear the other"
+    );
+    let _ = update(&mut a.app, Message::MeshCall(mesh_calls::Msg::Hangup));
+    world.until(&mut b, "the call over on B", |app| app.mesh.call.is_none());
+    open(&mut b, &id_a, true);
+    world.until(&mut b, "the call's line on B", |app| {
+        rows(app)
+            .iter()
+            .any(|(body, _)| body.starts_with("📞 Call, 0:"))
+    });
+
+    let _ = update(&mut a.app, Message::MeshSpaceSelected(s.clone()));
+    let _ = update(&mut a.app, space(SpaceMsg::Settings(Some(s.clone()))));
+    for msg in [
+        SpaceMsg::ChannelName("lounge".into()),
+        SpaceMsg::ChannelVoice(true),
+        SpaceMsg::ChannelCreate,
+    ] {
+        let _ = update(&mut a.app, space(msg));
+    }
+    let lounge = |app: &App| channel(app, "lounge").filter(|c| c.voice).map(|c| c.id);
+    world.until(&mut a, "the voice channel", |app| lounge(app).is_some());
+    let v = lounge(&a.app).unwrap();
+    for copy in [&mut b, &mut d] {
+        world.until(copy, "the voice channel", |app| lounge(app).is_some());
+    }
+    let mut three = vec![id_a.clone(), id_b.clone(), id_d.clone()];
+    three.sort();
+    let all_in = |app: &App| {
+        app.mesh
+            .voice
+            .get(&(s.clone(), v.clone()))
+            .is_some_and(|p| *p == three)
+    };
+    for copy in [&mut a, &mut b, &mut d] {
+        let _ = update(
+            &mut copy.app,
+            Message::MeshCall(mesh_calls::Msg::Join(s.clone(), v.clone())),
+        );
+        world.until(copy, "in the voice channel", live);
+    }
+    for copy in [&mut a, &mut b, &mut d] {
+        world.until(copy, "all three in it", all_in);
+    }
 
     for copy in [a, b, c, d] {
         copy.helper.abort();

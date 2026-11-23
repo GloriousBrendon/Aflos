@@ -73,8 +73,42 @@ pub enum Event {
         channel: String,
         who: Vec<String>,
     },
+    /// Where our call stands (SPEC-calls): a DM call or a voice channel.
+    Call(Call),
+    /// Who's in one voice channel now, by ID.
+    Voice {
+        space: String,
+        channel: String,
+        people: Vec<String>,
+    },
     /// The helper exited; it's restarted by itself.
     Disconnected,
+}
+
+/// A `meshCall`.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Call {
+    /// `calling`, `ringing`, `live` or `ended`.
+    pub state: String,
+    pub id: String,
+    /// The friend in a DM call (ourselves in a voice channel).
+    pub with: String,
+    #[serde(default)]
+    pub caller: bool,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub deafened: bool,
+    #[serde(default)]
+    pub speaking: Vec<String>,
+    /// Why it ended: `ended`, `declined`, `missed`, `unreachable`,
+    /// `update`, `elsewhere`, `lost`, `left`, `removed`.
+    pub outcome: Option<String>,
+    /// A voice channel's Space and channel, and who's in it.
+    pub space: Option<String>,
+    pub channel: Option<String>,
+    #[serde(default)]
+    pub people: Vec<String>,
 }
 
 /// A `meshDmChats` row: a 1:1 (`id` is the friend's ID) or a group.
@@ -200,6 +234,9 @@ pub struct SpaceChannel {
     pub category: Option<String>,
     /// Only admins may post (an announcements channel).
     pub admins_post: bool,
+    /// A voice channel (SPEC-calls C8).
+    #[serde(default)]
+    pub voice: bool,
     #[serde(default)]
     pub unread: u64,
     #[serde(default)]
@@ -707,6 +744,32 @@ impl Node {
         self.call("spaceFetch", &[space, channel, message, &index.to_string()]);
     }
 
+    /// Calls a friend (SPEC-calls); answers with `Call` events.
+    pub fn call_start(&self, friend: &str) {
+        self.call("callStart", &[friend]);
+    }
+    pub fn call_answer(&self) {
+        self.call("callAnswer", &[]);
+    }
+    /// Hangs up, cancels, declines, or leaves a voice channel.
+    pub fn call_hangup(&self) {
+        self.call("callHangup", &[]);
+    }
+    pub fn call_mute(&self, on: bool) {
+        self.call("callMute", &[if on { "true" } else { "false" }]);
+    }
+    pub fn call_deafen(&self, on: bool) {
+        self.call("callDeafen", &[if on { "true" } else { "false" }]);
+    }
+    /// Microphone and speakers by name, `""` for the default.
+    pub fn call_devices(&self, input: &str, output: &str) {
+        self.call("callDevices", &[input, output]);
+    }
+    /// Joins a voice channel; answers with `Call`, or `Error` (`full`).
+    pub fn voice_join(&self, space: &str, channel: &str) {
+        self.call("voiceJoin", &[space, channel]);
+    }
+
     fn call(&self, function: &str, args: &[&str]) {
         let _ = self.commands.send(serde_json::json!({ "fn": function, "args": args }).to_string() + "\n");
     }
@@ -828,6 +891,20 @@ fn line_event(line: &str) -> Option<Event> {
             serde_json::from_str::<Spaces>(payload).ok().map(|s| Event::Spaces(s.spaces))
         }
         "meshSpaceMessages" => serde_json::from_str(payload).ok().map(Event::SpaceMessages),
+        "meshCall" => serde_json::from_str(payload).ok().map(Event::Call),
+        "meshVoice" => {
+            let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+            let people = v["people"]
+                .as_array()?
+                .iter()
+                .filter_map(|w| w.as_str().map(str::to_owned))
+                .collect();
+            Some(Event::Voice {
+                space: v["space"].as_str()?.to_owned(),
+                channel: v["channel"].as_str()?.to_owned(),
+                people,
+            })
+        }
         "meshSpaceNotify" => serde_json::from_str(payload).ok().map(Event::SpaceNotify),
         "meshSpaceTyping" => {
             let v: serde_json::Value = serde_json::from_str(payload).ok()?;
@@ -995,6 +1072,42 @@ mod tests {
     /// The Space events (SPEC-spaces S12, PLAN-spaces Task 11b): the list
     /// with each channel's counts, a channel's page (a DM page's lines),
     /// notifications that say if they mention you, and typing.
+    #[test]
+    fn call_events() {
+        let c = r#"{"state":"live","id":"ab","with":"mesh1b","caller":true,"muted":false,"deafened":false,"speaking":["mesh1b"],"outcome":null,"space":"s","channel":"c","people":["mesh1a","mesh1b"]}"#;
+        let Some(Event::Call(call)) = line_event(&line("meshCall", c)) else {
+            panic!()
+        };
+        assert_eq!(
+            (
+                call.state.as_str(),
+                call.caller,
+                call.speaking.len(),
+                call.people.len()
+            ),
+            ("live", true, 1, 2)
+        );
+        assert_eq!(call.channel.as_deref(), Some("c"));
+        let ended = r#"{"state":"ended","id":"ab","with":"mesh1b","outcome":"declined"}"#;
+        let Some(Event::Call(call)) = line_event(&line("meshCall", ended)) else {
+            panic!()
+        };
+        assert_eq!(call.outcome.as_deref(), Some("declined"));
+        let v = r#"{"space":"s","channel":"c","people":["mesh1a"]}"#;
+        let Some(Event::Voice {
+            space,
+            channel,
+            people,
+        }) = line_event(&line("meshVoice", v))
+        else {
+            panic!()
+        };
+        assert_eq!(
+            (space.as_str(), channel.as_str(), people),
+            ("s", "c", vec!["mesh1a".to_string()])
+        );
+    }
+
     #[test]
     fn space_events() {
         let spaces = r#"{"spaces":[{"id":"aa11","name":"club","role":"owner","changes":3,"channels":[{"id":"c1","name":"general","category":null,"adminsPost":false,"unread":2,"mentions":1},{"id":"c2","name":"news","category":"k1","adminsPost":true,"unread":0,"mentions":0}],"members":[{"id":"mesh1o","name":"owen","role":"owner"},{"id":"mesh1b","name":"bea","role":"member"}]}]}"#;

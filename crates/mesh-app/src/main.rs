@@ -6,6 +6,7 @@ mod accounts;
 mod cache;
 #[cfg(test)]
 mod checkpoint;
+mod mesh_calls;
 mod mesh_dm;
 mod mesh_spaces;
 mod mesh_ui;
@@ -1225,6 +1226,7 @@ enum Message {
     Mesh(mesh::Event),
     MeshForm(mesh_ui::Msg),
     MeshSpace(mesh_spaces::Msg),
+    MeshCall(mesh_calls::Msg),
     /// Join a Discord voice channel, or call a Discord DM.
     DiscordJoin(String),
     /// Stop ringing for this Discord call here.
@@ -1655,7 +1657,9 @@ fn wanted_ring(state: &App) -> Option<sounds::Sound> {
     };
     let whatsapp = state.wa_call.as_ref().map(|c| c.phase.as_str());
     let discord = state.discord_state.as_ref().is_some_and(|d| d.ringing.iter().any(|r| !state.dc_ring_dismissed.contains(&r.channel_id)));
-    if matrix == Some(&CallUiState::IncomingRinging) {
+    if let Some(mesh) = mesh_calls::ring(state) {
+        Some(mesh)
+    } else if matrix == Some(&CallUiState::IncomingRinging) {
         Some(Sound::Ring(Network::Matrix))
     } else if discord {
         Some(Sound::Ring(Network::Discord))
@@ -1683,6 +1687,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         Message::Mesh(event) => mesh_ui::event(state, event),
         Message::MeshForm(msg) => mesh_ui::update(state, msg),
         Message::MeshSpace(msg) => mesh_spaces::update(state, msg),
+        Message::MeshCall(msg) => mesh_calls::update(state, msg),
         Message::RestoreFinished(Err(err)) => {
             state.matrix_login.error = Some(format!("Your Matrix session expired; sign in again ({err})"));
             Task::none()
@@ -5617,6 +5622,11 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
                     .push(flat("Delete", p.text_muted(), Message::WaDeleteAsk(channel.id.clone())));
             }
         }
+        // A Mesh DM with a friend (not a group): the call button.
+        if channel.dm && channel.network == Network::Mesh && state.mesh.call.is_none() {
+            let call = Message::MeshCall(mesh_calls::Msg::Start(channel.id.clone()));
+            header = header.push(ui::icon_button(ui::Icon::Phone, Some(call), false, p, l));
+        }
         if channel.dm && channel.network == Network::WhatsApp && state.wa_call.is_none() {
             header = header
                 .push(ui::icon_button(ui::Icon::Phone, Some(Message::WaCallStart(false)), false, p, l))
@@ -5674,6 +5684,9 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
 
     if let Some(call) = &session.call {
         col = col.push(container(call_bar(call, p)).padding([8, 16]));
+    }
+    if let Some(bar) = mesh_calls::bar(state) {
+        col = col.push(container(bar).padding([8, 16]));
     }
     if let Some(snapshot) = &state.discord_state {
         for ring in snapshot.ringing.iter().filter(|r| !state.dc_ring_dismissed.contains(&r.channel_id)) {

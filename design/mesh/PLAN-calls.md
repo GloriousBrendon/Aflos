@@ -47,35 +47,52 @@ checks (spec tests 10 and 11) go to CAPABILITY-MAP *Before beta*.
 
 ### Phase 1: the engine (Mesh-Node)
 
-- [ ] **Task 1: Datagrams in transport.** `Node::send_datagram(device,
+- [x] **Task 1: Datagrams in transport.** `Node::send_datagram(device,
   bytes)` and `Node::next_datagram()`, read from every connection.
   Accept: a unit test sends one each way.
-- [ ] **Task 2: The media pipeline** (`media.rs`, feature `audio`).
+- [x] **Task 2: The media pipeline** (`media.rs`, feature `audio`).
   Capture (cpal, or a tone with `--tone <hz>`), Opus at 32 kbit/s with FEC,
   a voice gate, datagrams `[1][call id 8][seq 2][opus]`, a jitter buffer per
   speaker (60 ms, up to 200 ms, Opus concealment for a gap), the mix, and
   playback (cpal, or `--heard <file>`). `--drop <percent>` drops incoming
   datagrams for test 5. Accept: unit tests for the buffer and the mix.
-- [ ] **Task 3: DM calls.** `callStart`, `callAnswer`, `callDecline`,
+- [x] **Task 3: DM calls.** `callStart`, `callAnswer`, `callDecline`,
   `callHangup`, `callMute`, `callDeafen`, `callDevices`; `meshCall` events;
   ring timeout 45 s, answered elsewhere, busy, the missed-call line, and
   peers kept used every 5 s. Accept: `tests/calls.rs` tests 1, 2, 7.
-- [ ] **Task 4: Voice channels.** `VoiceChannelCreate`, `voice` on a
+- [x] **Task 4: Voice channels.** `VoiceChannelCreate`, `voice` on a
   channel in `meshSpaces`, `voiceJoin` and `voiceLeave`, `meshVoice`, full
   at 10, a kicked member dropped. Accept: tests 3 (at 4 members; 10 under
   `--ignored`), 4, 5, 8.
-- [ ] **Task 5: Builds.** CI's ALSA package, the seed's Dockerfile without
+- [x] **Task 5: Builds.** CI's ALSA package, the seed's Dockerfile without
   `audio`, Mesh-Voice's installers unchanged (they build the default).
 
 ### Phase 2: Mesh-Voice
 
-- [ ] **Task 6: DM calls in the app.** A call button on a Mesh DM; the
+- [x] **Task 6: DM calls in the app.** A call button on a Mesh DM; the
   existing ringing, in-call, mute and deafen screens drive the engine's
   commands; the microphone and speaker picks go to `callDevices`.
-- [ ] **Task 7: Voice channels in the app.** Voice channels in the Space
+- [x] **Task 7: Voice channels in the app.** Voice channels in the Space
   pane with who's in them, join and leave, "Add voice channel" in Settings.
-- [ ] **Task 8: The checkpoint test's calls step.** A calls B through the
+- [x] **Task 8: The checkpoint test's calls step.** A calls B through the
   app, B answers, both hear the other's tone; a voice channel with three.
+
+**Done 2026-11-23.** Mesh-Node `tests/calls.rs`: a DM call (each hears
+the other's tone and not their own; the call line), declined, muted,
+unreachable with the missed line by mail on unlock, a voice channel of
+four with leave and kick, and 10% loss with no gap over 60 ms. The
+checkpoint test's step 9 does a DM call and a voice channel of three
+through the app's buttons.
+- **Found while building:** two Space members who aren't friends had no
+  connection, so neither learned the other was in the channel. Each voice
+  state now carries who the sender knows is in it, and a newcomer dials
+  anyone on that list it hasn't heard from.
+- **The sequence number is 4 bytes, not 2**, so it never wraps in a call.
+- **Not done (later):** test 3's full 10 and the 11th "full" (the check is
+  in `voiceJoin`, untested at 10), test 7 against a real old engine, test 9's
+  measurements, both of a friend's devices ringing (one device each in the
+  tests), and a viewer who isn't in a voice channel waits up to 30 s to see
+  who's in it.
 
 **Before beta (by hand):** spec tests 10 and 11, and test 6 (relay only)
 and 9 (measurements), added to CAPABILITY-MAP.
