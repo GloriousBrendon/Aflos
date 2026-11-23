@@ -593,7 +593,7 @@ blocker. Test 9 stays as the record, `--ignored`.
 
 ### Phase 4: Mesh-Voice
 
-- [ ] **Task 12: The rail and channels** (tests 1, 14)
+- [x] **Task 12: The rail and channels** (tests 1, 14)
   - **What:**
     - Mesh Spaces on the existing rail, beside Matrix spaces and Discord
       guilds (the rail groups by space already);
@@ -606,6 +606,17 @@ blocker. Test 9 stays as the record, `--ignored`.
     - the checkpoint test's Spaces step (Task 14) drives it.
   - **Files:** `crates/mesh-app/src/mesh_dm.rs`, `mesh_ui.rs`, `main.rs`.
   - Size L.
+  - **Done 2026-11-23** (`mesh_spaces.rs`): a Mesh folder first on the rail,
+    a tile per Space with its mentions as a badge; the channel pane by
+    category with unread and mention counts; a channel opens in the chat
+    pane as a DM does, its chat ID `<space>:<channel>`, so send, reply,
+    edit, react, delete, typing, files and read markers reuse the DM path.
+    `@name` in a line mentions that member, `@everyone` only from an admin.
+    Mute is per Space in `config.toml` (`muted_spaces`): no notification but
+    a mention. In a channel, delete shows only on our lines, or every line
+    for an admin (a channel has no "delete here"). Mesh-Node `2a37dc6` adds
+    categories, bans, the members-may-add switch and `ended` to `meshSpaces`.
+    Not yet looked at on screen: Task 14 drives it.
 
 - [ ] **Task 13: Members and settings**
   - **What:**

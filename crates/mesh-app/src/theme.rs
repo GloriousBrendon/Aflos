@@ -369,6 +369,9 @@ pub struct Config {
     pub sync_off: Vec<String>,
     #[serde(default)]
     pub sounds: crate::sounds::Settings,
+    /// Mesh Spaces (their IDs) muted: no notification but a mention.
+    #[serde(default)]
+    pub muted_spaces: Vec<String>,
 }
 
 /// The animated backgrounds (see rain.rs).

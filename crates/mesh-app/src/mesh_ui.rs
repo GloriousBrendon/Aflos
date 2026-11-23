@@ -28,6 +28,8 @@ pub(crate) struct Mesh {
     pub chats: Vec<mesh::Chat>,
     /// The Spaces held (SPEC-spaces), as `meshSpaces` lists them.
     pub spaces: Vec<mesh::Space>,
+    /// Spaces muted here (config.toml's `muted_spaces`).
+    pub muted_spaces: Vec<String>,
     /// Who's typing, by name, in which chat, and when it was heard.
     pub typing: Option<(String, Vec<String>, std::time::Instant)>,
     /// The last received file clicked, and what that did (`mesh_dm::on_click`).
@@ -217,12 +219,20 @@ pub(crate) fn started(state: &App) -> bool {
 pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
     if matches!(
         event,
-        mesh::Event::DmChats(_) | mesh::Event::DmMessages(_) | mesh::Event::DmNotify(_) | mesh::Event::DmTyping { .. } | mesh::Event::DmFile(_)
+        mesh::Event::DmChats(_)
+            | mesh::Event::DmMessages(_)
+            | mesh::Event::DmNotify(_)
+            | mesh::Event::DmTyping { .. }
+            | mesh::Event::DmFile(_)
+            | mesh::Event::Spaces(_)
+            | mesh::Event::SpaceMessages(_)
+            | mesh::Event::SpaceNotify(_)
+            | mesh::Event::SpaceTyping { .. }
     ) {
         return crate::mesh_dm::event(state, event);
     }
     if let mesh::Event::Error(error) = &event
-        && error.func.starts_with("dm")
+        && (error.func.starts_with("dm") || error.func.starts_with("space"))
     {
         crate::mesh_dm::failed(state, error);
         return Task::none();
@@ -237,7 +247,7 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             if !now_unlocked {
                 m.codes.clear();
                 m.social = mesh::Social::default();
-                (m.chats, m.typing, m.new_group) = (Vec::new(), None, None);
+                (m.chats, m.spaces, m.typing, m.new_group) = (Vec::new(), Vec::new(), None, None);
             } else if let Some(node) = &m.node {
                 // Unlocking doesn't send them by itself.
                 node.social();
@@ -378,10 +388,15 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             f.received = Some(f.username.clone());
         }
         // Taken above (mesh_dm).
-        mesh::Event::DmChats(_) | mesh::Event::DmMessages(_) | mesh::Event::DmNotify(_) | mesh::Event::DmTyping { .. } | mesh::Event::DmFile(_) => {}
-        mesh::Event::Spaces(spaces) => m.spaces = spaces,
-        // ponytail: a channel's page, posts and typing reach the screens with Task 12.
-        mesh::Event::SpaceMessages(_) | mesh::Event::SpaceNotify(_) | mesh::Event::SpaceTyping { .. } => {}
+        mesh::Event::DmChats(_)
+        | mesh::Event::DmMessages(_)
+        | mesh::Event::DmNotify(_)
+        | mesh::Event::DmTyping { .. }
+        | mesh::Event::DmFile(_)
+        | mesh::Event::Spaces(_)
+        | mesh::Event::SpaceMessages(_)
+        | mesh::Event::SpaceNotify(_)
+        | mesh::Event::SpaceTyping { .. } => {}
         mesh::Event::Disconnected => {
             m.node = None;
             m.identity = None;
@@ -389,7 +404,7 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             m.net = None;
             m.codes.clear();
             m.social = mesh::Social::default();
-            (m.chats, m.typing, m.new_group) = (Vec::new(), None, None);
+            (m.chats, m.spaces, m.typing, m.new_group) = (Vec::new(), Vec::new(), None, None);
             m.form.busy = false;
             m.settings = Settings::default();
         }

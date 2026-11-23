@@ -159,6 +159,7 @@ pub struct DmFile {
 
 /// A `meshSpaces` row: a Space held, with its channels and members.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Space {
     pub id: String,
     pub name: String,
@@ -166,6 +167,17 @@ pub struct Space {
     pub role: Option<String>,
     pub channels: Vec<SpaceChannel>,
     pub members: Vec<SpaceMember>,
+    #[serde(default)]
+    pub categories: Vec<SpaceCategory>,
+    /// Members may add their friends, not only admins.
+    #[serde(default)]
+    pub members_may_add: bool,
+    /// Banned IDs (shown to admins, to unban).
+    #[serde(default)]
+    pub bans: Vec<String>,
+    /// The owner ended it: nothing changes any more.
+    #[serde(default)]
+    pub ended: bool,
 }
 
 impl Space {
@@ -192,6 +204,14 @@ pub struct SpaceChannel {
     pub unread: u64,
     #[serde(default)]
     pub mentions: u64,
+}
+
+/// A Space's category of channels.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SpaceCategory {
+    pub id: String,
+    pub name: String,
+    pub position: u16,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]

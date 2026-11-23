@@ -292,33 +292,68 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
         _ => None,
     };
     match event {
-        mesh::Event::DmChats(chats) => {
-            state.mesh.chats = chats;
+        mesh::Event::DmChats(_) | mesh::Event::Spaces(_) => {
+            let channels = matches!(event, mesh::Event::Spaces(_));
+            match event {
+                mesh::Event::DmChats(chats) => state.mesh.chats = chats,
+                mesh::Event::Spaces(spaces) => state.mesh.spaces = spaces,
+                _ => {}
+            }
             // After an unlock or a helper restart, the open chat's page again.
             let empty = matches!(&state.screen, Screen::LoggedIn(session) if session.timeline.is_empty());
-            if let (Some(id), Some(node), true) = (open(state), &state.mesh.node, empty) {
-                node.dm_open(&id, None);
+            if let (Some(id), Some(node), true) = (open(state), &state.mesh.node, empty)
+                && mesh_spaces::split(&id).is_some() == channels
+            {
+                mesh_spaces::open(node, &id);
             }
+        }
+        mesh::Event::SpaceMessages(page) => {
+            let id = mesh_spaces::chat_id(&page.space, &page.channel);
+            return self::event(
+                state,
+                mesh::Event::DmMessages(mesh::Page {
+                    id,
+                    events: page.events,
+                    more: page.more,
+                }),
+            );
         }
         mesh::Event::DmMessages(page) => {
             if open(state).as_deref() != Some(page.id.as_str()) {
                 return Task::none();
             }
             let me = state.mesh.my_id().unwrap_or_default();
+            let space = mesh_spaces::space_of(&state.mesh, &page.id);
             let Rows {
                 timeline,
-                mine,
+                mut mine,
                 editable,
                 marks,
                 previews,
-            } = rows(&page, &me, |id| state.mesh.name_of(id));
+            } = rows(&page, &me, |id| {
+                mesh_spaces::name_in(&state.mesh, space, id)
+            });
+            // An admin may delete anyone's line in a channel ("mine" is what
+            // we can delete for everyone).
+            if space.is_some_and(|s| matches!(s.role.as_deref(), Some("owner" | "admin"))) {
+                mine.extend(page.events.iter().map(|m| m.id.clone()));
+            }
             // Seen while looking at it: read up to the newest.
-            let unread = state.mesh.chats.iter().any(|c| c.id == page.id && c.unread > 0);
+            let unread = match (space, mesh_spaces::split(&page.id)) {
+                (Some(s), Some((_, channel))) => {
+                    s.channels.iter().any(|c| c.id == channel && c.unread > 0)
+                }
+                _ => state
+                    .mesh
+                    .chats
+                    .iter()
+                    .any(|c| c.id == page.id && c.unread > 0),
+            };
             if state.window_focused
                 && unread
                 && let (Some(node), Some(last)) = (&state.mesh.node, page.events.last())
             {
-                node.dm_read(&page.id, &last.id);
+                mesh_spaces::read(node, &page.id, &last.id);
             }
             if let Screen::LoggedIn(session) = &mut state.screen {
                 // In memory only: Mesh's pictures never go to the media cache.
@@ -341,13 +376,56 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
                 notify(title, n.text);
             }
         }
+        mesh::Event::SpaceNotify(n) => {
+            let chat = mesh_spaces::chat_id(&n.space, &n.channel);
+            let muted = state.mesh.muted_spaces.contains(&n.space) && !n.mention;
+            if !muted && !(state.window_focused && open(state).as_deref() == Some(chat.as_str())) {
+                let space = state.mesh.spaces.iter().find(|s| s.id == n.space);
+                let from = mesh_spaces::name_in(&state.mesh, space, &n.from);
+                let title = match space {
+                    Some(s) => {
+                        let channel = s
+                            .channels
+                            .iter()
+                            .find(|c| c.id == n.channel)
+                            .map_or("", |c| c.name.as_str());
+                        format!("{from} in #{channel} · {}", s.name)
+                    }
+                    None => from,
+                };
+                sounds::play(sounds::Sound::Message(Network::Mesh), &state.sounds, speaker(state));
+                notify(title, n.text);
+            }
+        }
+        mesh::Event::SpaceTyping {
+            space,
+            channel,
+            who,
+        } => {
+            let s = state.mesh.spaces.iter().find(|s| s.id == space);
+            let names = who
+                .iter()
+                .map(|w| mesh_spaces::name_in(&state.mesh, s, w))
+                .collect();
+            state.mesh.typing = Some((
+                mesh_spaces::chat_id(&space, &channel),
+                names,
+                Instant::now(),
+            ));
+        }
         mesh::Event::DmTyping { id, who } => {
             let names = who.iter().map(|w| state.mesh.name_of(w)).collect();
             state.mesh.typing = Some((id, names, Instant::now()));
         }
         mesh::Event::DmFile(file) => {
+            let open = open(state);
             let Screen::LoggedIn(session) = &mut state.screen else { return Task::none() };
-            let key = file_url(&file.id, &file.message, file.index);
+            // A channel's file comes back with its Space's ID alone.
+            let chat = match open {
+                Some(o) if mesh_spaces::split(&o).is_some_and(|(s, _)| s == file.id) => o,
+                _ => file.id.clone(),
+            };
+            let key = file_url(&chat, &file.message, file.index);
             let path = std::path::Path::new(&file.path);
             if matches!(session.images.get(&key), Some(None)) {
                 // A picture being viewed: shown from memory, never opened.
@@ -388,7 +466,7 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
 /// A fetch that failed leaves its pictures to be asked for again.
 pub(crate) fn failed(state: &mut App, error: &mesh::Error) {
     if let Screen::LoggedIn(session) = &mut state.screen {
-        if error.func == "dmFetch" {
+        if error.func == "dmFetch" || error.func == "spaceFetch" {
             session.images.retain(|key, image| !(key.starts_with("mesh-file:") && image.is_none()));
         }
         session.status = Some(error.message.clone());
