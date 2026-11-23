@@ -171,10 +171,31 @@ impl Stream {
             config = config.video_tx(slot.clone());
         } else {
             let (tx, rx) = flume::bounded(64);
-            config = config.video_sink(tx);
+            config = config
+                .video_sink(tx)
+                .decode_mode(DecodeMode::Decode(DecodeConfig::new(
+                    Channels::Mono,
+                    SampleRate::Hz48000,
+                )));
             video_receive(rx, None, "stream-");
         }
         let mut driver = Driver::new(config);
+        // Watching, the stream's sound plays too, as voice does; through a
+        // state of its own, so it doesn't light up the streamer's ring.
+        if !share {
+            let (notify, _) = mpsc::unbounded_channel();
+            let shared = Arc::new(Shared {
+                state: Arc::default(),
+                ssrc: Mutex::new(HashMap::new()),
+                speaker: audio::open_speaker()?,
+                notify,
+            });
+            driver.add_global_event(
+                Event::Core(songbird::CoreEvent::SpeakingStateUpdate),
+                Handler(shared.clone()),
+            );
+            driver.add_global_event(Event::Core(songbird::CoreEvent::VoiceTick), Handler(shared));
+        }
         driver
             .connect(info)
             .await

@@ -82,8 +82,8 @@ With `MESH_DC_VIDEO=1`:
   states) appear with a watch button; watching sends op 20, and the
   stream's `STREAM_CREATE` and `STREAM_SERVER_UPDATE` start a second
   songbird connection (server id = the RTC server, DAVE group = the id
-  before it) whose video goes to a `stream-<owner>` tile. Stream audio
-  isn't played yet.
+  before it) whose video goes to a `stream-<owner>` tile, and whose sound plays
+  through its own speaker output.
 - **V4, sharing your screen:** the screen-share button sends op 18; the
   stream's connection sends your screen (the desktop's picker on Linux) at
   up to 1080p15, and op 22 sets it live; the button again sends op 19.
