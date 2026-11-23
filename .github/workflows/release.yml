@@ -1,0 +1,100 @@
+# Builds the Windows setup and the Linux download, and publishes them as a
+# GitHub Release when a v* tag is pushed. Run it by hand (Actions → release →
+# Run workflow) to build without publishing: the files are then kept as the
+# run's artifacts. mesh-node comes from the private Mesh-Node repo through a
+# read-only deploy key (secret MESH_NODE_KEY), at its main branch.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: Mesh-Voice }
+      - uses: actions/checkout@v4
+        with:
+          repository: GloriousBrendon/Mesh-Node
+          ssh-key: ${{ secrets.MESH_NODE_KEY }}
+          path: Mesh-Node
+      - uses: dtolnay/rust-toolchain@stable
+      - run: choco install innosetup -y --no-progress
+      # build.ps1 is the same script as on your PC (SPEC-packaging P1).
+      - run: Mesh-Voice\installer\build.ps1
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: Mesh-Voice/dist/Mesh-Setup-*.exe
+
+  linux:
+    # 22.04's older C library, so the binaries start on most distros from 2022 on.
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with: { path: Mesh-Voice }
+      - uses: actions/checkout@v4
+        with:
+          repository: GloriousBrendon/Mesh-Node
+          ssh-key: ${{ secrets.MESH_NODE_KEY }}
+          path: Mesh-Node
+      - uses: dtolnay/rust-toolchain@stable
+      - run: >
+          sudo apt-get update && sudo apt-get install -y libasound2-dev
+          libopus-dev libpipewire-0.3-dev libspa-0.2-dev clang pkg-config cmake
+      - name: Build
+        run: |
+          (cd Mesh-Voice && cargo build --release -p mesh-app)
+          (cd Mesh-Voice/mesh-wa && cargo build --release)
+          (cd Mesh-Voice/mesh-dc && cargo build --release)
+          (cd Mesh-Node && cargo build --release -p mesh-node)
+      - name: Pack
+        run: |
+          v=$(grep -m1 '^version' Mesh-Voice/crates/mesh-app/Cargo.toml | cut -d'"' -f2)
+          d=mesh-$v-linux-x86_64
+          mkdir $d
+          cp Mesh-Voice/target/release/mesh-app $d/mesh
+          cp Mesh-Voice/mesh-wa/target/release/mesh-wa Mesh-Voice/mesh-dc/target/release/mesh-dc \
+             Mesh-Node/target/release/mesh-node Mesh-Voice/installer/install-linux.sh \
+             Mesh-Voice/crates/mesh-app/assets/mesh.png $d/
+          tar czf $d.tar.gz $d
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: mesh-*-linux-x86_64.tar.gz
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, linux]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { merge-multiple: true }
+      - run: sha256sum Mesh-Setup-*.exe mesh-*.tar.gz > SHA256SUMS
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease \
+            --title "Mesh $GITHUB_REF_NAME" --notes-file - Mesh-Setup-*.exe mesh-*.tar.gz SHA256SUMS <<'EOF'
+          A beta for friends.
+
+          **Windows:** run `Mesh-Setup-*.exe`. It isn't signed, so Windows shows
+          "Windows protected your PC": click **More info**, then **Run anyway**.
+
+          **Linux (x86-64):** unpack the `.tar.gz` and run `./install-linux.sh`.
+          It installs into `~/.local/bin` with a menu entry, no root needed.
+          It needs opus, ALSA and PipeWire, which desktop distros have.
+
+          Check your download against `SHA256SUMS`.
+          EOF

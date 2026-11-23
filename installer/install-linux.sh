@@ -7,6 +7,7 @@
 # $MESH_NODE; without one, Mesh installs without its own network.
 #
 #   installer/install-linux.sh              build and install
+#   ./install-linux.sh                      in an unpacked release: install it
 #   installer/install-linux.sh --uninstall  remove them (keeps accounts and chats)
 #
 # mesh-dc is only installed once `discord_native_wrapper` is set in
@@ -24,28 +25,37 @@ if [[ "${1:-}" == --uninstall ]]; then
   exit 0
 fi
 
-(cd "$root" && cargo build --release -p mesh-app)
-(cd "$root/mesh-wa" && cargo build --release)
-(cd "$root/mesh-dc" && cargo build --release)
-node="${MESH_NODE:-$root/../Mesh-Node}"
-if [[ -f "$node/Cargo.toml" ]]; then
-  (cd "$node" && cargo build --release -p mesh-node)
+here=$(cd "$(dirname "$0")" && pwd)
+if [[ -x "$here/mesh" ]]; then
+  # An unpacked release download: the binaries sit beside this script.
+  app="$here/mesh" wa="$here/mesh-wa" dc="$here/mesh-dc" engine="$here/mesh-node" icon="$here/mesh.png"
+else
+  (cd "$root" && cargo build --release -p mesh-app)
+  (cd "$root/mesh-wa" && cargo build --release)
+  (cd "$root/mesh-dc" && cargo build --release)
+  node="${MESH_NODE:-$root/../Mesh-Node}"
+  engine="$node/target/release/mesh-node"
+  if [[ -f "$node/Cargo.toml" ]]; then
+    (cd "$node" && cargo build --release -p mesh-node)
+  fi
+  app="$root/target/release/mesh-app" wa="$root/mesh-wa/target/release/mesh-wa"
+  dc="$root/mesh-dc/target/release/mesh-dc" icon="$root/crates/mesh-app/assets/mesh.png"
 fi
 
 mkdir -p "$bin" "$apps" "$icons"
-install -m755 "$root/target/release/mesh-app" "$bin/mesh"
-install -m755 "$root/mesh-wa/target/release/mesh-wa" "$bin/mesh-wa"
+install -m755 "$app" "$bin/mesh"
+install -m755 "$wa" "$bin/mesh-wa"
 if grep -q '^discord_native_wrapper' "$config" 2>/dev/null; then
-  install -m755 "$root/mesh-dc/target/release/mesh-dc" "$bin/mesh-dc"
+  install -m755 "$dc" "$bin/mesh-dc"
 else
   echo "mesh-dc not installed: set discord_native_wrapper in $config first" >&2
 fi
-if [[ -f "$node/Cargo.toml" ]]; then
-  install -m755 "$node/target/release/mesh-node" "$bin/mesh-node"
+if [[ -x "$engine" ]]; then
+  install -m755 "$engine" "$bin/mesh-node"
 else
-  echo "mesh-node not installed: no Mesh-Node checkout at $node (set MESH_NODE)" >&2
+  echo "mesh-node not installed: no Mesh-Node checkout (set MESH_NODE)" >&2
 fi
-install -m644 "$root/crates/mesh-app/assets/mesh.png" "$icons/mesh.png"
+install -m644 "$icon" "$icons/mesh.png"
 cat > "$apps/mesh.desktop" <<EOF
 [Desktop Entry]
 Type=Application
