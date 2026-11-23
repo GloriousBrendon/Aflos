@@ -202,6 +202,8 @@ struct VideoTile {
     local: bool,
     /// When the last frame came; a camera that stops sending goes away.
     at: std::time::Instant,
+    /// Whose it is, shown on it (Discord: a member's name, or their screen).
+    label: Option<String>,
 }
 
 /// A camera that sent nothing for this long is off (or the call ended).
@@ -2477,7 +2479,8 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 }
                 mesh_discord::Event::Video(mesh_discord::Video::Frame { id, local, width, height, rgba }) => {
                     let frame = iced::widget::image::Handle::from_rgba(width, height, rgba);
-                    state.video.insert(id, VideoTile { frame, local, at: std::time::Instant::now() });
+                    let label = discord_tile_label(state.discord_state.as_ref(), &id);
+                    state.video.insert(id, VideoTile { frame, local, at: std::time::Instant::now(), label });
                 }
                 mesh_discord::Event::Video(mesh_discord::Video::Ended { id }) => {
                     state.video.remove(&id);
@@ -2612,7 +2615,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 }
                 whatsapp::Event::Video(mesh_discord::Video::Frame { id, local, width, height, rgba }) => {
                     let frame = iced::widget::image::Handle::from_rgba(width, height, rgba);
-                    state.video.insert(id, VideoTile { frame, local, at: std::time::Instant::now() });
+                    state.video.insert(id, VideoTile { frame, local, at: std::time::Instant::now(), label: None });
                 }
                 whatsapp::Event::Video(mesh_discord::Video::Ended { id }) => {
                     state.video.remove(&id);
@@ -6419,14 +6422,100 @@ fn wa_call_bar<'a>(
 }
 
 /// The call's cameras: everyone else's large, ours small at the end.
-fn video_tiles<'a>(video: impl Iterator<Item = &'a VideoTile>, p: &theme::Palette) -> Option<Element<'a, Message>> {
+/// A Discord video tile's label: the member a `dc-<id>` camera is, or
+/// "<name>'s screen" for a `stream-<id>` Go Live; none for our self view.
+fn discord_tile_label(discord: Option<&mesh_discord::Snapshot>, id: &str) -> Option<String> {
+    let name = |uid: &str| {
+        let voice = discord.map(|d| &d.voice);
+        let member = voice
+            .and_then(|v| v.members.iter().find(|m| m.id == uid))
+            .map(|m| m.name.clone());
+        member.or_else(|| {
+            voice
+                .and_then(|v| v.streams.iter().find(|s| s.owner_id == uid))
+                .map(|s| s.name.clone())
+        })
+    };
+    if let Some(uid) = id.strip_prefix("stream-") {
+        return Some(format!(
+            "{}'s screen",
+            name(uid).unwrap_or_else(|| "Someone".to_string())
+        ));
+    }
+    id.strip_prefix("dc-")
+        .filter(|uid| *uid != "self")
+        .and_then(name)
+}
+
+#[cfg(test)]
+mod tile_label_tests {
+    use super::*;
+
+    #[test]
+    fn tiles_say_whose() {
+        let mut d = mesh_discord::Snapshot::default();
+        d.voice.members.push(mesh_discord::Member {
+            id: "1".into(),
+            name: "ann".into(),
+            ..Default::default()
+        });
+        d.voice.streams.push(mesh_discord::Stream {
+            owner_id: "2".into(),
+            name: "ben".into(),
+            watching: true,
+        });
+        assert_eq!(discord_tile_label(Some(&d), "dc-1").as_deref(), Some("ann"));
+        assert_eq!(
+            discord_tile_label(Some(&d), "stream-2").as_deref(),
+            Some("ben's screen")
+        );
+        assert_eq!(
+            discord_tile_label(Some(&d), "stream-9").as_deref(),
+            Some("Someone's screen")
+        );
+        assert_eq!(
+            discord_tile_label(Some(&d), "dc-self"),
+            None,
+            "our self view needs no name"
+        );
+        assert_eq!(discord_tile_label(None, "dc-1"), None);
+    }
+}
+
+fn video_tiles<'a>(
+    video: impl Iterator<Item = &'a VideoTile>,
+    p: &theme::Palette,
+) -> Option<Element<'a, Message>> {
     let live: Vec<&VideoTile> = video.filter(|t| t.at.elapsed() < VIDEO_STALE).collect();
     if live.is_empty() {
         return None;
     }
     let edge = p.border();
+    let (shade, ink) = (
+        theme::mix(p.background(), iced::Color::TRANSPARENT, 0.35),
+        p.text_bright(),
+    );
     let tile = |t: &'a VideoTile, height: f32| {
-        container(iced::widget::image(t.frame.clone()).height(height).content_fit(iced::ContentFit::Contain))
+        let picture = iced::widget::image(t.frame.clone())
+            .height(height)
+            .content_fit(iced::ContentFit::Contain);
+        let mut layers = stack![picture];
+        if let Some(name) = &t.label {
+            let tag = container(text(name.clone()).size(12).color(ink))
+                .padding([2, 6])
+                .style(move |_| container::Style {
+                    background: Some(shade.into()),
+                    border: iced::border::rounded(4),
+                    ..container::Style::default()
+                });
+            layers = layers.push(
+                container(tag)
+                    .padding(6)
+                    .align_bottom(height)
+                    .align_left(Length::Fill),
+            );
+        }
+        container(layers)
             .clip(true)
             .style(move |_| container::Style {
                 border: iced::border::rounded(8).color(edge).width(1),
