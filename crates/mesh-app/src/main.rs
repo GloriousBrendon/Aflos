@@ -1224,6 +1224,7 @@ enum Message {
     WhatsApp(whatsapp::Event),
     Mesh(mesh::Event),
     MeshForm(mesh_ui::Msg),
+    MeshSpace(mesh_spaces::Msg),
     /// Join a Discord voice channel, or call a Discord DM.
     DiscordJoin(String),
     /// Stop ringing for this Discord call here.
@@ -1681,6 +1682,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         Message::RestoreFinished(Ok(client)) => attach_matrix(state, client),
         Message::Mesh(event) => mesh_ui::event(state, event),
         Message::MeshForm(msg) => mesh_ui::update(state, msg),
+        Message::MeshSpace(msg) => mesh_spaces::update(state, msg),
         Message::RestoreFinished(Err(err)) => {
             state.matrix_login.error = Some(format!("Your Matrix session expired; sign in again ({err})"));
             Task::none()
@@ -5577,6 +5579,9 @@ fn user_panel<'a>(
 }
 
 fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
+    if let Some(settings) = mesh_spaces::settings(session, state) {
+        return settings;
+    }
     let (p, l) = (&state.palette, &state.layout);
     let room = selected_room(session);
     let mut col = column![];

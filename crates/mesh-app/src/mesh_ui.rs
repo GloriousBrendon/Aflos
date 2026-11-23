@@ -30,6 +30,8 @@ pub(crate) struct Mesh {
     pub spaces: Vec<mesh::Space>,
     /// Spaces muted here (config.toml's `muted_spaces`).
     pub muted_spaces: Vec<String>,
+    /// A Space's settings and New Space (mesh_spaces).
+    pub space_form: crate::mesh_spaces::Form,
     /// Who's typing, by name, in which chat, and when it was heard.
     pub typing: Option<(String, Vec<String>, std::time::Instant)>,
     /// The last received file clicked, and what that did (`mesh_dm::on_click`).
@@ -1210,7 +1212,7 @@ pub(crate) fn home(state: &App) -> Option<Element<'_, Message>> {
         .on_press(Message::AccountsOpen("mesh"))
         .padding([4, 0])
         .style(flat_button_style(p));
-    Some(column![friends_view(state), more].spacing(12).into())
+    Some(column![friends_view(state), crate::mesh_spaces::new_space(state), more].spacing(12).into())
 }
 
 /// A flat button whose label is made at runtime.

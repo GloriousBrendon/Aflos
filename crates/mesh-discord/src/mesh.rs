@@ -691,6 +691,16 @@ impl Node {
     pub fn space_send_file(&self, space: &str, channel: &str, path: &str, preview: Option<&str>) {
         self.call("spaceSendFile", &[space, channel, path, preview.unwrap_or("")]);
     }
+    /// A Space's other commands, with `mesh-node`'s arguments: `spaceCreate`,
+    /// `spaceAdd`, `spaceLeave`, `spaceKick`, `spaceBan`, `spaceUnban`,
+    /// `spaceRole`, `spaceRename`, `spaceChannel`, `spaceChannelDelete`,
+    /// `spaceChannelPost`, `spaceChannelMove`, `spaceCategory`,
+    /// `spaceCategoryDelete`, `spaceMembersMayAdd`, `spaceTransfer`,
+    /// `spaceEnd`. Answers with `Spaces`, or `Error` (`not-allowed`).
+    pub fn space_change(&self, func: &str, args: &[&str]) {
+        debug_assert!(func.starts_with("space"));
+        self.call(func, args);
+    }
     /// Gets a line's file; answers with `DmFile` (its `id` the Space's), or
     /// `Error` (`unavailable`).
     pub fn space_fetch(&self, space: &str, channel: &str, message: &str, index: usize) {

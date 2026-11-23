@@ -618,7 +618,7 @@ blocker. Test 9 stays as the record, `--ignored`.
     categories, bans, the members-may-add switch and `ended` to `meshSpaces`.
     Not yet looked at on screen: Task 14 drives it.
 
-- [ ] **Task 13: Members and settings**
+- [x] **Task 13: Members and settings**
   - **What:**
     - the member list with roles (presence for friends only);
     - "Add member" from your friends;
@@ -628,6 +628,20 @@ blocker. Test 9 stays as the record, `--ignored`.
   - **Accept:** as Task 12.
   - **Files:** as Task 12.
   - Size M.
+  - **Done 2026-11-23** (`mesh_spaces.rs`; Mesh-Node adds the settings
+    commands, test `settings_change_for_everyone`): members under the
+    channels, owner and admins first, a presence dot for friends only; a
+    Settings view in the chat pane with the name, members-may-add,
+    categories (add, delete), channels (add under a category and admins-only,
+    move to a category, post switch, delete), Add member from friends not in
+    it or banned, roles, Make owner, kick, ban, unban, leave, and Delete this
+    Space (the owner's end). Make owner, Leave and Delete ask twice. Buttons
+    follow mesh-dm's rules (unit test `what_each_role_may_do`). Added: New
+    Space on Home, since nothing made one before.
+  - **Not done (small, for later):** renaming a channel or category, and
+    ordering them (a moved channel goes last in its category). Mute stays
+    per device in `config.toml`, not the plan's `spaceMute`, so it doesn't
+    follow you to another device.
 
 - [ ] **Task 14: The checkpoint test's Spaces step**
   - **What:** `checkpoint.rs` gains a step. O creates a Space with two
