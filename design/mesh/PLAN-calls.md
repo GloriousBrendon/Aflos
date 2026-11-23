@@ -94,9 +94,17 @@ through the app's buttons.
   and the other stops when one answers (`both_devices_ring_and_one_answers`);
   an engine from before calls, simulated with `--no-calls`, gives "update"
   (`an_old_engine_needs_an_update`).
-- **Not done (later):** test 3's full 10 and the 11th "full" (the check is
-  in `voiceJoin`, untested at 10), test 9's measurements, and a viewer who
-  isn't in a voice channel waits up to 30 s to see who's in it.
+- **Full size (2026-11-23):** `measure_a_full_voice_channel`
+  (`--ignored`, eleven helpers) found and fixed: hard clipping of a loud
+  mix, no re-dial of a participant whose connection went, voice states
+  sent one after another, a lost reply never healed, and the eleventh's
+  count for "full". It still failed now and then on one pair (one member
+  not hearing the last to join), with every datagram that did arrive
+  played: a dial between two members who aren't friends that doesn't come
+  back. **Not settled**; the group evening (test 11) will show whether it
+  happens in real use. A join or leave now reaches members outside within
+  5 s.
+- **Not done (later):** test 9's delay and bytes figures.
 
 **Before beta (by hand):** spec tests 10 and 11, and test 6 (relay only)
 and 9 (measurements), added to CAPABILITY-MAP.
