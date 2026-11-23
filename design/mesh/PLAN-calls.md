@@ -99,10 +99,11 @@ through the app's buttons.
   mix, no re-dial of a participant whose connection went, voice states
   sent one after another, a lost reply never healed, and the eleventh's
   count for "full". It still failed now and then on one pair (one member
-  not hearing the last to join), with every datagram that did arrive
-  played: a dial between two members who aren't friends that doesn't come
-  back. **Not settled**; the group evening (test 11) will show whether it
-  happens in real use. A join or leave now reaches members outside within
+  not hearing the last to join). **Settled 2026-11-23** (Mesh-Node
+  `7ee751d`): every 5 s, anyone the others name as in the channel but not
+  heard from directly is told we're here, dialled if need be, until their
+  reply comes. The test then passed twice; CPU per helper 29 to 63% of a
+  core in debug builds, with ten sending. A join or leave now reaches members outside within
   5 s.
 - **Not done (later):** test 9's delay and bytes figures.
 
