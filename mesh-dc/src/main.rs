@@ -13,6 +13,11 @@ mod audio;
 mod gateway;
 mod login;
 mod rest;
+// The vendored songbird's H264 reassembler (Discord video), tested here:
+// a patched crate's own tests don't run outside its workspace.
+#[cfg(test)]
+#[path = "../vendor/songbird/src/driver/tasks/udp_rx/h264.rs"]
+mod songbird_h264;
 mod voice;
 
 use std::io::Write as _;

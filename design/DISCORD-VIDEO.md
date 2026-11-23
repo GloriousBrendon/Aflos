@@ -1,6 +1,6 @@
 # Spec: native Discord video and screen share (`mesh-dc`)
 
-Status: **DRAFT 2026-11-23, for your review.** You chose native video over
+Status: **APPROVED 2026-11-23** ("continue": the recommended answers, Q1 to Q4). Building V0, the spike.
 handing calls to the hidden web client (2026-11-23). Spec only: no plan or
 code until you approve it, and the work starts with a spike (V0) that can
 stop it cheaply.
@@ -49,6 +49,33 @@ In a Discord voice channel or DM call, from Mesh:
   and its frames in a tile.
 - **V4, sharing your screen:** op 18, capture through `mesh-media` (a
   screen or window picker in Mesh), encode and send.
+
+## Progress
+
+**V0 built, 2026-11-23, waiting on your test call.** songbird 0.6.1 and
+serenity-voice-model 0.3.0 are vendored in `mesh-dc/vendor` (changes marked
+`mesh-dc:`). With `MESH_DC_VIDEO_SPIKE=<folder>` set, and only then:
+- Identify says `"video": true` with a `video` stream, and Select Protocol
+  lists Opus (120) and H264 (101, retransmissions 102), as user clients do;
+- op 12 maps each video SSRC to its user;
+- H264 packets skip the audio path, are put back into whole frames (single
+  NAL, STAP-A, FU-A; a frame with a packet missing is dropped), DAVE-decrypted
+  as video with davey, decoded with `mesh-media`'s openh264, and the first ten
+  pictures saved as JPEGs.
+Unit tests cover the reassembly. Nothing here has met Discord yet.
+
+**The test (by you):** quit Mesh, then run
+`MESH_DC_VIDEO_SPIKE=/tmp/dcvideo RUST_LOG=warn,mesh_dc=info,songbird=info ~/.local/bin/mesh-launch`,
+join a voice channel where someone has their camera on, wait a minute, and
+look in `/tmp/dcvideo` and `~/.local/state/mesh/mesh.log` (lines with
+`mesh-dc:` and `video spike`). What the log says decides the next step:
+- no `voice op 12` line: Discord didn't treat us as taking video (the
+  Identify or Select Protocol fields need changing);
+- op 12 but no `first video packet`: it knows, but sends us nothing (we may
+  need to send op 12 or op 15 ourselves);
+- packets but `DAVE video decryption failed`: the frame or DAVE handling;
+- frames but `didn't decode`: the reassembly;
+- JPEGs: V0 passes, on to V1.
 
 ## Risks
 

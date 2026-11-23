@@ -60,9 +60,17 @@ impl Voice {
             user_id: UserId(parse(&me)?),
         };
 
-        let config = Config::default()
+        let mut config = Config::default()
             .crypto_mode(CryptoMode::Aes256Gcm)
             .decode_mode(DecodeMode::Decode(DecodeConfig::new(Channels::Mono, SampleRate::Hz48000)));
+        // Discord video's V0 spike (design/DISCORD-VIDEO.md): with
+        // MESH_DC_VIDEO_SPIKE=<folder>, others' cameras are received, and
+        // the first ten decoded frames saved there. Off, nothing changes.
+        if let Some(dir) = std::env::var_os("MESH_DC_VIDEO_SPIKE") {
+            let (tx, rx) = flume::bounded(64);
+            config = config.video_sink(tx);
+            video_spike(rx, dir.into());
+        }
         let mut driver = Driver::new(config);
 
         let speaker = audio::open_speaker()?;
@@ -115,6 +123,44 @@ impl Voice {
         s.rtc_connected = false;
         s.speaking.clear();
     }
+}
+
+/// V0: decodes others' camera frames, logs each, and saves the first ten
+/// decoded pictures as JPEGs in `dir`. No IDs in the log: SSRCs only.
+fn video_spike(rx: flume::Receiver<songbird::driver::VideoFrame>, dir: std::path::PathBuf) {
+    log::info!("video spike: on, saving to {}", dir.display());
+    std::thread::spawn(move || {
+        let _ = std::fs::create_dir_all(&dir);
+        let mut decoders: HashMap<u32, mesh_media::H264Decoder> = HashMap::new();
+        let (mut got, mut saved) = (0u32, 0u32);
+        while let Ok(f) = rx.recv() {
+            got += 1;
+            let decoder = match decoders.entry(f.ssrc) {
+                std::collections::hash_map::Entry::Occupied(d) => d.into_mut(),
+                std::collections::hash_map::Entry::Vacant(slot) => match mesh_media::H264Decoder::new() {
+                    Ok(d) => slot.insert(d),
+                    Err(e) => return log::warn!("video spike: no decoder: {e}"),
+                },
+            };
+            match decoder.decode(&f.annexb) {
+                Ok(Some(frame)) => {
+                    log::info!("video spike: frame {got} (ssrc {}, {} bytes): {}x{}", f.ssrc, f.annexb.len(), frame.width, frame.height);
+                    if saved < 10 {
+                        saved += 1;
+                        let path = dir.join(format!("frame-{saved:02}.jpg"));
+                        let picture = image::RgbaImage::from_raw(frame.width, frame.height, frame.rgba);
+                        match picture.map(|p| image::DynamicImage::ImageRgba8(p).to_rgb8().save(&path)) {
+                            Some(Ok(())) => log::info!("video spike: saved {}", path.display()),
+                            Some(Err(e)) => log::warn!("video spike: couldn't save: {e}"),
+                            None => log::warn!("video spike: a frame of the wrong size"),
+                        }
+                    }
+                }
+                Ok(None) => log::info!("video spike: frame {got} (ssrc {}, {} bytes): no picture yet", f.ssrc, f.annexb.len()),
+                Err(e) => log::warn!("video spike: frame {got} (ssrc {}) didn't decode: {e}", f.ssrc),
+            }
+        }
+    });
 }
 
 /// Adds `pcm` onto `mix` sample by sample, saturating.
