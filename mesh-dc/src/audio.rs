@@ -4,6 +4,7 @@
 //! Same cpal shape as `mesh-wa/src/audio.rs` (MIT, (c) João Lucas); kept
 //! separate because the sample formats differ.
 
+use std::collections::VecDeque;
 use std::io::{Read, Result as IoResult, Seek, SeekFrom};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -17,18 +18,15 @@ use ringbuf::HeapRb;
 use ringbuf::traits::{Consumer as _, Producer as _, Split as _};
 use songbird::input::core::io::MediaSource;
 
-/// A live microphone as a blocking reader of mono f32 little-endian samples.
-/// The consumer sits behind a mutex so the whole thing is `Sync`, which
-/// songbird's `MediaSource` bound requires (only its own input thread reads it).
+/// A live microphone: cpal fills the ring buffer; `Mic::gate` reads it.
 pub struct Mic {
     cons: std::sync::Mutex<ringbuf::HeapCons<f32>>,
     alive: Arc<AtomicBool>,
     pub rate: u32,
-    scratch: Vec<u8>,
 }
 
-/// Opens the default mic. Returns the reader and its native sample rate (for
-/// `RawAdapter::new(mic, rate, 1)`).
+/// Opens the default mic, at its native sample rate (songbird's
+/// `RawAdapter::new(talk, rate, 1)` resamples).
 pub fn open_mic() -> Result<Mic> {
     let device = cpal::default_host().default_input_device().ok_or_else(|| anyhow!("no microphone"))?;
     let supported = device.default_input_config().map_err(|e| anyhow!("mic config: {e}"))?;
@@ -53,7 +51,7 @@ pub fn open_mic() -> Result<Mic> {
             alive.store(false, Ordering::Relaxed);
         });
     }
-    Ok(Mic { cons: std::sync::Mutex::new(cons), alive, rate, scratch: Vec::new() })
+    Ok(Mic { cons: std::sync::Mutex::new(cons), alive, rate })
 }
 
 impl Drop for Mic {
@@ -62,30 +60,143 @@ impl Drop for Mic {
     }
 }
 
-impl Read for Mic {
+/// Voice activity on the mic. Discord's AFK timer counts the "speaking"
+/// signal, and songbird sends it only when its mixer starts or stops having
+/// tracks: one mic track that never ends says "speaking" once, at join, and
+/// the timer moves you to AFK however much you talk. So each burst of speech
+/// is its own track (`Talk`), ended after a second of quiet.
+#[derive(Debug)]
+struct Gate {
+    floor: f32,
+    open_until: Option<std::time::Instant>,
+}
+
+/// How long the gate stays open after the last loud bit.
+const HANGOVER: Duration = Duration::from_millis(1000);
+/// Kept from just before speech starts, so its first sound isn't cut.
+const PREROLL: Duration = Duration::from_millis(150);
+
+impl Default for Gate {
+    fn default() -> Self {
+        Self {
+            floor: 0.003,
+            open_until: None,
+        }
+    }
+}
+
+impl Gate {
+    /// Whether a block at `level` (RMS, -1..1 samples) is speech, or within
+    /// the hangover after it. The floor follows quiet at once, noise slowly.
+    fn pass(&mut self, level: f32, now: std::time::Instant) -> bool {
+        self.floor = if level < self.floor {
+            level.max(0.0005)
+        } else {
+            self.floor * 1.002
+        };
+        if level > (self.floor * 3.0).max(0.01) {
+            self.open_until = Some(now + HANGOVER);
+        }
+        self.open_until.is_some_and(|until| now < until)
+    }
+}
+
+fn rms(block: &[f32]) -> f32 {
+    (block.iter().map(|s| s * s).sum::<f32>() / block.len().max(1) as f32).sqrt()
+}
+
+/// One burst of speech as songbird's blocking reader of mono f32 samples: it
+/// ends (EOF) once the gate has closed and everything queued is read.
+pub struct Talk {
+    shared: Arc<TalkShared>,
+    scratch: Vec<u8>,
+}
+
+struct TalkShared {
+    queue: std::sync::Mutex<VecDeque<f32>>,
+    talking: AtomicBool,
+}
+
+impl Mic {
+    /// Runs the gate on its own thread until `stop`: each time speech starts,
+    /// `on_talk` gets a new `Talk` to play (with the pre-roll in it).
+    pub fn gate(self, stop: Arc<AtomicBool>, on_talk: impl Fn(Talk) + Send + 'static) {
+        std::thread::spawn(move || {
+            let block = (self.rate / 100).max(1) as usize;
+            let keep = (self.rate as u128 * PREROLL.as_millis() / 1000) as usize;
+            let mut gate = Gate::default();
+            let (mut pending, mut preroll) = (Vec::new(), VecDeque::new());
+            let mut current: Option<Arc<TalkShared>> = None;
+            let mut popped = vec![0f32; self.rate as usize / 10];
+            while !stop.load(Ordering::Relaxed) && self.alive.load(Ordering::Relaxed) {
+                let n = self.cons.lock().unwrap().pop_slice(&mut popped);
+                pending.extend_from_slice(&popped[..n]);
+                if n == 0 {
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+                while pending.len() >= block {
+                    let chunk: Vec<f32> = pending.drain(..block).collect();
+                    let open = gate.pass(rms(&chunk), std::time::Instant::now());
+                    match (&current, open) {
+                        (Some(talk), true) => talk.queue.lock().unwrap().extend(chunk),
+                        (Some(talk), false) => {
+                            talk.talking.store(false, Ordering::Relaxed);
+                            current = None;
+                            preroll.extend(chunk);
+                        }
+                        (None, true) => {
+                            preroll.extend(chunk);
+                            let shared = Arc::new(TalkShared {
+                                queue: std::sync::Mutex::new(std::mem::take(&mut preroll)),
+                                talking: AtomicBool::new(true),
+                            });
+                            on_talk(Talk {
+                                shared: shared.clone(),
+                                scratch: Vec::new(),
+                            });
+                            current = Some(shared);
+                        }
+                        (None, false) => preroll.extend(chunk),
+                    }
+                    let over = preroll.len().saturating_sub(keep);
+                    preroll.drain(..over);
+                }
+            }
+            if let Some(talk) = current {
+                talk.talking.store(false, Ordering::Relaxed);
+            }
+        });
+    }
+}
+
+impl Read for Talk {
     fn read(&mut self, buf: &mut [u8]) -> IoResult<usize> {
-        // Block (briefly) until there's at least one sample, so songbird's
-        // blocking input thread never busy-spins on an empty mic.
+        // Block (briefly) until there's a sample, so songbird's blocking
+        // input thread never busy-spins.
         let want = buf.len() / 4;
         if want == 0 {
             return Ok(0);
         }
-        self.scratch.clear();
-        let mut popped = vec![0f32; want];
-        let mut n = 0;
+        let mut got: Vec<f32> = Vec::new();
         for _ in 0..200 {
-            n = self.cons.lock().unwrap().pop_slice(&mut popped);
-            if n > 0 || !self.alive.load(Ordering::Relaxed) {
+            {
+                let mut q = self.shared.queue.lock().unwrap();
+                let n = want.min(q.len());
+                got.extend(q.drain(..n));
+            }
+            if !got.is_empty() {
                 break;
+            }
+            if !self.shared.talking.load(Ordering::Relaxed) {
+                return Ok(0); // Over: the track ends, and so does "speaking".
             }
             std::thread::sleep(Duration::from_millis(5));
         }
-        if n == 0 {
-            // Feed silence rather than EOF, so the track stays alive.
-            popped.iter_mut().for_each(|s| *s = 0.0);
-            n = want.min(480);
+        if got.is_empty() {
+            got = vec![0.0; want.min(480)];
         }
-        for s in &popped[..n] {
+        self.scratch.clear();
+        for s in &got {
             self.scratch.extend_from_slice(&s.to_le_bytes());
         }
         let len = self.scratch.len().min(buf.len());
@@ -94,13 +205,13 @@ impl Read for Mic {
     }
 }
 
-impl Seek for Mic {
+impl Seek for Talk {
     fn seek(&mut self, _: SeekFrom) -> IoResult<u64> {
         Err(std::io::ErrorKind::Unsupported.into())
     }
 }
 
-impl MediaSource for Mic {
+impl MediaSource for Talk {
     fn is_seekable(&self) -> bool {
         false
     }
@@ -266,20 +377,70 @@ mod tests {
     #[test]
     #[ignore]
     fn mic_hears() {
-        let mut mic = open_mic().unwrap();
+        let mic = open_mic().unwrap();
+        let rate = mic.rate;
+        let stop = Arc::new(AtomicBool::new(false));
+        let (tx, rx) = std::sync::mpsc::channel();
+        mic.gate(stop.clone(), move |t| {
+            let _ = tx.send(t);
+        });
+        let mut talk = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("say something");
         let mut buf = [0u8; 3840];
         let (mut sum, mut n) = (0f64, 0usize);
-        let start = std::time::Instant::now();
-        while start.elapsed() < Duration::from_secs(4) {
-            let len = mic.read(&mut buf).unwrap();
+        // Talk, then stay quiet: the track ends a second after.
+        loop {
+            let len = talk.read(&mut buf).unwrap();
+            if len == 0 {
+                break;
+            }
             for c in buf[..len].chunks_exact(4) {
                 let s = f32::from_le_bytes(c.try_into().unwrap()) as f64;
                 sum += s * s;
                 n += 1;
             }
         }
+        stop.store(true, Ordering::Relaxed);
         let rms = (sum / n.max(1) as f64).sqrt();
-        println!("rate {} samples {n} rms {rms:.5}", mic.rate);
+        println!("rate {rate} samples {n} rms {rms:.5}");
         assert!(rms > 0.001, "mic is silent");
+    }
+
+    /// Speech opens the gate; it stays open a second after, then closes;
+    /// steady room noise doesn't open it.
+    #[test]
+    fn the_gate_opens_on_speech() {
+        let mut g = Gate::default();
+        let t = std::time::Instant::now();
+        let at = |ms| t + Duration::from_millis(ms);
+        assert!(!g.pass(0.002, t));
+        assert!(g.pass(0.2, at(10)));
+        assert!(g.pass(0.002, at(900)), "the hangover");
+        assert!(!g.pass(0.002, at(1100)));
+        let mut hum = Gate::default();
+        for ms in 0..200 {
+            hum.pass(0.004, at(ms * 10));
+        }
+        assert!(!hum.pass(0.005, at(2010)), "steady noise stays out");
+    }
+
+    /// A talk track gives what's queued, then ends once speech is over:
+    /// that end is what makes songbird say "not speaking".
+    #[test]
+    fn a_talk_track_ends_after_speech() {
+        let shared = Arc::new(TalkShared {
+            queue: std::sync::Mutex::new(VecDeque::from(vec![0.5f32; 10])),
+            talking: AtomicBool::new(true),
+        });
+        let mut talk = Talk {
+            shared: shared.clone(),
+            scratch: Vec::new(),
+        };
+        let mut buf = [0u8; 4 * 16];
+        assert_eq!(talk.read(&mut buf).unwrap(), 40, "the ten queued");
+        assert_eq!(f32::from_le_bytes(buf[..4].try_into().unwrap()), 0.5);
+        shared.talking.store(false, Ordering::Relaxed);
+        assert_eq!(talk.read(&mut buf).unwrap(), 0, "over: EOF");
     }
 }

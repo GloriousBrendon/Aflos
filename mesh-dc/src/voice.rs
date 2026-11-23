@@ -20,8 +20,11 @@ use crate::gateway::State;
 
 /// A live voice connection: the driver plus the maps the handlers keep.
 pub struct Voice {
-    driver: Driver,
+    /// Shared with the mic's gate, which adds a track per burst of speech.
+    driver: Arc<std::sync::Mutex<Driver>>,
     shared: Arc<Shared>,
+    /// Stops the mic's gate.
+    mic_stop: Arc<std::sync::atomic::AtomicBool>,
 }
 
 struct Shared {
@@ -71,12 +74,18 @@ impl Voice {
 
         driver.connect(info).await.map_err(|e| anyhow::anyhow!("voice connect: {e}"))?;
 
-        // Mic in: songbird resamples the native-rate mono f32 to 48 kHz Opus.
+        // Mic in, a track per burst of speech, so Discord hears "speaking"
+        // each time (its AFK timer counts that); songbird resamples the
+        // native-rate mono f32 to 48 kHz Opus.
+        let driver = Arc::new(std::sync::Mutex::new(driver));
+        let mic_stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         match audio::open_mic() {
             Ok(mic) => {
-                let rate = mic.rate;
-                let input = songbird::input::RawAdapter::new(mic, rate, 1);
-                driver.play_input(input.into());
+                let (rate, d) = (mic.rate, driver.clone());
+                mic.gate(mic_stop.clone(), move |talk| {
+                    let input = songbird::input::RawAdapter::new(talk, rate, 1);
+                    d.lock().unwrap().play_input(input.into());
+                });
             }
             Err(e) => log::warn!("no microphone, listen-only: {e}"),
         }
@@ -87,15 +96,21 @@ impl Voice {
             s.voice_channel = Some(channel_id);
             s.voice_guild = guild_id;
         }
-        Ok(Voice { driver, shared })
+        Ok(Voice {
+            driver,
+            shared,
+            mic_stop,
+        })
     }
 
     pub fn set_mute(&mut self, mute: bool) {
-        self.driver.mute(mute);
+        self.driver.lock().unwrap().mute(mute);
     }
 
-    pub async fn leave(mut self) {
-        self.driver.leave();
+    pub async fn leave(self) {
+        self.mic_stop
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        self.driver.lock().unwrap().leave();
         let mut s = self.shared.state.lock().await;
         s.rtc_connected = false;
         s.speaking.clear();
