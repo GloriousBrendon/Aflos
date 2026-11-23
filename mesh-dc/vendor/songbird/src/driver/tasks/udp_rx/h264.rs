@@ -68,9 +68,84 @@ impl H264Assembler {
     }
 }
 
+/// mesh-dc: an Annex-B frame's NAL units (start codes of 3 or 4 bytes).
+pub(crate) fn nal_units(frame: &[u8]) -> Vec<&[u8]> {
+    let mut starts = Vec::new();
+    let mut i = 0;
+    while i + 3 <= frame.len() {
+        if frame[i] == 0 && frame[i + 1] == 0 && frame[i + 2] == 1 {
+            starts.push(i + 3);
+            i += 3;
+        } else {
+            i += 1;
+        }
+    }
+    let mut out = Vec::new();
+    for (k, &start) in starts.iter().enumerate() {
+        let mut end = starts.get(k + 1).map_or(frame.len(), |next| next - 3);
+        // A 4-byte start code's leading zero belongs to it, not to the unit.
+        if k + 1 < starts.len() && end > start && frame[end - 1] == 0 {
+            end -= 1;
+        }
+        if end > start {
+            out.push(&frame[start..end]);
+        }
+    }
+    out
+}
+
+/// mesh-dc: an Annex-B frame as RTP payloads (RFC 6184): a unit that fits
+/// in `mtu` goes whole, a bigger one in FU-A pieces. The frame's last
+/// payload is the last here (its packet carries the marker).
+pub(crate) fn packetize(frame: &[u8], mtu: usize) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    for nal in nal_units(frame) {
+        if nal.len() <= mtu {
+            out.push(nal.to_vec());
+            continue;
+        }
+        let (indicator, kind) = ((nal[0] & 0xe0) | 28, nal[0] & 0x1f);
+        let pieces: Vec<&[u8]> = nal[1..].chunks(mtu - 2).collect();
+        for (k, piece) in pieces.iter().enumerate() {
+            let mut header = kind;
+            if k == 0 {
+                header |= 0x80;
+            }
+            if k + 1 == pieces.len() {
+                header |= 0x40;
+            }
+            let mut payload = vec![indicator, header];
+            payload.extend_from_slice(piece);
+            out.push(payload);
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A frame split into packets and put back together is the same frame,
+    /// with big units in FU-A pieces no bigger than the MTU.
+    #[test]
+    fn packetize_then_assemble() {
+        let big: Vec<u8> = (0..3000u32).map(|i| (i % 251) as u8 | 1).collect();
+        let mut frame = vec![0, 0, 0, 1, 0x67, 1, 2, 0, 0, 0, 1, 0x68, 3, 0, 0, 1, 0x65];
+        frame.extend_from_slice(&big);
+        let packets = packetize(&frame, 1100);
+        assert!(packets.iter().all(|p| p.len() <= 1100));
+        assert_eq!(packets[0], [0x67, 1, 2]);
+        assert_eq!(packets[2][0] & 0x1f, 28, "the IDR goes in FU-A");
+        let mut a = H264Assembler::default();
+        let last = packets.len() - 1;
+        let mut back = None;
+        for (k, p) in packets.iter().enumerate() {
+            back = a.push(k as u16, 9000, k == last, p);
+        }
+        let back = back.expect("a whole frame");
+        assert_eq!(nal_units(&back), nal_units(&frame));
+    }
 
     #[test]
     fn single_stap_and_fu() {

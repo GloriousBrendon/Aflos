@@ -73,6 +73,13 @@ pub struct Config {
     /// Set, the driver also tells Discord it takes video.
     #[derivative(Debug = "ignore")]
     pub video_sink: Option<flume::Sender<crate::driver::VideoFrame>>,
+    #[cfg(all(feature = "driver", feature = "receive"))]
+    /// mesh-dc: where the driver puts our video's sender once connected.
+    #[derivative(Debug = "ignore")]
+    pub video_tx: Option<crate::driver::VideoTxSlot>,
+    #[cfg(all(feature = "driver", feature = "receive"))]
+    /// mesh-dc: this is a Go Live stream's connection (its video is a screen).
+    pub video_screen: bool,
 
     #[cfg(all(feature = "driver", feature = "receive"))]
     /// Configures the number of audio packets to buffer for each user before playout.
@@ -221,6 +228,10 @@ impl Default for Config {
             #[cfg(all(feature = "driver", feature = "receive"))]
             video_sink: None,
             #[cfg(all(feature = "driver", feature = "receive"))]
+            video_tx: None,
+            #[cfg(all(feature = "driver", feature = "receive"))]
+            video_screen: false,
+            #[cfg(all(feature = "driver", feature = "receive"))]
             playout_buffer_length: NonZeroU8::new(5).unwrap(),
             #[cfg(all(feature = "driver", feature = "receive"))]
             playout_spike_length: 3,
@@ -268,6 +279,20 @@ impl Config {
     #[must_use]
     pub fn decode_mode(mut self, decode_mode: DecodeMode) -> Self {
         self.decode_mode = decode_mode;
+        self
+    }
+
+    /// mesh-dc: send our video through what lands in `slot` (`video_tx`).
+    #[cfg(all(feature = "driver", feature = "receive"))]
+    pub fn video_tx(mut self, slot: crate::driver::VideoTxSlot) -> Self {
+        self.video_tx = Some(slot);
+        self
+    }
+
+    /// mesh-dc: a Go Live stream's connection (`video_screen`).
+    #[cfg(all(feature = "driver", feature = "receive"))]
+    pub fn video_screen(mut self, on: bool) -> Self {
+        self.video_screen = on;
         self
     }
 

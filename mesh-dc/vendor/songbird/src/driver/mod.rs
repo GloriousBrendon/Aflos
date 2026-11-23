@@ -38,6 +38,9 @@ pub struct VideoFrame {
     pub annexb: Vec<u8>,
 }
 pub(crate) use crypto::CryptoState;
+pub(crate) use crypto::Cipher;
+mod video_tx;
+pub use video_tx::{VideoTx, VideoTxSlot};
 #[cfg(feature = "receive")]
 pub use decode_mode::*;
 pub use mix_mode::MixMode;

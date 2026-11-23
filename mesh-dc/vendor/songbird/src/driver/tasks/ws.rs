@@ -172,6 +172,15 @@ impl AuxNetwork {
                                 }
                             }
                         },
+                        Ok(WsMessage::Json(value)) => {
+                            if !self.dont_send {
+                                if let Err(e) = self.ws_client.send_raw_json(&value).await {
+                                    should_reconnect = ws_error_is_not_final(&e);
+                                    ws_reason = Some((&e).into());
+                                    ws_error = true;
+                                }
+                            }
+                        },
                         Ok(WsMessage::Deliver(msg)) => {
                             ws_error |= match self.process_ws(interconnect, msg).await {
                                 Err(e) => {

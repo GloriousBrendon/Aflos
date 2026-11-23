@@ -39,13 +39,23 @@ pub(crate) struct Connection {
 }
 
 
+/// mesh-dc: a voice connection's own video, or a Go Live stream's screen.
+fn video_kind(config: &Config) -> &'static str {
+    #[cfg(feature = "receive")]
+    if config.video_screen {
+        return "screen";
+    }
+    let _ = config;
+    "video"
+}
+
 /// mesh-dc: H264's RTP payload type on Discord (its retransmissions: +1).
 pub(crate) const H264_PT: u8 = 101;
 
-/// mesh-dc: whether to ask Discord for video (a sink for it is set).
+/// mesh-dc: whether to ask Discord for video (a sink or a sender is set).
 fn wants_video(config: &Config) -> bool {
     #[cfg(feature = "receive")]
-    return config.video_sink.is_some();
+    return config.video_sink.is_some() || config.video_tx.is_some();
     #[cfg(not(feature = "receive"))]
     {
         let _ = config;
@@ -92,10 +102,11 @@ impl Connection {
                 token: info.token.clone(),
                 user_id: info.user_id.into(),
                 max_dave_protocol_version: Some(davey::DAVE_PROTOCOL_VERSION),
-                // mesh-dc: say we take video, as Discord's own clients do.
+                // mesh-dc: say we take video, as Discord's own clients do
+                // (a Go Live stream's connection: a screen).
                 video: wants_video(config),
                 streams: if wants_video(config) {
-                    vec![serde_json::json!({ "type": "video", "rid": "100", "quality": 100 })]
+                    vec![serde_json::json!({ "type": video_kind(config), "rid": "100", "quality": 100 })]
                 } else {
                     Vec::new()
                 },
@@ -209,7 +220,7 @@ impl Connection {
                     codecs: if wants_video(config) {
                         vec![
                             serde_json::json!({ "name": "opus", "type": "audio", "priority": 1000, "payload_type": 120 }),
-                            serde_json::json!({ "name": "H264", "type": "video", "priority": 1000, "payload_type": H264_PT, "rtx_payload_type": H264_PT + 1, "encode": false, "decode": true }),
+                            serde_json::json!({ "name": "H264", "type": "video", "priority": 1000, "payload_type": H264_PT, "rtx_payload_type": H264_PT + 1, "encode": true, "decode": true }),
                         ]
                     } else {
                         Vec::new()
@@ -247,6 +258,31 @@ impl Connection {
         let udp_tx = udp.into_std()?;
 
         let ssrc = ready.ssrc;
+
+        // mesh-dc: our video's sender, with the SSRCs READY gave our stream
+        // (or the usual next two after audio's).
+        #[cfg(feature = "receive")]
+        if let Some(slot) = &config.video_tx {
+            let stream = ready.streams.first();
+            let num = |k: &str| stream.and_then(|s| s.get(k)).and_then(serde_json::Value::as_u64).map(|n| n as u32);
+            let video = num("ssrc").unwrap_or(ssrc.wrapping_add(1));
+            let rtx = num("rtx_ssrc").unwrap_or(ssrc.wrapping_add(2));
+            match udp_tx.try_clone() {
+                Ok(udp) => {
+                    *slot.lock().unwrap() = Some(crate::driver::VideoTx::new(
+                        cipher.clone(),
+                        chosen_crypto.into(),
+                        udp,
+                        dave_session.clone(),
+                        dave_protocol_version.clone(),
+                        ws_msg_tx.clone(),
+                        (ssrc, video, rtx),
+                        config.video_screen,
+                    ));
+                },
+                Err(e) => tracing::warn!("mesh-dc: no socket for video: {e}"),
+            }
+        }
 
         let mix_conn = MixerConnection {
             #[cfg(feature = "receive")]

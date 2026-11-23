@@ -166,7 +166,11 @@ async fn show_qr_until_linked(dir: &Path, cmds: &mut mpsc::UnboundedReceiver<Str
 
 /// Connected session: gateway + commands + voice, until signed out or stdin
 /// closes.
-async fn run_session(dir: &Path, token: String, cmds: &mut mpsc::UnboundedReceiver<String>) -> SessionEnd {
+async fn run_session(
+    dir: &Path,
+    token: String,
+    cmds: &mut mpsc::UnboundedReceiver<String>,
+) -> SessionEnd {
     let _ = dir;
     let state = Arc::new(Mutex::new(State::default()));
     let rest = Rest::new(token.clone());
@@ -181,6 +185,8 @@ async fn run_session(dir: &Path, token: String, cmds: &mut mpsc::UnboundedReceiv
     });
 
     let mut voice: Option<Voice> = None;
+    // Go Live streams' own connections: ours, and those we watch.
+    let mut streams: Vec<voice::Stream> = Vec::new();
     let mut ready_sent = false;
     let mut snapshot_due = false;
     let mut tick = tokio::time::interval(std::time::Duration::from_millis(150));
@@ -213,9 +219,35 @@ async fn run_session(dir: &Path, token: String, cmds: &mut mpsc::UnboundedReceiv
                         }
                         snapshot_due = true;
                     }
+                    gateway::Event::StreamServer { key, rtc_server_id, endpoint, token, session_id } => {
+                        let me = state.lock().await.me_id().unwrap_or_default();
+                        let share = key.ends_with(&format!(":{me}"));
+                        if let Some(i) = streams.iter().position(|s| s.key == key) {
+                            streams.remove(i).leave();
+                        }
+                        match voice::Stream::connect(&me, key.clone(), &rtc_server_id, endpoint, token, session_id, share).await {
+                            Ok(s) => {
+                                if share {
+                                    let _ = gw_cmd_tx.send(gateway::Cmd::StreamLive { key });
+                                }
+                                streams.push(s);
+                            }
+                            Err(e) => log::warn!("stream: {e}"),
+                        }
+                        snapshot_due = true;
+                    }
+                    gateway::Event::StreamGone(key) => {
+                        if let Some(i) = streams.iter().position(|s| s.key == key) {
+                            streams.remove(i).leave();
+                        }
+                        snapshot_due = true;
+                    }
                     gateway::Event::VoiceLeft => {
                         if let Some(v) = voice.take() {
                             v.leave().await;
+                        }
+                        for s in streams.drain(..) {
+                            s.leave();
                         }
                         snapshot_due = true;
                     }
@@ -254,13 +286,30 @@ async fn run_session(dir: &Path, token: String, cmds: &mut mpsc::UnboundedReceiv
 /// Runs one command. Returns true for signOut (the caller tears down).
 /// Network calls run as their own tasks: awaited here, one slow download
 /// (avatars of everyone in a call, say) held up every command and snapshot.
-async fn handle(cmd: &Cmd, state: &Arc<Mutex<State>>, rest: &Rest, gw: &mpsc::UnboundedSender<gateway::Cmd>, voice: &mut Option<Voice>, notify: &mpsc::UnboundedSender<()>) -> bool {
+async fn handle(
+    cmd: &Cmd,
+    state: &Arc<Mutex<State>>,
+    rest: &Rest,
+    gw: &mpsc::UnboundedSender<gateway::Cmd>,
+    voice: &mut Option<Voice>,
+    notify: &mpsc::UnboundedSender<()>,
+) -> bool {
     let arg = |i: usize| cmd.args.get(i).map(String::as_str);
     match cmd.func.as_str() {
         "join" => {
             if let Some(cid) = arg(0) {
-                let guild = state.lock().await.channels.get(cid).and_then(|c| c.get("guild_id")).and_then(Value::as_str).map(str::to_owned);
-                let _ = gw.send(gateway::Cmd::JoinVoice { guild_id: guild, channel_id: cid.to_owned() });
+                let guild = state
+                    .lock()
+                    .await
+                    .channels
+                    .get(cid)
+                    .and_then(|c| c.get("guild_id"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let _ = gw.send(gateway::Cmd::JoinVoice {
+                    guild_id: guild,
+                    channel_id: cid.to_owned(),
+                });
             }
         }
         "leave" => {
@@ -278,7 +327,11 @@ async fn handle(cmd: &Cmd, state: &Arc<Mutex<State>>, rest: &Rest, gw: &mpsc::Un
             if let Some(v) = voice.as_mut() {
                 v.set_mute(m);
             }
-            let _ = gw.send(gateway::Cmd::VoiceFlags { self_mute: m, self_deaf: d, self_video: vid });
+            let _ = gw.send(gateway::Cmd::VoiceFlags {
+                self_mute: m,
+                self_deaf: d,
+                self_video: vid,
+            });
         }
         "toggleDeaf" => {
             let (m, d, vid) = {
@@ -292,17 +345,70 @@ async fn handle(cmd: &Cmd, state: &Arc<Mutex<State>>, rest: &Rest, gw: &mpsc::Un
             if let Some(v) = voice.as_mut() {
                 v.set_mute(m);
             }
-            let _ = gw.send(gateway::Cmd::VoiceFlags { self_mute: m, self_deaf: d, self_video: vid });
+            let _ = gw.send(gateway::Cmd::VoiceFlags {
+                self_mute: m,
+                self_deaf: d,
+                self_video: vid,
+            });
         }
-        // Video and screen share aren't implemented natively; accept and ignore
-        // so Mesh's buttons don't hang. See the handoff report.
-        "setVideo" | "watchStream" | "stopWatching" | "shareScreen" => {
-            log::info!("{} is not supported by mesh-dc (no native video yet)", cmd.func);
+        // Discord video (design/DISCORD-VIDEO.md); nothing while it's off.
+        "setVideo" | "watchStream" | "stopWatching" | "shareScreen" if !voice::video_on() => {
+            log::info!("{}: video is off (MESH_DC_VIDEO=1 turns it on)", cmd.func);
+        }
+        "setVideo" => {
+            let on = arg(0) == Some("true");
+            let (m, d) = {
+                let mut s = state.lock().await;
+                s.self_video = on;
+                (s.self_mute, s.self_deaf)
+            };
+            if let Some(v) = voice.as_mut() {
+                v.set_video(on);
+            }
+            let _ = gw.send(gateway::Cmd::VoiceFlags {
+                self_mute: m,
+                self_deaf: d,
+                self_video: on,
+            });
+        }
+        "shareScreen" => {
+            let s = state.lock().await;
+            let (guild, channel, me) = (s.voice_guild.clone(), s.voice_channel.clone(), s.me_id());
+            drop(s);
+            if let (Some(channel_id), Some(me)) = (channel, me) {
+                if arg(0) == Some("true") {
+                    let _ = gw.send(gateway::Cmd::StreamCreate {
+                        guild_id: guild,
+                        channel_id,
+                    });
+                } else {
+                    let key = gateway::stream_key(guild.as_deref(), &channel_id, &me);
+                    let _ = gw.send(gateway::Cmd::StreamDelete { key });
+                }
+            }
+        }
+        "watchStream" | "stopWatching" => {
+            let s = state.lock().await;
+            let (guild, channel) = (s.voice_guild.clone(), s.voice_channel.clone());
+            drop(s);
+            if let (Some(channel_id), Some(owner)) = (channel, arg(0)) {
+                let key = gateway::stream_key(guild.as_deref(), &channel_id, owner);
+                let _ = gw.send(if cmd.func == "watchStream" {
+                    gateway::Cmd::StreamWatch { key }
+                } else {
+                    gateway::Cmd::StreamDelete { key }
+                });
+            }
         }
         "open" => match arg(0) {
             Some(cid) => {
                 state.lock().await.open_channel = Some(cid.to_owned());
-                tokio::spawn(show_channel(rest.clone(), state.clone(), cid.to_owned(), notify.clone()));
+                tokio::spawn(show_channel(
+                    rest.clone(),
+                    state.clone(),
+                    cid.to_owned(),
+                    notify.clone(),
+                ));
             }
             None => state.lock().await.open_channel = None,
         },
@@ -336,21 +442,31 @@ async fn handle(cmd: &Cmd, state: &Arc<Mutex<State>>, rest: &Rest, gw: &mpsc::Un
             if let Some(gid) = arg(0) {
                 let channel = rest::visible_text_channel(&*state.lock().await, gid);
                 if let Some(channel_id) = channel {
-                    let _ = gw.send(gateway::Cmd::Members { guild_id: gid.to_owned(), channel_id });
+                    let _ = gw.send(gateway::Cmd::Members {
+                        guild_id: gid.to_owned(),
+                        channel_id,
+                    });
                 }
             }
         }
         // Our DM with a user, made if need be; answers with `meshDmOpened`.
         "openDm" => {
             if let Some(uid) = arg(0) {
-                let (rest, state, notify, uid) = (rest.clone(), state.clone(), notify.clone(), uid.to_owned());
+                let (rest, state, notify, uid) =
+                    (rest.clone(), state.clone(), notify.clone(), uid.to_owned());
                 tokio::spawn(async move {
                     match rest.open_dm(&uid).await {
                         Ok(ch) => {
-                            let id = ch.get("id").and_then(Value::as_str).unwrap_or("").to_owned();
+                            let id = ch
+                                .get("id")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_owned();
                             {
                                 let mut s = state.lock().await;
-                                if !s.dm_channels.iter().any(|c| c.get("id").and_then(Value::as_str) == Some(id.as_str())) {
+                                if !s.dm_channels.iter().any(|c| {
+                                    c.get("id").and_then(Value::as_str) == Some(id.as_str())
+                                }) {
                                     s.dm_channels.push(ch.clone());
                                 }
                                 s.channels.insert(id.clone(), ch);

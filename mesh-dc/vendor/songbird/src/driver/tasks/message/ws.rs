@@ -9,4 +9,6 @@ pub enum WsMessage {
     SetKeepalive(f64),
     Speaking(bool),
     Deliver(GatewayEvent),
+    /// mesh-dc: a message the model doesn't have (op 12 with our streams).
+    Json(serde_json::Value),
 }

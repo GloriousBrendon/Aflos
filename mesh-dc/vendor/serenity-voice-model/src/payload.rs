@@ -164,6 +164,10 @@ pub struct Ready {
     pub port: u16,
     /// RTP synchronisation source assigned by the server to the client.
     pub ssrc: u32,
+    /// mesh-dc: our video streams' SSRCs (`ssrc`, `rtx_ssrc`), when we said
+    /// we'd send video.
+    #[serde(default)]
+    pub streams: Vec<serde_json::Value>,
 }
 
 /// Sent by the client after a disconnect to attempt to resume a session.

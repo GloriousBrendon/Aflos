@@ -96,7 +96,11 @@ impl Rest {
             .send()
             .await
             .map_err(|e| anyhow!("open DM: {e}"))?;
-        resp.error_for_status().map_err(|e| anyhow!("open DM HTTP {e}"))?.json().await.map_err(|e| anyhow!("open DM: {e}"))
+        resp.error_for_status()
+            .map_err(|e| anyhow!("open DM HTTP {e}"))?
+            .json()
+            .await
+            .map_err(|e| anyhow!("open DM: {e}"))
     }
 
     /// Logs the account out, invalidating this token.
@@ -147,7 +151,11 @@ fn may(g: &Value, c: &Value, me: &str, mine: Option<&Vec<String>>, need: u64) ->
     let (Some(roles), Some(mine)) = (g.get("roles").and_then(Value::as_array), mine) else {
         return true;
     };
-    let bits = |v: Option<&Value>| v.and_then(Value::as_str).and_then(|s| s.parse::<u64>().ok()).unwrap_or(0);
+    let bits = |v: Option<&Value>| {
+        v.and_then(Value::as_str)
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0)
+    };
     let mut perms = 0;
     for r in roles {
         let id = r.get("id").and_then(Value::as_str).unwrap_or("");
@@ -158,8 +166,17 @@ fn may(g: &Value, c: &Value, me: &str, mine: Option<&Vec<String>>, need: u64) ->
     if perms & ADMINISTRATOR != 0 {
         return true;
     }
-    let overwrites: Vec<&Value> = c.get("permission_overwrites").and_then(Value::as_array).into_iter().flatten().collect();
-    let of = |id: &str| overwrites.iter().find(|o| o.get("id").and_then(Value::as_str) == Some(id));
+    let overwrites: Vec<&Value> = c
+        .get("permission_overwrites")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .collect();
+    let of = |id: &str| {
+        overwrites
+            .iter()
+            .find(|o| o.get("id").and_then(Value::as_str) == Some(id))
+    };
     if let Some(o) = of(gid) {
         perms = (perms & !bits(o.get("deny"))) | bits(o.get("allow"));
     }
@@ -208,12 +225,19 @@ fn members(channel_id: &str, guild_key: &str, s: &State) -> Vec<Value> {
 /// A guild's member list, once it's been asked for (`members`): its groups
 /// (online, offline, or a role shown apart) and their members, in order.
 fn member_list(gid: &str, g: &Value, s: &State) -> Vec<Value> {
-    let rows = s.member_lists.get(gid).map(Vec::as_slice).unwrap_or_default();
+    let rows = s
+        .member_lists
+        .get(gid)
+        .map(Vec::as_slice)
+        .unwrap_or_default();
     let role_name = |id: &str| {
-        (g.get("roles").and_then(Value::as_array).into_iter().flatten())
-            .find(|r| r.get("id").and_then(Value::as_str) == Some(id))
-            .and_then(|r| r.get("name").and_then(Value::as_str))
-            .map(str::to_owned)
+        (g.get("roles")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten())
+        .find(|r| r.get("id").and_then(Value::as_str) == Some(id))
+        .and_then(|r| r.get("name").and_then(Value::as_str))
+        .map(str::to_owned)
     };
     (rows.iter())
         .filter_map(|row| {
@@ -246,11 +270,38 @@ pub fn visible_text_channel(s: &State, gid: &str) -> Option<String> {
     let me = s.me_id().unwrap_or_default();
     let mut chans: Vec<&Value> = (s.channels.values())
         .filter(|c| c.get("guild_id").and_then(Value::as_str) == Some(gid))
-        .filter(|c| c.get("type").and_then(Value::as_u64).is_some_and(|t| TEXT_TYPES.contains(&t)))
+        .filter(|c| {
+            c.get("type")
+                .and_then(Value::as_u64)
+                .is_some_and(|t| TEXT_TYPES.contains(&t))
+        })
         .filter(|c| may(g, c, &me, s.my_roles.get(gid), VIEW_CHANNEL))
         .collect();
     chans.sort_by_key(|c| c.get("position").and_then(Value::as_i64).unwrap_or(0));
-    chans.first().and_then(|c| c.get("id").and_then(Value::as_str)).map(str::to_owned)
+    chans
+        .first()
+        .and_then(|c| c.get("id").and_then(Value::as_str))
+        .map(str::to_owned)
+}
+
+/// Go Live streams in our voice channel: whose, and whether we watch it.
+fn streams(cid: Option<&str>, key: &str, s: &State) -> Vec<Value> {
+    let (Some(cid), Some(states)) = (cid, s.voice.get(key)) else {
+        return Vec::new();
+    };
+    let me = s.me_id().unwrap_or_default();
+    (states.iter())
+        .filter(|(uid, v)| {
+            **uid != me
+                && v.get("channel_id").and_then(Value::as_str) == Some(cid)
+                && v.get("self_stream").and_then(Value::as_bool) == Some(true)
+        })
+        .map(|(uid, _)| {
+            let guild = (key != "@me").then_some(key);
+            let watching = s.watching.contains(&gateway::stream_key(guild, cid, uid));
+            json!({ "owner_id": uid, "name": user_obj(uid, s)["name"], "watching": watching })
+        })
+        .collect()
 }
 
 /// Builds the full Mesh snapshot from the current gateway state.
@@ -327,13 +378,17 @@ pub fn snapshot(s: &State) -> Value {
 
     let voice = {
         let cid = s.voice_channel.clone();
-        let name = cid.as_ref().and_then(|c| s.channels.get(c)).and_then(|c| c.get("name").and_then(Value::as_str)).map(str::to_owned);
+        let name = cid
+            .as_ref()
+            .and_then(|c| s.channels.get(c))
+            .and_then(|c| c.get("name").and_then(Value::as_str))
+            .map(str::to_owned);
         let key = s.voice_guild.clone().unwrap_or_else(|| "@me".into());
         json!({
             "channel_id": cid, "guild_id": s.voice_guild, "channel_name": name.or_else(|| cid.as_ref().map(|_| "call".into())),
             "connection": if s.rtc_connected { "RTC_CONNECTED" } else { "" },
             "self_mute": s.self_mute, "self_deaf": s.self_deaf, "self_video": s.self_video,
-            "streams": [], "self_stream": false,
+            "streams": streams(cid.as_deref(), &key, s), "self_stream": s.sharing,
             "members": cid.as_deref().map(|c| members(c, &key, s)).unwrap_or_default(),
         })
     };
@@ -448,6 +503,33 @@ mod tests {
 
     /// Discord's order: @everyone and roles, then @everyone's, the roles'
     /// and our own overwrites; the owner and admins see everything.
+    /// Go Live: someone else's `self_stream` in our channel is a stream we
+    /// can watch (or are watching); ours and other channels' aren't listed.
+    #[test]
+    fn streams_in_our_channel() {
+        let mut s = State::default();
+        s.me = Some(json!({ "id": "me" }));
+        let vs = |c: &str, live: bool| json!({ "channel_id": c, "self_stream": live });
+        let mut g = std::collections::HashMap::new();
+        g.insert("me".to_string(), vs("c", true));
+        g.insert("ann".to_string(), vs("c", true));
+        g.insert("ben".to_string(), vs("c", false));
+        g.insert("cal".to_string(), vs("other", true));
+        s.voice.insert("g".to_string(), g);
+        s.watching
+            .insert(gateway::stream_key(Some("g"), "c", "ann"));
+        let listed = streams(Some("c"), "g", &s);
+        assert_eq!(listed.len(), 1, "{listed:?}");
+        assert_eq!(
+            (
+                listed[0]["owner_id"].as_str(),
+                listed[0]["watching"].as_bool()
+            ),
+            (Some("ann"), Some(true))
+        );
+        assert_eq!(gateway::stream_key(None, "c", "ann"), "call:c:ann");
+    }
+
     #[test]
     fn who_may_see_and_join() {
         let g = json!({ "id": "g", "owner_id": "boss", "roles": [
@@ -471,20 +553,44 @@ mod tests {
         let modr = vec!["mod".to_string()];
         let admin = vec!["admin".to_string()];
         assert!(may(&g, &open, "me", Some(&plain), VIEW_CHANNEL));
-        assert!(!may(&g, &hidden, "me", Some(&plain), VIEW_CHANNEL), "@everyone denied");
-        assert!(may(&g, &hidden, "me", Some(&modr), VIEW_CHANNEL), "a role's allow wins over @everyone's deny");
-        assert!(may(&g, &mine_only, "me", Some(&plain), VIEW_CHANNEL), "our own overwrite last");
+        assert!(
+            !may(&g, &hidden, "me", Some(&plain), VIEW_CHANNEL),
+            "@everyone denied"
+        );
+        assert!(
+            may(&g, &hidden, "me", Some(&modr), VIEW_CHANNEL),
+            "a role's allow wins over @everyone's deny"
+        );
+        assert!(
+            may(&g, &mine_only, "me", Some(&plain), VIEW_CHANNEL),
+            "our own overwrite last"
+        );
         assert!(may(&g, &no_voice, "me", Some(&plain), VIEW_CHANNEL));
-        assert!(!may(&g, &no_voice, "me", Some(&plain), VIEW_CHANNEL | CONNECT), "seen but can't join");
-        assert!(may(&g, &hidden, "me", Some(&admin), VIEW_CHANNEL | CONNECT), "admin");
-        assert!(may(&g, &hidden, "boss", Some(&plain), VIEW_CHANNEL), "owner");
-        assert!(may(&g, &hidden, "me", None, VIEW_CHANNEL), "no roles known: not locked");
+        assert!(
+            !may(&g, &no_voice, "me", Some(&plain), VIEW_CHANNEL | CONNECT),
+            "seen but can't join"
+        );
+        assert!(
+            may(&g, &hidden, "me", Some(&admin), VIEW_CHANNEL | CONNECT),
+            "admin"
+        );
+        assert!(
+            may(&g, &hidden, "boss", Some(&plain), VIEW_CHANNEL),
+            "owner"
+        );
+        assert!(
+            may(&g, &hidden, "me", None, VIEW_CHANNEL),
+            "no roles known: not locked"
+        );
     }
 
     #[test]
     fn mentions_show_names() {
         let ms = json!([{ "id": "7", "username": "ann", "global_name": "Ann" }, { "id": "8", "username": "bob" }]);
-        assert_eq!(named_mentions("hi <@7> and <@!8>, not <@9>", Some(&ms)), "hi @Ann and @bob, not <@9>");
+        assert_eq!(
+            named_mentions("hi <@7> and <@!8>, not <@9>", Some(&ms)),
+            "hi @Ann and @bob, not <@9>"
+        );
     }
 
     #[test]
@@ -492,12 +598,26 @@ mod tests {
         let mut s = State::default();
         s.me = Some(json!({ "id": "1", "username": "me", "global_name": "Me", "avatar": null }));
         s.users.insert("1".into(), s.me.clone().unwrap());
-        s.guilds.insert("10".into(), json!({ "id": "10", "name": "Guild", "icon": null }));
-        s.channels.insert("100".into(), json!({ "id": "100", "name": "general", "type": 0, "guild_id": "10", "position": 1 }));
-        s.channels.insert("101".into(), json!({ "id": "101", "name": "Voice", "type": 2, "guild_id": "10", "position": 2 }));
+        s.guilds.insert(
+            "10".into(),
+            json!({ "id": "10", "name": "Guild", "icon": null }),
+        );
+        s.channels.insert(
+            "100".into(),
+            json!({ "id": "100", "name": "general", "type": 0, "guild_id": "10", "position": 1 }),
+        );
+        s.channels.insert(
+            "101".into(),
+            json!({ "id": "101", "name": "Voice", "type": 2, "guild_id": "10", "position": 2 }),
+        );
         s.dm_channels.push(json!({ "id": "500", "type": 1, "recipients": [{ "id": "2" }], "last_message_id": "900" }));
-        s.dm_channels.push(json!({ "id": "501", "type": 1, "recipient_ids": ["2"], "last_message_id": "901" }));
-        s.users.insert("2".into(), json!({ "id": "2", "username": "friend", "avatar": null }));
+        s.dm_channels.push(
+            json!({ "id": "501", "type": 1, "recipient_ids": ["2"], "last_message_id": "901" }),
+        );
+        s.users.insert(
+            "2".into(),
+            json!({ "id": "2", "username": "friend", "avatar": null }),
+        );
 
         let snap = snapshot(&s);
         // Parse through Mesh's own type to prove the fields line up.
@@ -506,14 +626,26 @@ mod tests {
         assert_eq!(parsed.guilds[0].text_channels[0].name, "general");
         assert_eq!(parsed.guilds[0].voice_channels[0].name, "Voice");
         assert_eq!(parsed.dms[0].recipient_id.as_deref(), Some("2"));
-        assert!(parsed.dms.iter().all(|d| d.recipient_id.as_deref() == Some("2")), "recipient_ids DMs resolve too");
+        assert!(
+            parsed
+                .dms
+                .iter()
+                .all(|d| d.recipient_id.as_deref() == Some("2")),
+            "recipient_ids DMs resolve too"
+        );
 
         // A call ringing us shows, named like its DM; one ringing someone else doesn't.
         s.calls.insert("500".into(), vec!["1".into()]);
         s.calls.insert("501".into(), vec!["2".into()]);
         let parsed: mesh_snapshot::Snapshot = serde_json::from_value(snapshot(&s)).unwrap();
         assert_eq!(parsed.ringing.len(), 1);
-        assert_eq!((parsed.ringing[0].channel_id.as_str(), parsed.ringing[0].name.as_str()), ("500", "friend"));
+        assert_eq!(
+            (
+                parsed.ringing[0].channel_id.as_str(),
+                parsed.ringing[0].name.as_str()
+            ),
+            ("500", "friend")
+        );
     }
 
     #[test]
@@ -523,8 +655,15 @@ mod tests {
         let with_stickers = json!({ "id": "901", "type": 0, "author": { "id": "2", "username": "x", "avatar": null }, "content": "",
             "sticker_items": [{ "id": "7", "name": "wave", "format_type": 2 }, { "id": "8", "format_type": 3 }] });
         let atts = message(&with_stickers, &State::default())["attachments"].clone();
-        assert_eq!(atts.as_array().unwrap().len(), 1, "lottie stickers are left out");
-        assert_eq!(atts[0]["preview"], "https://cdn.discordapp.com/stickers/7.png?size=160");
+        assert_eq!(
+            atts.as_array().unwrap().len(),
+            1,
+            "lottie stickers are left out"
+        );
+        assert_eq!(
+            atts[0]["preview"],
+            "https://cdn.discordapp.com/stickers/7.png?size=160"
+        );
         let m = message(&raw, &s);
         assert_eq!(m["system"], true);
         assert_eq!(m["content"], "started a call");

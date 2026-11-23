@@ -70,6 +70,29 @@ in the Discord call bar's existing tiles. `MESH_DC_VIDEO=1` turns receiving
 on without saving JPEGs; it stays off by default until a call has shown it
 doesn't disturb voice.
 
+**V1 to V4 built, 2026-11-23, untested** (you'll test it all at once).
+With `MESH_DC_VIDEO=1`:
+- **V2, your camera:** the camera button captures your first camera
+  (`mesh-media`), encodes H264 at 720p30, DAVE-encrypts each frame as
+  video and sends it as RTP (single NAL units, FU-A above 1,100 bytes) on
+  the voice connection through a new `VideoTx` in the vendored songbird,
+  with its own SSRC from READY's `streams` and op 12 saying it's on or
+  off; op 4 sets `self_video`; your self view shows in the call tiles.
+- **V3, watching Go Live:** streams in your channel (`self_stream` voice
+  states) appear with a watch button; watching sends op 20, and the
+  stream's `STREAM_CREATE` and `STREAM_SERVER_UPDATE` start a second
+  songbird connection (server id = the RTC server, DAVE group = the id
+  before it) whose video goes to a `stream-<owner>` tile. Stream audio
+  isn't played yet.
+- **V4, sharing your screen:** the screen-share button sends op 18; the
+  stream's connection sends your screen (the desktop's picker on Linux) at
+  up to 1080p15, and op 22 sets it live; the button again sends op 19.
+
+**The test (by you), once everything's in:** the steps below cover V0; for
+the rest, start Mesh with `MESH_DC_VIDEO=1` too and try each button. The
+log lines named below, plus `video:` and `stream:` ones, say where it
+stops.
+
 **The test (by you):** quit Mesh, then run
 `MESH_DC_VIDEO_SPIKE=/tmp/dcvideo RUST_LOG=warn,mesh_dc=info,songbird=info ~/.local/bin/mesh-launch`,
 join a voice channel where someone has their camera on, wait a minute, and

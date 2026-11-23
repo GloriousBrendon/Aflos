@@ -81,6 +81,12 @@ impl WsStream {
         Ok(res.map_err(Error::from).map(|m| self.0.send(m))?.await?)
     }
 
+    /// mesh-dc: any JSON message (one the model doesn't have).
+    pub(crate) async fn send_raw_json(&mut self, value: &serde_json::Value) -> Result<()> {
+        let res = serde_json::to_string(value).map(Message::text);
+        Ok(res.map_err(Error::from).map(|m| self.0.send(m))?.await?)
+    }
+
     pub(crate) async fn send_binary(&mut self, value: &Event) -> Result<()> {
         let res = serialize_binary_event(value);
         let res = res.map(Message::binary);

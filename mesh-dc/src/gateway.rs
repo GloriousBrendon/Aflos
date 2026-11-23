@@ -52,27 +52,82 @@ pub enum Event {
     /// The state changed; rebuild and emit the snapshot.
     Snapshot,
     /// A message worth a desktop notification (DM, or a mention of us).
-    Notify { channel_id: String, title: String, body: String },
+    Notify {
+        channel_id: String,
+        title: String,
+        body: String,
+    },
     /// The voice server for a join we asked for: hand to songbird.
-    VoiceServer { guild_id: Option<String>, channel_id: String, endpoint: String, token: String, session_id: String },
+    VoiceServer {
+        guild_id: Option<String>,
+        channel_id: String,
+        endpoint: String,
+        token: String,
+        session_id: String,
+    },
     /// We left / were removed from voice.
     VoiceLeft,
     /// The token was rejected; the caller signs out.
     InvalidSession,
     /// The channel Mesh has open changed; re-fetch its messages.
     ChannelDirty(String),
+    /// A Go Live stream's voice server (ours to share, or one we watch).
+    StreamServer {
+        key: String,
+        rtc_server_id: String,
+        endpoint: String,
+        token: String,
+        session_id: String,
+    },
+    /// A stream ended, or we stopped watching it.
+    StreamGone(String),
+}
+
+/// A Go Live stream's key: `guild:<guild>:<channel>:<owner>` in a server,
+/// `call:<channel>:<owner>` in a DM call.
+pub fn stream_key(guild: Option<&str>, channel: &str, owner: &str) -> String {
+    match guild {
+        Some(g) => format!("guild:{g}:{channel}:{owner}"),
+        None => format!("call:{channel}:{owner}"),
+    }
 }
 
 /// Commands into the gateway task.
 pub enum Cmd {
     /// Join a guild voice channel or a DM/group call (`guild_id` None for DMs).
-    JoinVoice { guild_id: Option<String>, channel_id: String },
+    JoinVoice {
+        guild_id: Option<String>,
+        channel_id: String,
+    },
     LeaveVoice,
     /// Update our voice flags in place (mute/deaf/video) via op 4.
-    VoiceFlags { self_mute: bool, self_deaf: bool, self_video: bool },
+    VoiceFlags {
+        self_mute: bool,
+        self_deaf: bool,
+        self_video: bool,
+    },
     /// The member list of a guild, as seen from one of its channels (op 37,
     /// what the official client sends for its member sidebar).
-    Members { guild_id: String, channel_id: String },
+    Members {
+        guild_id: String,
+        channel_id: String,
+    },
+    /// Go Live (design/DISCORD-VIDEO.md V3, V4): start sharing our screen in
+    /// a voice channel (op 18), end a stream (op 19), watch one (op 20).
+    StreamCreate {
+        guild_id: Option<String>,
+        channel_id: String,
+    },
+    StreamDelete {
+        key: String,
+    },
+    StreamWatch {
+        key: String,
+    },
+    /// Our stream live (op 22, `paused: false`) once its connection is up.
+    StreamLive {
+        key: String,
+    },
 }
 
 /// Everything the snapshot is built from, kept current by dispatch events.
@@ -111,6 +166,11 @@ pub struct State {
     /// guild id -> its member list's rows (groups and members), from
     /// `GUILD_MEMBER_LIST_UPDATE`.
     pub member_lists: HashMap<String, Vec<Value>>,
+    /// Go Live: each stream key's RTC server (from `STREAM_CREATE`), the
+    /// streams we watch (keys), and whether we share our screen.
+    pub stream_rtc: HashMap<String, String>,
+    pub watching: std::collections::HashSet<String>,
+    pub sharing: bool,
 }
 
 impl State {
@@ -207,7 +267,10 @@ async fn session(token: &str, state: &tokio::sync::Mutex<State>, events: &mpsc::
 async fn command_frame(cmd: Cmd, state: &tokio::sync::Mutex<State>) -> String {
     let mut s = state.lock().await;
     match cmd {
-        Cmd::JoinVoice { guild_id, channel_id } => {
+        Cmd::JoinVoice {
+            guild_id,
+            channel_id,
+        } => {
             s.pending_join = Some((guild_id.clone(), channel_id.clone()));
             s.self_video = false;
             json!({ "op": 4, "d": { "guild_id": guild_id, "channel_id": channel_id, "self_mute": s.self_mute, "self_deaf": s.self_deaf, "self_video": false } }).to_string()
@@ -218,14 +281,43 @@ async fn command_frame(cmd: Cmd, state: &tokio::sync::Mutex<State>) -> String {
             s.rtc_connected = false;
             json!({ "op": 4, "d": { "guild_id": guild, "channel_id": Value::Null, "self_mute": s.self_mute, "self_deaf": s.self_deaf, "self_video": false } }).to_string()
         }
-        Cmd::Members { guild_id, channel_id } => {
+        Cmd::Members {
+            guild_id,
+            channel_id,
+        } => {
             let mut channels = serde_json::Map::new();
             channels.insert(channel_id, json!([[0, 99]]));
             let mut subs = serde_json::Map::new();
             subs.insert(guild_id, json!({ "typing": true, "activities": true, "threads": false, "channels": channels }));
             json!({ "op": 37, "d": { "subscriptions": subs } }).to_string()
         }
-        Cmd::VoiceFlags { self_mute, self_deaf, self_video } => {
+        Cmd::StreamCreate {
+            guild_id,
+            channel_id,
+        } => {
+            s.sharing = true;
+            let kind = if guild_id.is_some() { "guild" } else { "call" };
+            json!({ "op": 18, "d": { "type": kind, "guild_id": guild_id, "channel_id": channel_id, "preferred_region": Value::Null } }).to_string()
+        }
+        Cmd::StreamDelete { key } => {
+            s.watching.remove(&key);
+            if s.me_id().is_some_and(|me| key.ends_with(&format!(":{me}"))) {
+                s.sharing = false;
+            }
+            json!({ "op": 19, "d": { "stream_key": key } }).to_string()
+        }
+        Cmd::StreamLive { key } => {
+            json!({ "op": 22, "d": { "stream_key": key, "paused": false } }).to_string()
+        }
+        Cmd::StreamWatch { key } => {
+            s.watching.insert(key.clone());
+            json!({ "op": 20, "d": { "stream_key": key } }).to_string()
+        }
+        Cmd::VoiceFlags {
+            self_mute,
+            self_deaf,
+            self_video,
+        } => {
             s.self_mute = self_mute;
             s.self_deaf = self_deaf;
             s.self_video = self_video;
@@ -285,12 +377,20 @@ fn inflate_payload(msg: &Ws, inflate: &mut Decompress, buf: &mut Vec<u8>) -> R<O
 }
 
 /// Applies a dispatch event to the state; returns whether the snapshot changed.
-async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events: &mpsc::UnboundedSender<Event>) -> bool {
+async fn dispatch(
+    t: &str,
+    d: &Value,
+    state: &tokio::sync::Mutex<State>,
+    events: &mpsc::UnboundedSender<Event>,
+) -> bool {
     let mut s = state.lock().await;
     match t {
         "READY" => {
             s.me = d.get("user").cloned();
-            s.session_id = d.get("session_id").and_then(Value::as_str).map(str::to_owned);
+            s.session_id = d
+                .get("session_id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
             if let Some(users) = d.get("users").and_then(Value::as_array) {
                 for u in users {
                     if let Some(id) = u.get("id").and_then(Value::as_str) {
@@ -298,31 +398,57 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
                     }
                 }
             }
-            for g in d.get("guilds").and_then(Value::as_array).into_iter().flatten() {
+            for g in d
+                .get("guilds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
                 index_guild(&mut s, g);
             }
             // Our member in each guild, in the guilds' order.
-            let guilds = d.get("guilds").and_then(Value::as_array).into_iter().flatten();
-            let merged = d.get("merged_members").and_then(Value::as_array).into_iter().flatten();
+            let guilds = d
+                .get("guilds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten();
+            let merged = d
+                .get("merged_members")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten();
             for (g, members) in guilds.zip(merged) {
-                if let (Some(gid), Some(me)) = (g.get("id").and_then(Value::as_str), members.get(0)) {
+                if let (Some(gid), Some(me)) = (g.get("id").and_then(Value::as_str), members.get(0))
+                {
                     s.my_roles.insert(gid.to_owned(), role_ids(me));
                 }
             }
             // A re-identify (reconnect without resume) sends READY again with the full list.
             s.dm_channels.clear();
             s.calls.clear();
-            for ch in d.get("private_channels").and_then(Value::as_array).into_iter().flatten() {
+            for ch in d
+                .get("private_channels")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
                 if let Some(id) = ch.get("id").and_then(Value::as_str) {
                     s.channels.insert(id.to_owned(), ch.clone());
                 }
                 s.dm_channels.push(ch.clone());
             }
             if let Some(rs) = d.get("read_state") {
-                let entries = rs.get("entries").and_then(Value::as_array).or_else(|| rs.as_array());
+                let entries = rs
+                    .get("entries")
+                    .and_then(Value::as_array)
+                    .or_else(|| rs.as_array());
                 for e in entries.into_iter().flatten() {
                     if let Some(id) = e.get("id").and_then(Value::as_str) {
-                        let last = e.get("last_message_id").and_then(Value::as_str).unwrap_or("0").to_owned();
+                        let last = e
+                            .get("last_message_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or("0")
+                            .to_owned();
                         let mentions = e.get("mention_count").and_then(Value::as_u64).unwrap_or(0);
                         s.read_state.insert(id.to_owned(), (last, mentions));
                     }
@@ -332,8 +458,16 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
         }
         "READY_SUPPLEMENTAL" => {
             // Per-guild voice states that READY leaves out.
-            for g in d.get("guilds").and_then(Value::as_array).into_iter().flatten() {
-                if let (Some(gid), Some(vs)) = (g.get("id").and_then(Value::as_str), g.get("voice_states").and_then(Value::as_array)) {
+            for g in d
+                .get("guilds")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+            {
+                if let (Some(gid), Some(vs)) = (
+                    g.get("id").and_then(Value::as_str),
+                    g.get("voice_states").and_then(Value::as_array),
+                ) {
                     let map = s.voice.entry(gid.to_owned()).or_default();
                     for v in vs {
                         if let Some(uid) = v.get("user_id").and_then(Value::as_str) {
@@ -356,10 +490,18 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
             true
         }
         "GUILD_MEMBER_LIST_UPDATE" => {
-            let Some(gid) = d.get("guild_id").and_then(Value::as_str) else { return false };
+            let Some(gid) = d.get("guild_id").and_then(Value::as_str) else {
+                return false;
+            };
             let st = &mut *s;
             let rows = st.member_lists.entry(gid.to_owned()).or_default();
-            apply_list_ops(rows, d.get("ops").and_then(Value::as_array).map(Vec::as_slice).unwrap_or_default());
+            apply_list_ops(
+                rows,
+                d.get("ops")
+                    .and_then(Value::as_array)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
+            );
             for row in rows.iter() {
                 if let Some(u) = row.get("member").and_then(|m| m.get("user"))
                     && let Some(id) = u.get("id").and_then(Value::as_str)
@@ -371,7 +513,12 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
         }
         "GUILD_MEMBER_UPDATE" => {
             let me = s.me_id();
-            let ours = d.get("user").and_then(|u| u.get("id")).and_then(Value::as_str).map(str::to_owned) == me;
+            let ours = d
+                .get("user")
+                .and_then(|u| u.get("id"))
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                == me;
             if let (true, Some(gid)) = (ours, d.get("guild_id").and_then(Value::as_str)) {
                 s.my_roles.insert(gid.to_owned(), role_ids(d));
                 return true;
@@ -393,7 +540,14 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
         // DM and group calls (a user account's gateway only): who's being rung.
         "CALL_CREATE" | "CALL_UPDATE" => {
             if let Some(id) = d.get("channel_id").and_then(Value::as_str) {
-                let ringing = d.get("ringing").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_owned).collect();
+                let ringing = d
+                    .get("ringing")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect();
                 s.calls.insert(id.to_owned(), ringing);
             }
             true
@@ -415,7 +569,10 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
             false
         }
         "MESSAGE_ACK" => {
-            if let (Some(id), Some(last)) = (d.get("channel_id").and_then(Value::as_str), d.get("message_id").and_then(Value::as_str)) {
+            if let (Some(id), Some(last)) = (
+                d.get("channel_id").and_then(Value::as_str),
+                d.get("message_id").and_then(Value::as_str),
+            ) {
                 let entry = s.read_state.entry(id.to_owned()).or_default();
                 entry.0 = last.to_owned();
                 entry.1 = d.get("mention_count").and_then(Value::as_u64).unwrap_or(0);
@@ -432,15 +589,83 @@ async fn dispatch(t: &str, d: &Value, state: &tokio::sync::Mutex<State>, events:
             }
             true
         }
+        // Go Live: a stream's RTC server, then its voice server.
+        "STREAM_CREATE" => {
+            if let (Some(key), Some(rtc)) = (
+                d.get("stream_key").and_then(Value::as_str),
+                d.get("rtc_server_id").and_then(Value::as_str),
+            ) {
+                s.stream_rtc.insert(key.to_owned(), rtc.to_owned());
+            }
+            false
+        }
+        "STREAM_SERVER_UPDATE" => {
+            let key = d
+                .get("stream_key")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let endpoint = d
+                .get("endpoint")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let token = d
+                .get("token")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            if let (Some(rtc), Some(session_id), false) = (
+                s.stream_rtc.get(&key).cloned(),
+                s.session_id.clone(),
+                endpoint.is_empty(),
+            ) {
+                let _ = events.send(Event::StreamServer {
+                    key,
+                    rtc_server_id: rtc,
+                    endpoint,
+                    token,
+                    session_id,
+                });
+            }
+            false
+        }
+        "STREAM_DELETE" => {
+            if let Some(key) = d.get("stream_key").and_then(Value::as_str) {
+                s.stream_rtc.remove(key);
+                s.watching.remove(key);
+                if s.me_id().is_some_and(|me| key.ends_with(&format!(":{me}"))) {
+                    s.sharing = false;
+                }
+                let _ = events.send(Event::StreamGone(key.to_owned()));
+            }
+            true
+        }
         "VOICE_SERVER_UPDATE" => {
-            let endpoint = d.get("endpoint").and_then(Value::as_str).unwrap_or_default().to_owned();
-            let token = d.get("token").and_then(Value::as_str).unwrap_or_default().to_owned();
+            let endpoint = d
+                .get("endpoint")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
+            let token = d
+                .get("token")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned();
             let guild_id = d.get("guild_id").and_then(Value::as_str).map(str::to_owned);
             let (session_id, pending) = (s.session_id.clone(), s.pending_join.clone());
-            if let (Some(session_id), Some((_, channel_id)), false) = (session_id, pending, endpoint.is_empty()) {
+            if let (Some(session_id), Some((_, channel_id)), false) =
+                (session_id, pending, endpoint.is_empty())
+            {
                 s.voice_channel = Some(channel_id.clone());
                 s.voice_guild = guild_id.clone();
-                let _ = events.send(Event::VoiceServer { guild_id, channel_id, endpoint, token, session_id });
+                let _ = events.send(Event::VoiceServer {
+                    guild_id,
+                    channel_id,
+                    endpoint,
+                    token,
+                    session_id,
+                });
             }
             s.pending_join = None;
             true
@@ -459,7 +684,11 @@ pub fn apply_list_ops(rows: &mut Vec<Value>, ops: &[Value]) {
             .and_then(|r| Some((r.first()?.as_u64()? as usize, r.get(1)?.as_u64()? as usize)));
         match op.get("op").and_then(Value::as_str) {
             Some("SYNC") => {
-                let (Some((from, _)), Some(items)) = (range, op.get("items").and_then(Value::as_array)) else { continue };
+                let (Some((from, _)), Some(items)) =
+                    (range, op.get("items").and_then(Value::as_array))
+                else {
+                    continue;
+                };
                 if rows.len() < from + items.len() {
                     rows.resize(from + items.len(), Value::Null);
                 }
@@ -471,10 +700,10 @@ pub fn apply_list_ops(rows: &mut Vec<Value>, ops: &[Value]) {
                 }
             }
             Some("UPDATE") => {
-                if let (Some(i), Some(item)) = (index, op.get("item")) {
-                    if let Some(row) = rows.get_mut(i) {
-                        *row = item.clone();
-                    }
+                if let (Some(i), Some(item)) = (index, op.get("item"))
+                    && let Some(row) = rows.get_mut(i)
+                {
+                    *row = item.clone();
                 }
             }
             Some("DELETE") => {
@@ -499,9 +728,13 @@ pub fn apply_list_ops(rows: &mut Vec<Value>, ops: &[Value]) {
 
 /// A member object's role ids.
 fn role_ids(member: &Value) -> Vec<String> {
-    (member.get("roles").and_then(Value::as_array).into_iter().flatten())
-        .filter_map(|r| r.as_str().map(str::to_owned))
-        .collect()
+    (member
+        .get("roles")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten())
+    .filter_map(|r| r.as_str().map(str::to_owned))
+    .collect()
 }
 
 fn index_guild(s: &mut State, g: &Value) {
@@ -643,7 +876,10 @@ mod tests {
         let m = |id: &str| json!({ "member": { "user": { "id": id } } });
         let g = |id: &str| json!({ "group": { "id": id, "count": 1 } });
         let mut rows = Vec::new();
-        super::apply_list_ops(&mut rows, &[json!({ "op": "SYNC", "range": [0, 99], "items": [g("online"), m("a"), m("b")] })]);
+        super::apply_list_ops(
+            &mut rows,
+            &[json!({ "op": "SYNC", "range": [0, 99], "items": [g("online"), m("a"), m("b")] })],
+        );
         assert_eq!(rows.len(), 3);
         super::apply_list_ops(
             &mut rows,
@@ -653,9 +889,15 @@ mod tests {
                 json!({ "op": "DELETE", "index": 3 }),
             ],
         );
-        let ids: Vec<&str> = rows.iter().filter_map(|r| r["member"]["user"]["id"].as_str()).collect();
+        let ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r["member"]["user"]["id"].as_str())
+            .collect();
         assert_eq!(ids, ["a2", "c"]);
-        super::apply_list_ops(&mut rows, &[json!({ "op": "INVALIDATE", "range": [1, 99] })]);
+        super::apply_list_ops(
+            &mut rows,
+            &[json!({ "op": "INVALIDATE", "range": [1, 99] })],
+        );
         assert_eq!(rows.len(), 1, "invalidated rows go");
     }
 
@@ -668,15 +910,20 @@ mod tests {
         let msg = br#"{"op":11}"#;
         // compress_vec only writes into spare capacity, so reserve generously.
         let mut packet = Vec::with_capacity(256);
-        comp.compress_vec(msg, &mut packet, FlushCompress::Sync).unwrap();
+        comp.compress_vec(msg, &mut packet, FlushCompress::Sync)
+            .unwrap();
         assert_eq!(&packet[packet.len() - 4..], &[0, 0, 0xff, 0xff]);
         // Split the packet: the first half must not yield, the whole one must.
         let mut inflate = Decompress::new(true);
         let mut buf = Vec::new();
         // A fragment without the 00 00 ff ff sync flush must not yield yet.
-        assert_eq!(inflate_payload(&Ws::binary(packet[..1].to_vec()), &mut inflate, &mut buf).unwrap(), None);
+        assert_eq!(
+            inflate_payload(&Ws::binary(packet[..1].to_vec()), &mut inflate, &mut buf).unwrap(),
+            None
+        );
         // The rest completes the frame and decodes to the original message.
-        let out = inflate_payload(&Ws::binary(packet[1..].to_vec()), &mut inflate, &mut buf).unwrap();
+        let out =
+            inflate_payload(&Ws::binary(packet[1..].to_vec()), &mut inflate, &mut buf).unwrap();
         assert_eq!(out.as_deref(), Some(&msg[..]));
     }
 
@@ -690,8 +937,11 @@ mod tests {
         for n in [200_000usize, 50] {
             let msg = format!(r#"{{"op":0,"d":"{}"}}"#, "a".repeat(n));
             let mut packet = Vec::with_capacity(msg.len() + 1024);
-            comp.compress_vec(msg.as_bytes(), &mut packet, FlushCompress::Sync).unwrap();
-            let out = inflate_payload(&Ws::binary(packet), &mut inflate, &mut buf).unwrap().unwrap();
+            comp.compress_vec(msg.as_bytes(), &mut packet, FlushCompress::Sync)
+                .unwrap();
+            let out = inflate_payload(&Ws::binary(packet), &mut inflate, &mut buf)
+                .unwrap()
+                .unwrap();
             assert_eq!(out, msg.as_bytes());
         }
     }
@@ -700,7 +950,8 @@ mod tests {
     async fn repeated_ready_does_not_duplicate_dms() {
         let state = tokio::sync::Mutex::new(State::default());
         let (tx, _rx) = mpsc::unbounded_channel();
-        let ready = json!({ "private_channels": [{ "id": "500", "type": 1, "recipient_ids": ["2"] }] });
+        let ready =
+            json!({ "private_channels": [{ "id": "500", "type": 1, "recipient_ids": ["2"] }] });
         for _ in 0..3 {
             dispatch("READY", &ready, &state, &tx).await;
         }
@@ -710,7 +961,9 @@ mod tests {
     #[test]
     fn super_properties_is_base64_json() {
         use base64::Engine as _;
-        let decoded = base64::engine::general_purpose::STANDARD.decode(super_properties()).unwrap();
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(super_properties())
+            .unwrap();
         let v: Value = serde_json::from_slice(&decoded).unwrap();
         assert_eq!(v["client_build_number"], CLIENT_BUILD);
         assert_eq!(v["os"], "Windows");

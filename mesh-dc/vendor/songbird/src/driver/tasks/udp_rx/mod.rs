@@ -1,5 +1,5 @@
 mod decode_sizes;
-mod h264;
+pub(crate) mod h264;
 mod playout_buffer;
 mod ssrc_state;
 
