@@ -36,6 +36,9 @@ pub(crate) struct Mesh {
     pub call: Option<mesh::Call>,
     /// Who's in each voice channel: by Space and channel ID.
     pub voice: HashMap<(String, String), Vec<String>>,
+    /// Push-to-talk is on (config.toml), and whether its key is held.
+    pub ptt: bool,
+    pub ptt_down: bool,
     /// Who's typing, by name, in which chat, and when it was heard.
     pub typing: Option<(String, Vec<String>, std::time::Instant)>,
     /// The last received file clicked, and what that did (`mesh_dm::on_click`).

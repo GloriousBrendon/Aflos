@@ -761,6 +761,11 @@ impl Node {
     pub fn call_deafen(&self, on: bool) {
         self.call("callDeafen", &[if on { "true" } else { "false" }]);
     }
+    /// Push-to-talk: `off` (voice activity), `up` (on, the key released) or
+    /// `down` (held).
+    pub fn call_ptt(&self, mode: &str) {
+        self.call("callPtt", &[mode]);
+    }
     /// Microphone and speakers by name, `""` for the default.
     pub fn call_devices(&self, input: &str, output: &str) {
         self.call("callDevices", &[input, output]);

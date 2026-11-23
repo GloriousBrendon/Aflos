@@ -372,6 +372,9 @@ pub struct Config {
     /// Mesh Spaces (their IDs) muted: no notification but a mention.
     #[serde(default)]
     pub muted_spaces: Vec<String>,
+    /// Mesh calls send while Right Ctrl is held, instead of on voice.
+    #[serde(default)]
+    pub push_to_talk: bool,
 }
 
 /// The animated backgrounds (see rain.rs).

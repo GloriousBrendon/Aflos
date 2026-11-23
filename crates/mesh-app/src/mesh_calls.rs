@@ -18,6 +18,25 @@ pub(crate) enum Msg {
     Deafen,
     /// Joins a voice channel: its Space and channel.
     Join(String, String),
+    /// Push-to-talk switched on or off in settings.
+    PttSetting(bool),
+    /// Its key, pressed or let go.
+    Ptt(bool),
+}
+
+/// Push-to-talk's key: Right Ctrl, typed into nothing (C10, Q4).
+pub(crate) fn ptt_key(key: &keyboard::Key, location: keyboard::Location) -> bool {
+    matches!(key, keyboard::Key::Named(keyboard::key::Named::Control))
+        && location == keyboard::Location::Right
+}
+
+/// The engine's push-to-talk mode for what's set and held.
+fn ptt_mode(mesh: &mesh_ui::Mesh) -> &'static str {
+    match (mesh.ptt, mesh.ptt_down) {
+        (false, _) => "off",
+        (true, false) => "up",
+        (true, true) => "down",
+    }
 }
 
 /// The microphone and speakers picked in settings, `""` for the default.
@@ -46,6 +65,7 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
     let with_devices = |state: &App| {
         let (input, output) = devices(state);
         node.call_devices(&input, &output);
+        node.call_ptt(ptt_mode(&state.mesh));
     };
     match msg {
         Msg::Start(friend) => {
@@ -63,6 +83,17 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             with_devices(state);
             node.voice_join(&space, &channel);
         }
+        Msg::PttSetting(on) => {
+            (state.mesh.ptt, state.mesh.ptt_down) = (on, false);
+            persist(|c| c.push_to_talk = on);
+            node.call_ptt(ptt_mode(&state.mesh));
+        }
+        // Repeats and the key with push-to-talk off change nothing.
+        Msg::Ptt(down) if state.mesh.ptt && state.mesh.ptt_down != down => {
+            state.mesh.ptt_down = down;
+            node.call_ptt(ptt_mode(&state.mesh));
+        }
+        Msg::Ptt(_) => {}
     }
     Task::none()
 }
@@ -279,6 +310,24 @@ pub(crate) fn voice_row<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn push_to_talk_modes() {
+        let mut m = mesh_ui::Mesh::default();
+        assert_eq!(ptt_mode(&m), "off");
+        m.ptt_down = true;
+        assert_eq!(ptt_mode(&m), "off", "held with it off is nothing");
+        m.ptt = true;
+        assert_eq!(ptt_mode(&m), "down");
+        m.ptt_down = false;
+        assert_eq!(ptt_mode(&m), "up");
+        let ctrl = keyboard::Key::Named(keyboard::key::Named::Control);
+        assert!(ptt_key(&ctrl, keyboard::Location::Right));
+        assert!(
+            !ptt_key(&ctrl, keyboard::Location::Left),
+            "Left Ctrl is for shortcuts"
+        );
+    }
 
     /// Every way a call ends that needs saying says something; a plain end
     /// or leaving doesn't.

@@ -1433,7 +1433,7 @@ fn boot() -> (App, Task<Message>) {
             screen,
             rain_time: 0.0,
         };
-    app.mesh.muted_spaces = config.muted_spaces.clone();
+    (app.mesh.muted_spaces, app.mesh.ptt) = (config.muted_spaces.clone(), config.push_to_talk);
     // With mesh-node, everything else waits until the Mesh identity is open.
     let task = if app.mesh_node.is_some() { Task::none() } else { start_app(&mut app) };
     (app, Task::batch([task, open_window()]))
@@ -2000,6 +2000,10 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::WindowFocused(focused) => {
             state.window_focused = focused;
+            // Push-to-talk only while Mesh is focused: leaving lets go.
+            if !focused {
+                return mesh_calls::update(state, mesh_calls::Msg::Ptt(false));
+            }
             Task::none()
         }
         Message::Noop => Task::none(),
@@ -4067,6 +4071,16 @@ fn subscription(state: &App) -> Subscription<Message> {
         iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::ThemeCheck),
         // Global shortcuts work even while an input has focus.
         iced::event::listen_with(|event, _status, _window| match event {
+            iced::Event::Keyboard(keyboard::Event::KeyPressed { key, location, .. })
+                if mesh_calls::ptt_key(&key, location) =>
+            {
+                Some(Message::MeshCall(mesh_calls::Msg::Ptt(true)))
+            }
+            iced::Event::Keyboard(keyboard::Event::KeyReleased { key, location, .. })
+                if mesh_calls::ptt_key(&key, location) =>
+            {
+                Some(Message::MeshCall(mesh_calls::Msg::Ptt(false)))
+            }
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                 shortcut(key, modifiers)
             }
@@ -7245,7 +7259,7 @@ fn settings_page<'a>(session: &'a Session, state: &'a App, width: f32) -> Elemen
         ]
         .spacing(20)
         .into(),
-        SettingsPage::Voice => voice_page(session, p),
+        SettingsPage::Voice => voice_page(session, state.mesh.ptt, p),
         SettingsPage::Sounds => sounds_page(&state.sounds, p),
         SettingsPage::Keybinds => keybinds_page(p),
     };
@@ -7841,7 +7855,7 @@ fn rice_export<'a>(state: &'a App) -> Element<'a, Message> {
     .into()
 }
 
-fn voice_page<'a>(session: &'a Session, p: &'a theme::Palette) -> Element<'a, Message> {
+fn voice_page<'a>(session: &'a Session, ptt: bool, p: &'a theme::Palette) -> Element<'a, Message> {
     let discord = match &session.discord_voice {
         Some(theme::DiscordVoice::Url(url)) => format!("The 🎧 button opens {url} for Discord voice."),
         Some(theme::DiscordVoice::Command(cmd)) => format!("The 🎧 button runs `{cmd}` for Discord voice."),
@@ -7850,6 +7864,10 @@ fn voice_page<'a>(session: &'a Session, p: &'a theme::Palette) -> Element<'a, Me
     column![
         page_header("Voice & audio", "Devices for 1:1 calls, and Discord voice.", p),
         audio_view(session, p),
+        button(text(format!("{} Push to talk in Mesh calls: hold Right Ctrl while Mesh is focused", if ptt { "☑" } else { "☐" })).size(13))
+            .on_press(Message::MeshCall(mesh_calls::Msg::PttSetting(!ptt)))
+            .padding([4, 0])
+            .style(flat_button_style(p)),
         text(discord).size(13).color(p.text_muted()),
         text("Mesh calls have no echo cancellation yet: use headphones, or an EasyEffects input preset with an echo canceller.")
             .size(13)
