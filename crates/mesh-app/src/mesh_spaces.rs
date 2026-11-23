@@ -287,6 +287,8 @@ pub(crate) struct Form {
     channel_category: Option<String>,
     channel_admins: bool,
     channel_voice: bool,
+    /// A channel or category being renamed: its ID, and the name typed.
+    renaming: Option<(String, String)>,
     category: String,
     add: Option<String>,
     /// `end`, `leave` or `transfer:<id>`, waiting for a second click.
@@ -305,6 +307,12 @@ pub(crate) enum Msg {
     ChannelAdmins(bool),
     /// The new channel is a voice channel (SPEC-calls C8).
     ChannelVoice(bool),
+    /// Rename a channel or category (its ID, its name now), type, save.
+    RenameStart(String, String),
+    RenameText(String),
+    RenameDone,
+    /// A channel (or category) one up (true) or down among its neighbours.
+    Shift(String, bool),
     ChannelCreate,
     ChannelDelete(String),
     /// A channel, and whether only admins post.
@@ -403,6 +411,53 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
         Msg::ChannelCategory(pick) => f.channel_category = pick.id,
         Msg::ChannelAdmins(on) => f.channel_admins = on,
         Msg::ChannelVoice(on) => f.channel_voice = on,
+        Msg::RenameStart(id, name) => f.renaming = Some((id, name)),
+        Msg::RenameText(text) => {
+            if let Some((_, name)) = &mut f.renaming {
+                *name = text;
+            }
+        }
+        Msg::RenameDone => {
+            if let Some((id, name)) = f.renaming.take().filter(|(_, n)| !n.trim().is_empty()) {
+                let category = (m.spaces.iter().find(|x| x.id == s))
+                    .is_some_and(|x| x.categories.iter().any(|c| c.id == id));
+                if category {
+                    node.space_change("spaceCategoryRename", &[s, &id, name.trim()]);
+                } else {
+                    node.space_change("spaceRename", &[s, name.trim(), &id]);
+                }
+            }
+        }
+        Msg::Shift(id, up) => {
+            let Some(space) = m.spaces.iter().find(|x| x.id == s) else {
+                return Task::none();
+            };
+            if space.categories.iter().any(|c| c.id == id) {
+                let mut cats: Vec<&mesh::SpaceCategory> = space.categories.iter().collect();
+                cats.sort_by_key(|c| c.position);
+                let ids: Vec<String> = cats.iter().map(|c| c.id.clone()).collect();
+                for (at, cid) in reordered(&ids, &id, up).into_iter().flatten().enumerate() {
+                    if cats
+                        .iter()
+                        .any(|c| c.id == cid && usize::from(c.position) != at)
+                    {
+                        node.space_change("spaceCategoryMove", &[s, &cid, &at.to_string()]);
+                    }
+                }
+            } else if let Some(channels) = sections(space)
+                .into_iter()
+                .map(|(_, cs)| cs)
+                .find(|cs| cs.iter().any(|c| c.id == id))
+            {
+                let ids: Vec<String> = channels.iter().map(|c| c.id.clone()).collect();
+                let category = channels[0].category.clone().unwrap_or_default();
+                // Positions came from when each was made, across the Space:
+                // the whole section is numbered again.
+                for (at, cid) in reordered(&ids, &id, up).into_iter().flatten().enumerate() {
+                    node.space_change("spaceChannelMove", &[s, &cid, &category, &at.to_string()]);
+                }
+            }
+        }
         Msg::ChannelCreate if !f.channel.trim().is_empty() => {
             let who = if f.channel_admins {
                 "admins"
@@ -480,6 +535,19 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
         Msg::Rename | Msg::ChannelCreate | Msg::CategoryCreate => {}
     }
     Task::none()
+}
+
+/// `ids` with `id` swapped with its neighbour above (`up`) or below; `None`
+/// when it's already at that end, or not there.
+fn reordered(ids: &[String], id: &str, up: bool) -> Option<Vec<String>> {
+    let at = ids.iter().position(|x| x == id)?;
+    let other = if up { at.checked_sub(1)? } else { at + 1 };
+    if other >= ids.len() {
+        return None;
+    }
+    let mut out = ids.to_vec();
+    out.swap(at, other);
+    Some(out)
 }
 
 /// A flat text button, off when `msg` is `None`.
@@ -580,6 +648,44 @@ fn members<'a>(
     list.into()
 }
 
+/// A row's ↑, ↓ and Rename.
+fn edits<'a>(
+    row: iced::widget::Row<'a, Message>,
+    id: &str,
+    name: &str,
+    p: &'a theme::Palette,
+) -> iced::widget::Row<'a, Message> {
+    row.push(act(
+        "↑",
+        p.text(),
+        Some(Msg::Shift(id.to_string(), true)),
+        p,
+    ))
+    .push(act(
+        "↓",
+        p.text(),
+        Some(Msg::Shift(id.to_string(), false)),
+        p,
+    ))
+    .push(act(
+        "Rename",
+        p.text(),
+        Some(Msg::RenameStart(id.to_string(), name.to_string())),
+        p,
+    ))
+}
+
+/// The rename field, if `id` is the one being renamed.
+fn renaming<'a>(f: &Form, id: &str, p: &'a theme::Palette) -> Option<Element<'a, Message>> {
+    let (_, name) = f.renaming.as_ref().filter(|(r, _)| r == id)?;
+    let save = act("Save", p.accent(), Some(Msg::RenameDone), p);
+    Some(
+        row![input("", name, Msg::RenameText, Msg::RenameDone), save]
+            .spacing(6)
+            .into(),
+    )
+}
+
 /// A Space's categories as a pick list's entries, `none` first.
 fn category_picks(space: &mesh::Space, none: &str) -> Vec<Pick> {
     let mut cats: Vec<&mesh::SpaceCategory> = space.categories.iter().collect();
@@ -640,14 +746,21 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
                 p,
             ))
             .push(ui::section("categories", p));
-        for c in &space.categories {
+        let mut cats: Vec<&mesh::SpaceCategory> = space.categories.iter().collect();
+        cats.sort_by_key(|c| c.position);
+        for c in cats {
             let delete = act(
                 "Delete",
                 p.danger(),
                 Some(Msg::CategoryDelete(c.id.clone())),
                 p,
             );
-            col = col.push(line(c.name.clone(), p).push(delete));
+            col = col.push(match renaming(f, &c.id, p) {
+                Some(editing) => editing,
+                None => edits(line(c.name.clone(), p), &c.id, &c.name, p)
+                    .push(delete)
+                    .into(),
+            });
         }
         let new = input(
             "New category",
@@ -668,8 +781,12 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
             } else {
                 "everyone posts"
             };
+            if let Some(editing) = renaming(f, &c.id, p) {
+                col = col.push(editing);
+                continue;
+            }
             col = col.push(
-                line(format!("# {}", c.name), p)
+                edits(line(format!("# {}", c.name), p), &c.id, &c.name, p)
                     .push(pick_list(picks.clone(), at, moved).padding(4))
                     .push(act(
                         who,
@@ -863,6 +980,16 @@ mod tests {
         let (owner, admin) = (m(true, true, true), m(true, false, true));
         assert!(over(&owner, "admin") && over(&owner, "member") && !over(&owner, "owner"));
         assert!(!over(&admin, "admin") && over(&admin, "member"));
+    }
+
+    /// Up and down swap with the neighbour, and stop at the ends.
+    #[test]
+    fn reorder_by_one() {
+        let ids: Vec<String> = ["a", "b", "c"].map(String::from).to_vec();
+        assert_eq!(reordered(&ids, "b", true).unwrap(), ["b", "a", "c"]);
+        assert_eq!(reordered(&ids, "b", false).unwrap(), ["a", "c", "b"]);
+        assert!(reordered(&ids, "a", true).is_none() && reordered(&ids, "c", false).is_none());
+        assert!(reordered(&ids, "x", true).is_none());
     }
 
     /// Loose channels first, then categories by position (an empty one still

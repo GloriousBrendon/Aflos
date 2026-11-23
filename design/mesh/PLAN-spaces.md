@@ -638,8 +638,8 @@ blocker. Test 9 stays as the record, `--ignored`.
     Space (the owner's end). Make owner, Leave and Delete ask twice. Buttons
     follow mesh-dm's rules (unit test `what_each_role_may_do`). Added: New
     Space on Home, since nothing made one before.
-  - **Not done (small, for later):** renaming a channel or category, and
-    ordering them (a moved channel goes last in its category). Mute stays
+  - **Added 2026-11-23:** Rename, ↑ and ↓ on each channel and category in
+    Settings (a move numbers its section again). Mute stays
     per device in `config.toml`, not the plan's `spaceMute`, so it doesn't
     follow you to another device.
 

@@ -17,7 +17,8 @@ checks (spec tests 10 and 11) go to CAPABILITY-MAP *Before beta*.
   suppression with `nnnoiseless` now (built 2026-11-23, after the first
   draft of this plan had left it for later), echo cancellation after the
   group's first evening; a missed-call line; push-to-talk only while Mesh
-  is focused (not built yet: voice activity first); no group-DM calls;
+  is focused (built 2026-11-23: Right Ctrl, a switch in Voice & audio;
+  voice activity stays the default); no group-DM calls;
   32 kbit/s.
 - **Audio is a default-on `audio` feature of `mesh-node`.** The seed's
   Docker image builds without it (no ALSA, no CMake there), and a helper
