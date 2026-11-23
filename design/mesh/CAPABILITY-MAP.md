@@ -131,8 +131,13 @@ its steps are.
    it (a few minutes).
 6. **The module gates, two machines on different networks**: seed,
    routing, social, e2ee and dm Checkpoint C (each plan's last
-   checkpoint). They need a seed reachable from outside home: the VPS
-   (finding 6). One sitting, after it's up. e2ee's check sends a Mesh chat
+   checkpoint). They need a seed reachable from outside home. *The home
+   seed is (checked 2026-11-23): its relay answers on the public 443, and
+   a node outside (through a VPN, our relay only) published its record and
+   held a code that a node at home then resolved. No VPS needed for this.
+   The seed also takes callers direct on a forwarded UDP port (D8c), checked
+   from outside with no relay.*
+   One sitting. e2ee's check sends a Mesh chat
    message where it says a test note (retired 2026-11-12).
 7. **Mail through the home seed, from your own PC** (added 2026-11-13). *Covered by PLAN-packaging Task 5 (2026-11-14): it is done in that sitting, steps 6 to 8, and ticked there.*
    The home seed holds mail since Task 18 of PLAN-mailbox; this checks
