@@ -564,7 +564,7 @@ blocker. Test 9 stays as the record, `--ignored`.
   fail or break (an unverified lead: a member may not yet be allowed to
   connect to someone who doesn't hold the Space).
 
-- [ ] **Task 11b: The helper's channel API, to a DM's** (S12; *added
+- [x] **Task 11b: The helper's channel API, to a DM's** (S12; *added
   2026-11-16 at your review*). Found when starting Task 12: Space events
   already carry edits, deletes, reactions, replies, files, mentions and read
   markers (Tasks 1 to 4), but the helper only sends text and deletes, and a
@@ -586,6 +586,10 @@ blocker. Test 9 stays as the record, `--ignored`.
   - **Files:** Mesh-Node `crates/mesh-node/src/spaces.rs`, `mesh-dm`'s
     `space_store.rs` and `chat.rs`, `tests/spaces.rs`.
   - Size L.
+  - **Done 2026-11-23** (Mesh-Node `731e6c3`..`cad1c5f`): new commands
+    `spaceSendFile` and `spaceFetch` (opened as `meshDmFile`, its `id` the
+    Space's); a file-only post notifies with the file's name. Files are kept
+    under the Space's ID as a group's would be.
 
 ### Phase 4: Mesh-Voice
 
