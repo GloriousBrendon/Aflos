@@ -88,11 +88,13 @@ through the app's buttons.
   state now carries who the sender knows is in it, and a newcomer dials
   anyone on that list it hasn't heard from.
 - **The sequence number is 4 bytes, not 2**, so it never wraps in a call.
+- **Added after (Mesh-Node, same day):** both of a friend's devices ring
+  and the other stops when one answers (`both_devices_ring_and_one_answers`);
+  an engine from before calls, simulated with `--no-calls`, gives "update"
+  (`an_old_engine_needs_an_update`).
 - **Not done (later):** test 3's full 10 and the 11th "full" (the check is
-  in `voiceJoin`, untested at 10), test 7 against a real old engine, test 9's
-  measurements, both of a friend's devices ringing (one device each in the
-  tests), and a viewer who isn't in a voice channel waits up to 30 s to see
-  who's in it.
+  in `voiceJoin`, untested at 10), test 9's measurements, and a viewer who
+  isn't in a voice channel waits up to 30 s to see who's in it.
 
 **Before beta (by hand):** spec tests 10 and 11, and test 6 (relay only)
 and 9 (measurements), added to CAPABILITY-MAP.
