@@ -7,6 +7,17 @@ use super::*;
 use iced::widget::{column, pick_list, qr_code, row, scrollable};
 use mesh::State;
 
+/// The Friends page's tabs (Home → Friends).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Tab {
+    #[default]
+    Online,
+    All,
+    Pending,
+    Blocked,
+    Add,
+}
+
 /// The `mesh-node` side of the app.
 #[derive(Default)]
 pub(crate) struct Mesh {
@@ -45,6 +56,8 @@ pub(crate) struct Mesh {
     pub last_click: Option<(String, crate::mesh_dm::Click)>,
     /// New group, while it's open: the friends picked, and its name.
     new_group: Option<(Vec<String>, String)>,
+    /// The Friends page's open tab.
+    pub tab: Tab,
     form: Form,
     settings: Settings,
 }
@@ -1008,113 +1021,18 @@ pub(crate) fn manage(state: &App) -> Element<'_, Message> {
         );
     }
 
-    // Check an ID: the safety number both people read out (D7).
-    let mut check = column![
-        heading("check an id", p),
-        text("Paste a friend's ID, mesh:// link or friend code. Read the number to each other: if it matches, nobody is in the middle.")
+    // Friends, codes and Check an ID live on Home → Friends now.
+    let friends = column![
+        heading("friends", p),
+        text("Friends, requests and friend codes are on Home, under Friends.")
             .size(12)
             .color(p.text()),
-        field("THEIR ID OR CODE", &s.check, Msg::CheckInput, false, Msg::Check, p),
-        action("Check", if s.busy == Some("codeResolve") { "codeResolve" } else { "safetyNumber" }, (!s.check.trim().is_empty()).then_some(Msg::Check)),
-    ]
-    .spacing(8)
-    .extend(note("codeResolve"))
-    .extend(note("safetyNumber"));
-    if let Some((safety, qr)) = &s.safety {
-        let groups: Vec<&str> = safety.number.split_whitespace().collect();
-        let mut digits = column![].spacing(4);
-        for line in groups.chunks(4) {
-            digits = digits.push(text(line.join("  ")).font(iced::Font::MONOSPACE).size(15).color(p.text_bright()));
-        }
-        if let Some(code) = &s.resolved {
-            check = check.push(ui::sans(format!("The code {code} is this ID:"), 12.0, Weight::Normal, p.text()));
-        }
-        check = check.push(ui::mono(format!("with {}", safety.id), 11.0, p.text_muted())).push(digits);
-        if let Some(qr) = qr {
-            check = check.push(
-                container(qr_code(qr).cell_size(3).style(|_| qr_code::Style { cell: iced::Color::BLACK, background: iced::Color::WHITE }))
-                    .padding(10)
-                    .style(|_| container::Style { background: Some(iced::Color::WHITE.into()), border: iced::border::rounded(8), ..container::Style::default() }),
-            );
-        }
-        let social = &m.social;
-        let them = safety.id.as_str();
-        if let Some(friend) = social.friends.iter().find(|f| f.id == them) {
-            let (label, verified) = if friend.verified { ("Verified · undo", false) } else { ("Mark as verified", true) };
-            check = check.push(ui::sans(format!("Already friends: {}", friend_name(friend)), 12.0, Weight::Normal, p.text())).push(
-                button(ui::sans(label, 12.0, Weight::Normal, p.text_bright()))
-                    .on_press_maybe(s.busy.is_none().then(|| Message::MeshForm(Msg::Verify(friend.id.clone(), verified))))
-                    .padding([4, 10])
-                    .style(flat_button_style(p)),
-            );
-        } else if social.incoming.iter().any(|r| r.id == them) {
-            check = check.push(ui::sans("They've sent you a request: see Friends below.", 12.0, Weight::Normal, p.text()));
-        } else if social.blocked.iter().any(|b| b.id == them) {
-            check = check.push(ui::sans("You've blocked them. Unblock them under Friends first.", 12.0, Weight::Normal, p.warning()));
-        } else if social.outgoing.iter().any(|o| o.id == them) {
-            check = check.push(ui::sans("Asked: you'll be friends once their device connects to yours.", 12.0, Weight::Normal, p.text()));
-        } else if identity.id.as_deref() != Some(them) {
-            check = match &s.resolved {
-                // A live code can carry a request (SPEC-social D1).
-                Some(_) => check
-                    .push(field("NOTE (OPTIONAL)", &s.request_note, Msg::RequestNote, false, Msg::SendRequest, p))
-                    .push(action("Send friend request", "friendRequest", Some(Msg::SendRequest))),
-                // An ID alone can't: both of you add the other (D2).
-                None => check
-                    .push(text("An ID can't carry a request. Add theirs, and ask them to add yours: you're friends once both have.").size(12).color(p.text()))
-                    .push(field("SAVE THEM AS (OPTIONAL)", &s.nick, Msg::Nick, false, Msg::AddById, p))
-                    .push(action("Add by ID", "friendAdd", Some(Msg::AddById))),
-            };
-        }
-    }
-    check = check.extend(note("friendRequest")).extend(note("friendAdd")).extend(note("friendVerify"));
-
-    let friends = friends_view(state);
-
-    // Friend codes: short, expiring stand-ins for the ID, held by the seeds.
-    let expiry = s.expiry.unwrap_or(DEFAULT_EXPIRY);
-    let mut codes = column![
-        heading("friend codes", p),
-        text("Give someone a short code instead of your ID. Whoever types it in sees your ID; check the safety number together after.")
-            .size(12)
-            .color(p.text()),
-        row![
-            pick_list(EXPIRIES.map(|(l, _)| l).to_vec(), Some(expiry), |l| Message::MeshForm(Msg::Expiry(l))).padding(6),
-            pick_list(USES.map(|(l, _)| l).to_vec(), Some(s.uses.unwrap_or(DEFAULT_USES)), |l| Message::MeshForm(Msg::Uses(l))).padding(6),
-        ]
-        .spacing(8),
+        button(ui::sans("Open Friends →", 13.0, Weight::Normal, p.accent()))
+            .on_press(Message::ShowFriends(Tab::Online))
+            .padding([4, 0])
+            .style(flat_button_style(p)),
     ]
     .spacing(8);
-    if expiry == "Never expires" {
-        codes = codes.push(text("A code that never expires works until you revoke it.").size(12).color(p.warning()));
-    }
-    codes = codes.push(action("Make a code", "codeCreate", Some(Msg::MakeCode))).extend(note("codeCreate"));
-    for c in &m.codes {
-        let mut info = column![ui::mono(describe(c), 11.0, p.text_muted())].spacing(2);
-        if !c.held {
-            info = info.push(ui::mono("not saved to a seed yet", 11.0, p.warning()));
-        }
-        let new = s.made.as_deref() == Some(c.code.as_str());
-        let copied = s.code_copied.as_deref() == Some(c.code.as_str());
-        codes = codes.push(
-            row![
-                ui::mono_bold(c.code.clone(), 15.0, if new { p.accent() } else { p.text_bright() }),
-                info,
-                Space::new().width(Length::Fill),
-                button(ui::sans(if copied { "Copied" } else { "Copy" }, 12.0, Weight::Normal, p.text_bright()))
-                    .on_press(Message::MeshForm(Msg::CopyCode(c.code.clone())))
-                    .padding([4, 10])
-                    .style(flat_button_style(p)),
-                button(ui::sans("Revoke", 12.0, Weight::Normal, p.danger()))
-                    .on_press_maybe(s.busy.is_none().then(|| Message::MeshForm(Msg::RevokeCode(c.code.clone()))))
-                    .padding([4, 10])
-                    .style(flat_button_style(p)),
-            ]
-            .spacing(10)
-            .align_y(iced::Alignment::Center),
-        );
-    }
-    codes = codes.extend(note("codeRevoke"));
 
     // Network: is this device on Mesh, and can it reach another (a test until friends exist).
     let mut network = column![
@@ -1212,8 +1130,161 @@ pub(crate) fn manage(state: &App) -> Element<'_, Message> {
     .spacing(8)
     .extend(note("idExport"));
 
-    scrollable(column![id, friends, codes, check, network, devices, keep, password, backup].spacing(22).padding(iced::Padding { right: 12.0, ..iced::Padding::ZERO }))
-        .height(Length::Fill)
+    scrollable(
+        column![id, friends, network, devices, keep, password, backup]
+            .spacing(22)
+            .padding(iced::Padding {
+                right: 12.0,
+                ..iced::Padding::ZERO
+            }),
+    )
+    .height(Length::Fill)
+    .into()
+}
+
+/// The Friends page's Add friend tab: your friend codes, and a friend's
+/// code (or ID) to check and send a request to.
+fn add_view(state: &App) -> Element<'_, Message> {
+    let (p, l) = (&state.palette, &state.layout);
+    let m = &state.mesh;
+    let s = &m.settings;
+    let Some(identity) = m.identity.as_ref() else {
+        return column![].into();
+    };
+    let note = |func: &str| -> Option<Element<'_, Message>> {
+        let (_, ok, message) = s.note.as_ref().filter(|(f, ..)| f == func)?;
+        Some(text(message.clone()).size(12).color(if *ok { p.success() } else { p.danger() }).into())
+    };
+    let action = |label: &'static str, busy_fn: &'static str, msg: Option<Msg>| {
+        let label = if s.busy == Some(busy_fn) { "One moment…" } else { label };
+        ui::primary_button(
+            container(ui::sans(label, 13.0, Weight::Semibold, p.accent_text())).center_x(Length::Fill),
+            msg.filter(|_| s.busy.is_none()).map(Message::MeshForm),
+            p,
+            l,
+        )
+        .width(Length::Fill)
+        .padding([8, 12])
+    };
+
+    // Check an ID: the safety number both people read out (D7).
+    let mut check = column![
+        heading("add a friend", p),
+        text("Type a friend's code (or paste their ID or mesh:// link), then send them a request. The safety number lets you check, together, that nobody is in the middle.")
+            .size(12)
+            .color(p.text()),
+        field("THEIR CODE OR ID", &s.check, Msg::CheckInput, false, Msg::Check, p),
+        action("Check", if s.busy == Some("codeResolve") { "codeResolve" } else { "safetyNumber" }, (!s.check.trim().is_empty()).then_some(Msg::Check)),
+    ]
+    .spacing(8)
+    .extend(note("codeResolve"))
+    .extend(note("safetyNumber"));
+    if let Some((safety, qr)) = &s.safety {
+        let groups: Vec<&str> = safety.number.split_whitespace().collect();
+        let mut digits = column![].spacing(4);
+        for line in groups.chunks(4) {
+            digits = digits.push(text(line.join("  ")).font(iced::Font::MONOSPACE).size(15).color(p.text_bright()));
+        }
+        if let Some(code) = &s.resolved {
+            check = check.push(ui::sans(format!("The code {code} is this ID:"), 12.0, Weight::Normal, p.text()));
+        }
+        check = check.push(ui::mono(format!("with {}", safety.id), 11.0, p.text_muted())).push(digits);
+        if let Some(qr) = qr {
+            check = check.push(
+                container(qr_code(qr).cell_size(3).style(|_| qr_code::Style { cell: iced::Color::BLACK, background: iced::Color::WHITE }))
+                    .padding(10)
+                    .style(|_| container::Style { background: Some(iced::Color::WHITE.into()), border: iced::border::rounded(8), ..container::Style::default() }),
+            );
+        }
+        let social = &m.social;
+        let them = safety.id.as_str();
+        if let Some(friend) = social.friends.iter().find(|f| f.id == them) {
+            let (label, verified) = if friend.verified { ("Verified · undo", false) } else { ("Mark as verified", true) };
+            check = check.push(ui::sans(format!("Already friends: {}", friend_name(friend)), 12.0, Weight::Normal, p.text())).push(
+                button(ui::sans(label, 12.0, Weight::Normal, p.text_bright()))
+                    .on_press_maybe(s.busy.is_none().then(|| Message::MeshForm(Msg::Verify(friend.id.clone(), verified))))
+                    .padding([4, 10])
+                    .style(flat_button_style(p)),
+            );
+        } else if social.incoming.iter().any(|r| r.id == them) {
+            check = check.push(ui::sans("They've sent you a request: see Pending.", 12.0, Weight::Normal, p.text()));
+        } else if social.blocked.iter().any(|b| b.id == them) {
+            check = check.push(ui::sans("You've blocked them. Unblock them under Blocked first.", 12.0, Weight::Normal, p.warning()));
+        } else if social.outgoing.iter().any(|o| o.id == them) {
+            check = check.push(ui::sans("Asked: you'll be friends once their device connects to yours.", 12.0, Weight::Normal, p.text()));
+        } else if identity.id.as_deref() != Some(them) {
+            check = match &s.resolved {
+                // A live code can carry a request (SPEC-social D1).
+                Some(_) => check
+                    .push(field("NOTE (OPTIONAL)", &s.request_note, Msg::RequestNote, false, Msg::SendRequest, p))
+                    .push(action("Send friend request", "friendRequest", Some(Msg::SendRequest))),
+                // An ID alone can't: both of you add the other (D2).
+                None => check
+                    .push(text("An ID can't carry a request. Add theirs, and ask them to add yours: you're friends once both have.").size(12).color(p.text()))
+                    .push(field("SAVE THEM AS (OPTIONAL)", &s.nick, Msg::Nick, false, Msg::AddById, p))
+                    .push(action("Add by ID", "friendAdd", Some(Msg::AddById))),
+            };
+        }
+    }
+    check = check.extend(note("friendRequest")).extend(note("friendAdd")).extend(note("friendVerify"));
+
+    // Friend codes: short, expiring stand-ins for the ID, held by the seeds.
+    let expiry = s.expiry.unwrap_or(DEFAULT_EXPIRY);
+    let mut codes = column![
+        heading("your friend code", p),
+        text("Give someone a short code instead of your ID. Whoever types it in sees your ID; check the safety number together after.")
+            .size(12)
+            .color(p.text()),
+        row![
+            pick_list(EXPIRIES.map(|(l, _)| l).to_vec(), Some(expiry), |l| Message::MeshForm(Msg::Expiry(l))).padding(6),
+            pick_list(USES.map(|(l, _)| l).to_vec(), Some(s.uses.unwrap_or(DEFAULT_USES)), |l| Message::MeshForm(Msg::Uses(l))).padding(6),
+        ]
+        .spacing(8),
+    ]
+    .spacing(8);
+    if expiry == "Never expires" {
+        codes = codes.push(text("A code that never expires works until you revoke it.").size(12).color(p.warning()));
+    }
+    codes = codes.push(action("Make a code", "codeCreate", Some(Msg::MakeCode))).extend(note("codeCreate"));
+    for c in &m.codes {
+        let mut info = column![ui::mono(describe(c), 11.0, p.text_muted())].spacing(2);
+        if !c.held {
+            info = info.push(ui::mono("not saved to a seed yet", 11.0, p.warning()));
+        }
+        let new = s.made.as_deref() == Some(c.code.as_str());
+        let copied = s.code_copied.as_deref() == Some(c.code.as_str());
+        codes = codes.push(
+            row![
+                ui::mono_bold(c.code.clone(), 15.0, if new { p.accent() } else { p.text_bright() }),
+                info,
+                Space::new().width(Length::Fill),
+                button(ui::sans(if copied { "Copied" } else { "Copy" }, 12.0, Weight::Normal, p.text_bright()))
+                    .on_press(Message::MeshForm(Msg::CopyCode(c.code.clone())))
+                    .padding([4, 10])
+                    .style(flat_button_style(p)),
+                button(ui::sans("Revoke", 12.0, Weight::Normal, p.danger()))
+                    .on_press_maybe(s.busy.is_none().then(|| Message::MeshForm(Msg::RevokeCode(c.code.clone()))))
+                    .padding([4, 10])
+                    .style(flat_button_style(p)),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+        );
+    }
+    codes = codes.extend(note("codeRevoke"));
+
+    let others = button(ui::sans(
+        "Add someone on Discord or Matrix instead…",
+        12.0,
+        Weight::Normal,
+        p.accent(),
+    ))
+    .on_press(Message::OpenAddFriendDialog)
+    .padding([4, 0])
+    .style(flat_button_style(p));
+    column![codes, check, others]
+        .spacing(22)
+        .max_width(560)
         .into()
 }
 
@@ -1238,12 +1309,11 @@ pub(crate) fn home(state: &App) -> Option<Element<'_, Message>> {
     if state.mesh_node.is_none() || !open(state) {
         return None;
     }
-    let p = &state.palette;
-    let more = button(ui::sans("Friend codes and Check an ID →", 12.0, Weight::Normal, p.accent()))
-        .on_press(Message::AccountsOpen("mesh"))
-        .padding([4, 0])
-        .style(flat_button_style(p));
-    Some(column![friends_view(state), crate::mesh_spaces::new_space(state), more].spacing(12).into())
+    let mut page = column![friends_view(state)].spacing(12);
+    if matches!(state.mesh.tab, Tab::Online | Tab::All) {
+        page = page.push(crate::mesh_spaces::new_space(state));
+    }
+    Some(page.into())
 }
 
 /// A flat button whose label is made at runtime.
@@ -1274,24 +1344,39 @@ fn friends_view(state: &App) -> Element<'_, Message> {
             .width(Length::Fill)
     };
     let status = STATUSES.iter().find(|(_, a)| *a == social.status).map_or("Online", |(l, _)| *l);
-    let mut col = column![
-        heading("friends", p),
-        text("Someone with one of your live friend codes can send you a request. Nobody else can reach you, or tell whether you're online.")
-            .size(12)
-            .color(p.text()),
-        row![
-            ui::mono("YOUR STATUS", 11.0, p.text_muted()),
-            pick_list(STATUSES.map(|(l, _)| l).to_vec(), Some(status), |l| Message::MeshForm(Msg::Status(l))).padding(6),
-        ]
-        .spacing(10)
-        .align_y(iced::Alignment::Center),
+    let tab = state.mesh.tab;
+    let tab_button = |label: String, t: Tab| {
+        let on = tab == t;
+        let label = ui::sans(label, 13.0, if on { Weight::Semibold } else { Weight::Normal }, if on { p.text_bright() } else { p.text() });
+        let b = ui::row_button(label, Message::ShowFriends(t), on, p, &state.layout).width(Length::Shrink).padding([4, 12]);
+        if t == Tab::Add { b.style(flat_button_style(p)) } else { b }
+    };
+    let pending = if social.incoming.is_empty() { "Pending".to_string() } else { format!("Pending ({})", social.incoming.len()) };
+    let tabs = row![
+        ui::sans("Friends", 15.0, Weight::Semibold, p.text_bright()),
+        tab_button("Online".into(), Tab::Online),
+        tab_button("All".into(), Tab::All),
+        tab_button(pending, Tab::Pending),
+        tab_button("Blocked".into(), Tab::Blocked),
+        ui::primary_button(ui::sans("Add friend", 13.0, Weight::Semibold, p.accent_text()), Some(Message::ShowFriends(Tab::Add)), p, &state.layout)
+            .padding([4, 12]),
+        Space::new().width(Length::Fill),
+        ui::mono("STATUS", 11.0, p.text_muted()),
+        pick_list(STATUSES.map(|(l, _)| l).to_vec(), Some(status), |l| Message::MeshForm(Msg::Status(l))).padding(6),
     ]
-    .spacing(8);
+    .spacing(6)
+    .align_y(iced::Alignment::Center)
+    .wrap();
+    let mut col = column![tabs, ui::hline(p)].spacing(10);
+    if tab == Tab::Add {
+        return col.push(add_view(state)).into();
+    }
     if status == "Invisible" {
         col = col.push(text("Friends see you as offline, but can still reach you.").size(12).color(p.text_muted()));
     }
 
-    for r in &social.incoming {
+    let incoming: &[_] = if tab == Tab::Pending { &social.incoming } else { &[] };
+    for r in incoming {
         let name = if r.name.is_empty() { short_id(&r.id) } else { r.name.clone() };
         let mut who = line(format!("{name} wants to be friends"), short_id(&r.id));
         if !r.note.is_empty() {
@@ -1310,7 +1395,8 @@ fn friends_view(state: &App) -> Element<'_, Message> {
     }
 
     // A group needs at least two friends; up to nine with you (SPEC-dm D6).
-    if social.friends.len() >= 2 {
+    let listing = matches!(tab, Tab::Online | Tab::All);
+    if listing && social.friends.len() >= 2 {
         match &state.mesh.new_group {
             None => col = col.push(small("New group", p.accent(), Msg::NewGroup(true))),
             Some((picked, name)) => {
@@ -1334,10 +1420,22 @@ fn friends_view(state: &App) -> Element<'_, Message> {
             }
         }
     }
-    if social.friends.is_empty() && social.incoming.is_empty() {
-        col = col.push(ui::sans("No friends yet. Check a friend's code below and send a request.", 12.0, Weight::Normal, p.text_muted()));
+    let shown: Vec<&mesh::Friend> = social.friends.iter().filter(|f| tab == Tab::All || (tab == Tab::Online && f.presence != "offline")).collect();
+    let empty = match tab {
+        Tab::All if shown.is_empty() => Some("No friends yet. Under Add friend, make a code to give someone, or type theirs."),
+        Tab::Online if shown.is_empty() && social.friends.is_empty() => Some("No friends yet. Under Add friend, make a code to give someone, or type theirs."),
+        Tab::Online if shown.is_empty() => Some("Nobody's online right now."),
+        Tab::Pending if social.incoming.is_empty() && social.outgoing.is_empty() => Some("No requests, either way."),
+        Tab::Blocked if social.blocked.is_empty() => Some("Nobody's blocked."),
+        _ => None,
+    };
+    if let Some(empty) = empty {
+        col = col.push(ui::sans(empty, 13.0, Weight::Normal, p.text_muted()));
     }
-    for f in &social.friends {
+    if listing && social.friends.is_empty() {
+        col = col.push(button(ui::sans("Add friend →", 12.0, Weight::Normal, p.accent())).on_press(Message::ShowFriends(Tab::Add)).padding([4, 10]).style(flat_button_style(p)));
+    }
+    for f in shown {
         let pinging = s.busy == Some("netPingId") && s.pinging.as_deref() == Some(f.id.as_str());
         let mut detail = format!("{} · {}", presence_label(&f.presence), short_id(&f.id));
         if f.verified {
@@ -1346,9 +1444,8 @@ fn friends_view(state: &App) -> Element<'_, Message> {
         if f.presence == "offline" {
             detail = format!("{detail} · {}", seen_line(f.seen));
         }
-        // Buttons on their own line: four don't fit beside the name in the
-        // narrow Accounts panel.
-        col = col.push(column![
+        let call = state.mesh.call.is_none().then(|| Message::MeshCall(crate::mesh_calls::Msg::Start(f.id.clone())));
+        col = col.push(row![
             line(friend_name(f), detail),
             row![
                 button(ui::sans("Message", 12.0, Weight::Normal, p.accent()))
@@ -1360,20 +1457,23 @@ fn friends_view(state: &App) -> Element<'_, Message> {
                     }))
                     .padding([4, 10])
                     .style(flat_button_style(p)),
+                button(ui::sans("Call", 12.0, Weight::Normal, p.accent())).on_press_maybe(call).padding([4, 10]).style(flat_button_style(p)),
                 small(if pinging { "Pinging…" } else { "Ping" }, p.text_bright(), Msg::PingContact(f.id.clone())),
                 small("Remove", p.danger(), Msg::Remove(f.id.clone())),
                 small("Block", p.danger(), Msg::Block(f.id.clone())),
             ]
             .spacing(4)
-            // Five don't fit the narrow Accounts panel on one line.
             .wrap(),
-        ]);
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center));
         if let Some((_, pong)) = s.contact_pong.as_ref().filter(|(id, _)| *id == f.id) {
             col = col.push(ui::sans(format!("{} answered · {}", pong.name, pong_line(pong)), 12.0, Weight::Normal, p.success()));
         }
     }
 
-    for o in &social.outgoing {
+    let outgoing: &[_] = if tab == Tab::Pending { &social.outgoing } else { &[] };
+    for o in outgoing {
         let name = if o.nick.is_empty() { short_id(&o.id) } else { o.nick.clone() };
         col = col.push(
             row![
@@ -1384,7 +1484,8 @@ fn friends_view(state: &App) -> Element<'_, Message> {
             .align_y(iced::Alignment::Center),
         );
     }
-    for b in &social.blocked {
+    let blocked: &[_] = if tab == Tab::Blocked { &social.blocked } else { &[] };
+    for b in blocked {
         let name = if b.nick.is_empty() { short_id(&b.id) } else { b.nick.clone() };
         col = col.push(
             row![

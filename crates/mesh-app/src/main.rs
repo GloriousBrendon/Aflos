@@ -1362,6 +1362,10 @@ enum Message {
     /// Copy the generated theme.toml to the clipboard.
     ExportTheme,
     OpenAddFriend,
+    /// Matrix and Discord's add-friend dialog (Mesh's is Home → Friends).
+    OpenAddFriendDialog,
+    /// Home → Friends, at a tab: closes the open chat and Settings.
+    ShowFriends(mesh_ui::Tab),
     FriendMode(FriendMode),
     FriendQuery(String),
     /// A profile lookup finished: (user id, display name).
@@ -3863,6 +3867,33 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::OpenAddFriend => {
+            if state.mesh_node.is_some() && mesh_ui::open(state) {
+                update(state, Message::ShowFriends(mesh_ui::Tab::Add))
+            } else {
+                update(state, Message::OpenAddFriendDialog)
+            }
+        }
+        Message::ShowFriends(tab) => {
+            state.mesh.tab = tab;
+            let Screen::LoggedIn(session) = &mut state.screen else {
+                return Task::none();
+            };
+            if let Some(previous) = session.web_chat.take() {
+                clients!(state).close(&previous);
+            }
+            session.selected_room = None;
+            session.show_settings = false;
+            session.add_friend = None;
+            (
+                session.active_space,
+                session.active_guild,
+                session.active_mesh_space,
+            ) = (None, None, None);
+            session.active_wa_groups = false;
+            session.focused = Pane::Chat;
+            Task::none()
+        }
+        Message::OpenAddFriendDialog => {
             let Screen::LoggedIn(session) = &mut state.screen else {
                 return Task::none();
             };
@@ -5249,6 +5280,7 @@ fn channel_pane<'a>(
         // Compact icon toggles (with tooltips) so they don't overflow.
         let mut chips = row![filter_chip(None, ui::Icon::Home, "All", p.text_bright(), session.home_filter, p, l)].spacing(4);
         for (icon, label, color, filter) in [
+            (ui::Icon::At, "Mesh", net_color(Network::Mesh, p), Network::Mesh),
             (ui::Icon::Matrix, "Matrix", net_color(Network::Matrix, p), Network::Matrix),
             (ui::Icon::Discord, "Discord", net_color(Network::Discord, p), Network::Discord),
             (ui::Icon::WhatsApp, "WhatsApp", p.success(), Network::WhatsApp),
@@ -5261,6 +5293,35 @@ fn channel_pane<'a>(
         .padding(iced::Padding { top: 14.0, right: 14.0, bottom: 10.0, left: 14.0 });
 
     let mut list = column![].spacing(2).padding([10, 8]);
+    // Mesh's friends, as Discord's Home has them: the page shows with nothing open.
+    if home && state.mesh_node.is_some() && mesh_ui::open(state) {
+        let open = session.selected_room.is_none() && session.web_chat.is_none();
+        let asks = state.mesh.social.incoming.len() as u64;
+        let line = row![
+            ui::icon(ui::Icon::Users, 16.0, p.text_bright()),
+            ui::sans("Friends", 14.0, Weight::Normal, p.text_bright()).width(Length::Fill),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
+        list = list.push(rail_badge(
+            ui::row_button(line, Message::ShowFriends(state.mesh.tab), open, p, l).into(),
+            asks,
+            p,
+        ));
+        let line = row![
+            ui::icon(ui::Icon::UserPlus, 16.0, p.text()),
+            ui::sans("Add friend", 14.0, Weight::Normal, p.text())
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
+        list = list.push(ui::row_button(
+            line,
+            Message::ShowFriends(mesh_ui::Tab::Add),
+            false,
+            p,
+            l,
+        ));
+    }
     let rooms = group.map(|g| g.rooms.as_slice()).unwrap_or_default();
     let sections: [(&str, Vec<&RoomSummary>); 2] = if !home {
         [("Text", rooms.iter().collect()), ("", Vec::new())]
