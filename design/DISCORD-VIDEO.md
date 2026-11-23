@@ -64,6 +64,12 @@ serenity-voice-model 0.3.0 are vendored in `mesh-dc/vendor` (changes marked
   pictures saved as JPEGs.
 Unit tests cover the reassembly. Nothing here has met Discord yet.
 
+**Then, before the test (V1's first part):** decoded frames also go to
+Mesh as `meshVideo` (JPEGs, at most 10 a second a camera), so cameras show
+in the Discord call bar's existing tiles. `MESH_DC_VIDEO=1` turns receiving
+on without saving JPEGs; it stays off by default until a call has shown it
+doesn't disturb voice.
+
 **The test (by you):** quit Mesh, then run
 `MESH_DC_VIDEO_SPIKE=/tmp/dcvideo RUST_LOG=warn,mesh_dc=info,songbird=info ~/.local/bin/mesh-launch`,
 join a voice channel where someone has their camera on, wait a minute, and

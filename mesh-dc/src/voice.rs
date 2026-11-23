@@ -63,13 +63,15 @@ impl Voice {
         let mut config = Config::default()
             .crypto_mode(CryptoMode::Aes256Gcm)
             .decode_mode(DecodeMode::Decode(DecodeConfig::new(Channels::Mono, SampleRate::Hz48000)));
-        // Discord video's V0 spike (design/DISCORD-VIDEO.md): with
-        // MESH_DC_VIDEO_SPIKE=<folder>, others' cameras are received, and
-        // the first ten decoded frames saved there. Off, nothing changes.
-        if let Some(dir) = std::env::var_os("MESH_DC_VIDEO_SPIKE") {
+        // Discord video (design/DISCORD-VIDEO.md), not yet on by default:
+        // MESH_DC_VIDEO=1 receives others' cameras into Mesh's call tiles;
+        // MESH_DC_VIDEO_SPIKE=<folder> (V0) does too, and saves the first ten
+        // frames there. Off, the voice connection is as before.
+        let save = std::env::var_os("MESH_DC_VIDEO_SPIKE").map(std::path::PathBuf::from);
+        if save.is_some() || std::env::var_os("MESH_DC_VIDEO").is_some_and(|v| v == "1") {
             let (tx, rx) = flume::bounded(64);
             config = config.video_sink(tx);
-            video_spike(rx, dir.into());
+            video_receive(rx, save);
         }
         let mut driver = Driver::new(config);
 
@@ -125,13 +127,20 @@ impl Voice {
     }
 }
 
-/// V0: decodes others' camera frames, logs each, and saves the first ten
-/// decoded pictures as JPEGs in `dir`. No IDs in the log: SSRCs only.
-fn video_spike(rx: flume::Receiver<songbird::driver::VideoFrame>, dir: std::path::PathBuf) {
-    log::info!("video spike: on, saving to {}", dir.display());
+/// How often a camera's picture goes to Mesh at most (the app's tiles).
+const TILE_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Decodes others' camera frames and sends them to Mesh as `meshVideo`
+/// (a JPEG, at most 10 a second each); with `save` (V0), logs each and
+/// saves the first ten as JPEGs there. No IDs in the log: SSRCs only.
+fn video_receive(rx: flume::Receiver<songbird::driver::VideoFrame>, save: Option<std::path::PathBuf>) {
+    log::info!("video: receiving{}", save.as_ref().map(|d| format!(", saving to {}", d.display())).unwrap_or_default());
     std::thread::spawn(move || {
-        let _ = std::fs::create_dir_all(&dir);
+        if let Some(dir) = &save {
+            let _ = std::fs::create_dir_all(dir);
+        }
         let mut decoders: HashMap<u32, mesh_media::H264Decoder> = HashMap::new();
+        let mut shown: HashMap<u32, std::time::Instant> = HashMap::new();
         let (mut got, mut saved) = (0u32, 0u32);
         while let Ok(f) = rx.recv() {
             got += 1;
@@ -144,11 +153,24 @@ fn video_spike(rx: flume::Receiver<songbird::driver::VideoFrame>, dir: std::path
             };
             match decoder.decode(&f.annexb) {
                 Ok(Some(frame)) => {
-                    log::info!("video spike: frame {got} (ssrc {}, {} bytes): {}x{}", f.ssrc, f.annexb.len(), frame.width, frame.height);
-                    if saved < 10 {
+                    if save.is_some() {
+                        log::info!("video spike: frame {got} (ssrc {}, {} bytes): {}x{}", f.ssrc, f.annexb.len(), frame.width, frame.height);
+                    }
+                    let due = shown.get(&f.ssrc).is_none_or(|at| at.elapsed() >= TILE_EVERY);
+                    let picture = image::RgbaImage::from_raw(frame.width, frame.height, frame.rgba.clone());
+                    if let (true, Some(p)) = (due, &picture) {
+                        shown.insert(f.ssrc, std::time::Instant::now());
+                        let mut jpeg = Vec::new();
+                        let rgb = image::DynamicImage::ImageRgba8(p.clone()).to_rgb8();
+                        if rgb.write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).is_ok() {
+                            use base64::Engine as _;
+                            let data = base64::engine::general_purpose::STANDARD.encode(&jpeg);
+                            crate::emit("meshVideo", &serde_json::json!({ "id": format!("dc-{}", f.user_id), "local": false, "jpeg": data }));
+                        }
+                    }
+                    if let (true, Some(dir)) = (saved < 10, &save) {
                         saved += 1;
                         let path = dir.join(format!("frame-{saved:02}.jpg"));
-                        let picture = image::RgbaImage::from_raw(frame.width, frame.height, frame.rgba);
                         match picture.map(|p| image::DynamicImage::ImageRgba8(p).to_rgb8().save(&path)) {
                             Some(Ok(())) => log::info!("video spike: saved {}", path.display()),
                             Some(Err(e)) => log::warn!("video spike: couldn't save: {e}"),
@@ -156,8 +178,8 @@ fn video_spike(rx: flume::Receiver<songbird::driver::VideoFrame>, dir: std::path
                         }
                     }
                 }
-                Ok(None) => log::info!("video spike: frame {got} (ssrc {}, {} bytes): no picture yet", f.ssrc, f.annexb.len()),
-                Err(e) => log::warn!("video spike: frame {got} (ssrc {}) didn't decode: {e}", f.ssrc),
+                Ok(None) => log::debug!("video: frame {got} (ssrc {}, {} bytes): no picture yet", f.ssrc, f.annexb.len()),
+                Err(e) => log::warn!("video: frame {got} (ssrc {}) didn't decode: {e}", f.ssrc),
             }
         }
     });
