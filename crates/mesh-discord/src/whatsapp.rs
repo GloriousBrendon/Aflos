@@ -49,6 +49,25 @@ pub enum Event {
     Disconnected,
     /// The cameras, screens and windows asked for with `WhatsApp::list_sources`.
     Sources(Sources),
+    /// Someone started (`typing`) or stopped typing in a chat (native helper only).
+    Typing(Typing),
+    /// A contact went online or offline, for the open 1:1 chat (native helper only).
+    Presence(Presence),
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Typing {
+    pub chat_id: String,
+    pub who: String,
+    pub typing: bool,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct Presence {
+    pub id: String,
+    pub online: bool,
+    /// When they were last online, ms since the epoch, if they share it.
+    pub last_seen: Option<u64>,
 }
 
 /// The call WhatsApp has going (one at a time).
@@ -148,6 +167,10 @@ impl Engine {
     /// id) quotes that message.
     pub fn send_message(&self, chat_id: &str, text: &str, reply_to: Option<&str>) {
         self.call("send", &[chat_id, text, reply_to.unwrap_or_default()]);
+    }
+    /// Tells the chat we're typing (`true`) or stopped.
+    pub fn typing(&self, chat_id: &str, on: bool) {
+        self.call("typing", &[chat_id, flag(on)]);
     }
     /// Decodes a voice note for playing in Mesh; answers with `Event::Pcm`.
     pub fn voice_pcm(&self, message_id: &str) {
@@ -321,6 +344,9 @@ pub struct Message {
     pub forwarded: bool,
     #[serde(default)]
     pub reactions: Vec<Reaction>,
+    /// Ours only: 1 sent, 2 delivered, 3 read (0 unknown).
+    #[serde(default)]
+    pub ack: u8,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -511,6 +537,8 @@ fn binding_event(name: &str, payload: &str) -> Option<Event> {
         "waCall" => call_event(payload),
         "waVideo" => engine::video(payload).map(Event::Video),
         "waSources" => serde_json::from_str(payload).ok().map(Event::Sources),
+        "waTyping" => serde_json::from_str(payload).ok().map(Event::Typing),
+        "waPresence" => serde_json::from_str(payload).ok().map(Event::Presence),
         _ => None,
     }
 }

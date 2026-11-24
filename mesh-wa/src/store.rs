@@ -45,6 +45,13 @@ pub struct Message {
     /// Reactions: sender jid -> emoji.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub reacts: BTreeMap<String, String>,
+    /// Ours only: 1 sent, 2 delivered, 3 read (0 unknown).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub ack: u8,
+}
+
+fn is_zero(n: &u8) -> bool {
+    *n == 0
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
@@ -191,6 +198,24 @@ impl Store {
             chat.messages.drain(..extra);
         }
         true
+    }
+
+    /// Raises our messages' delivery marks (never lowers: a late "delivered" after "read").
+    pub fn ack(&mut self, chat_id: &str, ids: &[&str], ack: u8) -> bool {
+        let me = self.me.clone();
+        let Some(chat) = self.chats.get_mut(chat_id) else {
+            return false;
+        };
+        let mut changed = false;
+        for m in chat
+            .messages
+            .iter_mut()
+            .filter(|m| m.author_id == me && m.ack < ack && ids.contains(&m.id.as_str()))
+        {
+            m.ack = ack;
+            changed = true;
+        }
+        changed
     }
 
     pub fn find(&self, chat_id: &str, msg_id: &str) -> Option<&Message> {

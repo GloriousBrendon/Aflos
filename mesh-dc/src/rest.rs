@@ -304,6 +304,27 @@ fn streams(cid: Option<&str>, key: &str, s: &State) -> Vec<Value> {
         .collect()
 }
 
+/// Who's typing in a channel now, by name (their server nickname in a guild).
+fn typing(cid: &str, guild: Option<&str>, s: &State) -> Vec<Value> {
+    let fresh = s
+        .typing
+        .get(cid)
+        .into_iter()
+        .flatten()
+        .filter(|(_, at)| at.elapsed() < gateway::TYPING);
+    fresh
+        .map(|(uid, _)| {
+            let nick = guild.and_then(|g| s.member_lists.get(g)).and_then(|rows| {
+                rows.iter()
+                    .find(|r| r.pointer("/member/user/id").and_then(Value::as_str) == Some(uid))
+                    .and_then(|r| r.pointer("/member/nick").cloned())
+            });
+            nick.filter(|n| n.is_string())
+                .unwrap_or_else(|| user_obj(uid, s)["name"].clone())
+        })
+        .collect()
+}
+
 /// Builds the full Mesh snapshot from the current gateway state.
 pub fn snapshot(s: &State) -> Value {
     let me = s.me.as_ref().map(|m| {
@@ -324,7 +345,15 @@ pub fn snapshot(s: &State) -> Value {
             let text: Vec<Value> = chans
                 .iter()
                 .filter(|c| c.get("type").and_then(Value::as_u64).is_some_and(|t| TEXT_TYPES.contains(&t)))
-                .map(|c| json!({ "id": c["id"], "name": c["name"], "category": category_name(c.get("parent_id").and_then(Value::as_str), s), "locked": locked(c, VIEW_CHANNEL) }))
+                .map(|c| {
+                    let cid = c.get("id").and_then(Value::as_str).unwrap_or("");
+                    let (read_last, mentions) = s.read_state.get(cid).cloned().unwrap_or_default();
+                    let unread = c.get("last_message_id").and_then(Value::as_str).is_some_and(|l| snowflake_ms(l) > snowflake_ms(&read_last));
+                    json!({
+                        "id": c["id"], "name": c["name"], "category": category_name(c.get("parent_id").and_then(Value::as_str), s), "locked": locked(c, VIEW_CHANNEL),
+                        "unread": unread, "mentions": mentions, "typing": typing(cid, Some(gid), s),
+                    })
+                })
                 .collect();
             let voice: Vec<Value> = chans
                 .iter()
@@ -371,6 +400,8 @@ pub fn snapshot(s: &State) -> Value {
                 "last_ms": last.map(snowflake_ms).unwrap_or(0),
                 "unread": unread,
                 "mentions": mentions,
+                "status": if recipients.len() == 1 { recipients[0]["id"].as_str().and_then(|id| s.presence.get(id)).map_or(json!("offline"), |st| json!(st)) } else { Value::Null },
+                "typing": typing(id, None, s),
             })
         })
         .collect();

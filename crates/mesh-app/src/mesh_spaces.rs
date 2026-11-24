@@ -243,6 +243,9 @@ pub(crate) fn pane<'a>(
             ));
         }
     }
+    if may(space).admin {
+        list = list.push(quick_channel(&mesh.space_form, &space.id, p, l));
+    }
     list = list.push(members(mesh, space, p));
     column![
         header,
@@ -251,6 +254,41 @@ pub(crate) fn pane<'a>(
         ui::hline(p),
         footer
     ]
+    .into()
+}
+
+/// "+ New channel" at the end of a Space's channels (admins), typed in place.
+fn quick_channel<'a>(
+    f: &'a Form,
+    space: &str,
+    p: &'a theme::Palette,
+    l: &theme::Layout,
+) -> Element<'a, Message> {
+    let Some((_, name)) = f.quick.as_ref().filter(|(s, _)| s == space) else {
+        let line = row![
+            ui::icon(ui::Icon::Plus, 14.0, p.text_muted()),
+            ui::sans("New channel", 14.0, Weight::Normal, p.text_muted()),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
+        let open = Message::MeshSpace(Msg::Quick(Some((space.to_owned(), String::new()))));
+        return ui::row_button(line, open, false, p, l).into();
+    };
+    let space = space.to_owned();
+    let typed = text_input("channel name", name)
+        .on_input(move |v| Message::MeshSpace(Msg::Quick(Some((space.clone(), v)))))
+        .on_submit(Message::MeshSpace(Msg::QuickCreate))
+        .padding(6)
+        .width(Length::Fill);
+    let ready = !name.trim().is_empty();
+    row![
+        typed,
+        act("Add", p.accent(), ready.then_some(Msg::QuickCreate), p),
+        act("Cancel", p.text_muted(), Some(Msg::Quick(None)), p),
+    ]
+    .spacing(4)
+    .align_y(iced::Alignment::Center)
+    .padding([4, 0])
     .into()
 }
 
@@ -295,6 +333,8 @@ pub(crate) struct Form {
     confirm: Option<String>,
     /// New Space's name, while it's open (Home).
     new_space: Option<String>,
+    /// "+ New channel" under a Space's channels: the Space, and the name typed.
+    quick: Option<(String, String)>,
 }
 
 #[derive(Debug, Clone)]
@@ -335,6 +375,9 @@ pub(crate) enum Msg {
     NewSpace(bool),
     NewSpaceName(String),
     NewSpaceCreate,
+    /// Opens (with the Space and the name so far), types in, or closes "+ New channel".
+    Quick(Option<(String, String)>),
+    QuickCreate,
 }
 
 /// A pick list's entry: an ID (`None`: no category), and its label.
@@ -529,6 +572,12 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             // It shows on the rail once mesh-node has made it (`Spaces`).
             if let Some(name) = f.new_space.take().filter(|n| !n.trim().is_empty()) {
                 node.space_change("spaceCreate", &[name.trim()]);
+            }
+        }
+        Msg::Quick(open) => f.quick = open,
+        Msg::QuickCreate => {
+            if let Some((space, name)) = f.quick.take().filter(|(_, n)| !n.trim().is_empty()) {
+                node.space_change("spaceChannel", &[&space, name.trim(), "everyone", ""]);
             }
         }
         // An empty name: nothing to do.

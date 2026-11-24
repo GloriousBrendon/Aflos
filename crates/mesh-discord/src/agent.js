@@ -41,7 +41,7 @@
     const wanted = ["UserStore", "GuildStore", "GuildChannelStore", "GuildMemberStore", "ChannelStore",
       "VoiceStateStore", "SpeakingStore", "MediaEngineStore", "SelectedChannelStore", "RTCConnectionStore"];
     // Optional: voice keeps working if Discord renames these.
-    const extra = ["MessageStore", "ReadStateStore", "ApplicationStreamingStore"];
+    const extra = ["MessageStore", "ReadStateStore", "ApplicationStreamingStore", "TypingStore", "PresenceStore", "UserGuildSettingsStore"];
     let channel, audio, call, invite, messages, uploads;
     for (const c of candidates(req)) {
       try {
@@ -128,8 +128,18 @@
   const streamKey = (st) => st.streamKey
     || [st.streamType, st.guildId, st.channelId, st.ownerId].filter((p) => p != null).join(":");
 
+  // Who's typing in a channel (not us), by name.
+  const typing = (channelId, guildId) => {
+    const ts = found.s.TypingStore, me = found.s.UserStore.getCurrentUser();
+    if (!ts) return [];
+    return Object.keys(ts.getTypingUsers(channelId) || {})
+      .filter((id) => !me || id !== me.id)
+      .map((id) => (guildId && found.s.GuildMemberStore.getNick(guildId, id)) || user(id).name);
+  };
+
   const snapshot = () => {
     const s = found.s;
+    const reads = s.ReadStateStore;
     const current = s.SelectedChannelStore.getVoiceChannelId() || null;
     const currentChannel = current ? s.ChannelStore.getChannel(current) : null;
     const guilds = Object.values(s.GuildStore.getGuilds()).map((g) => {
@@ -147,6 +157,10 @@
           id: channel.id,
           name: channel.name,
           category: category(channel),
+          unread: !!(reads && reads.hasUnread(channel.id)),
+          // @you, @role and (unless the server's muted for it) @everyone.
+          mentions: (reads && reads.getMentionCount(channel.id)) || 0,
+          typing: typing(channel.id, g.id),
         })),
         voice_channels: (channels.VOCAL || []).map(({ channel }) => ({
           id: channel.id,
@@ -156,7 +170,6 @@
         })),
       };
     });
-    const reads = s.ReadStateStore;
     const dms = s.ChannelStore.getSortedPrivateChannels().map((ch) => {
       const recipients = (ch.recipients || []).map(user);
       return {
@@ -170,6 +183,9 @@
         last_ms: ch.lastMessageId ? Number(BigInt(ch.lastMessageId) >> 22n) + 1420070400000 : 0,
         unread: !!(reads && reads.hasUnread(ch.id)),
         mentions: (reads && reads.getMentionCount(ch.id)) || 0,
+        // online, idle, dnd or offline, for a one-to-one DM.
+        status: recipients.length === 1 && s.PresenceStore ? s.PresenceStore.getStatus(recipients[0].id) : null,
+        typing: typing(ch.id, null),
       };
     });
     const me = s.UserStore.getCurrentUser();
@@ -253,6 +269,8 @@
     "CHANNEL_CREATE", "CHANNEL_DELETE", "CALL_CREATE", "CALL_UPDATE", "CALL_DELETE",
     // DM order and unread state.
     "MESSAGE_CREATE", "MESSAGE_ACK",
+    // "… is typing".
+    "TYPING_START", "TYPING_STOP",
     // Screen shares (Go Live) starting, stopping, being watched.
     "STREAM_CREATE", "STREAM_UPDATE", "STREAM_DELETE", "STREAM_WATCH", "STREAM_CLOSE", "STREAM_START", "STREAM_STOP"];
   const messageEvents = ["MESSAGE_CREATE", "MESSAGE_UPDATE", "MESSAGE_DELETE", "MESSAGE_DELETE_BULK",
@@ -265,7 +283,14 @@
     if (!m || !m.author || !me || m.author.id === me.id) return;
     const ch = found.s.ChannelStore.getChannel(m.channel_id);
     if (!ch) return;
-    if (ch.guild_id && !(m.mentions || []).some((u) => u.id === me.id)) return;
+    if (ch.guild_id) {
+      // @you, a role of ours, or @everyone / @here (unless we've muted that for the server).
+      const roles = ((found.s.GuildMemberStore.getMember(ch.guild_id, me.id) || {}).roles) || [];
+      const gs = found.s.UserGuildSettingsStore;
+      const everyone = m.mention_everyone && !(gs && gs.isSuppressEveryoneEnabled && gs.isSuppressEveryoneEnabled(ch.guild_id));
+      const us = (m.mentions || []).some((u) => u.id === me.id) || (m.mention_roles || []).some((r) => roles.includes(r));
+      if (!us && !everyone) return;
+    }
     const where = ch.guild_id ? ` in #${ch.name}` : ch.name ? ` in ${ch.name}` : "";
     const title = (m.author.global_name || m.author.username) + where;
     window.meshNotify(JSON.stringify({ channel_id: m.channel_id, title, body: m.content || "sent an attachment" }));
@@ -498,6 +523,11 @@
     for (const e of events) found.dispatcher.subscribe(e, emit);
     for (const e of messageEvents) found.dispatcher.subscribe(e, emitMessages);
     found.dispatcher.subscribe("MESSAGE_CREATE", notify);
+    // A DM friend coming online or going away (other presences are too many to follow).
+    found.dispatcher.subscribe("PRESENCE_UPDATES", (a) => {
+      const dmUsers = new Set(found.s.ChannelStore.getSortedPrivateChannels().flatMap((ch) => ch.recipients || []).map((r) => (r && r.id) || r));
+      if ((a.updates || []).some((u) => u.user && dmUsers.has(u.user.id))) emit();
+    });
     emit();
   };
   boot();

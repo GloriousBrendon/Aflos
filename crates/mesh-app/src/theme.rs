@@ -402,6 +402,65 @@ impl Animation {
     }
 }
 
+/// A message bubble's colour: the theme's own, the sender's network's, or a
+/// preset hue (tinted toward the panes, so it sits in any theme).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum BubbleColor {
+    #[default]
+    Theme,
+    Network,
+    Blue,
+    Green,
+    Purple,
+    Orange,
+    Pink,
+    Grey,
+}
+
+impl BubbleColor {
+    pub const ALL: [BubbleColor; 8] = [
+        BubbleColor::Theme,
+        BubbleColor::Network,
+        BubbleColor::Blue,
+        BubbleColor::Green,
+        BubbleColor::Purple,
+        BubbleColor::Orange,
+        BubbleColor::Pink,
+        BubbleColor::Grey,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            BubbleColor::Theme => "theme",
+            BubbleColor::Network => "network",
+            BubbleColor::Blue => "blue",
+            BubbleColor::Green => "green",
+            BubbleColor::Purple => "purple",
+            BubbleColor::Orange => "orange",
+            BubbleColor::Pink => "pink",
+            BubbleColor::Grey => "grey",
+        }
+    }
+
+    /// The fill, before opacity: `theme` is what the theme gives this side
+    /// (accent for ours, `surface_alt` for theirs), `network` the sender's colour.
+    pub fn fill(self, theme: Color, network: Color, p: &Palette) -> Color {
+        let hue = match self {
+            BubbleColor::Theme => return theme,
+            BubbleColor::Network => network,
+            BubbleColor::Blue => Color::from_rgb8(0x3b, 0x82, 0xf6),
+            BubbleColor::Green => Color::from_rgb8(0x22, 0xc5, 0x5e),
+            BubbleColor::Purple => Color::from_rgb8(0xa8, 0x55, 0xf7),
+            BubbleColor::Orange => Color::from_rgb8(0xf9, 0x73, 0x16),
+            BubbleColor::Pink => Color::from_rgb8(0xec, 0x48, 0x99),
+            BubbleColor::Grey => Color::from_rgb8(0x8b, 0x8f, 0x98),
+        };
+        // Mostly the pane's colour, so the theme's text stays readable on it.
+        mix(hue, p.surface(), 0.6)
+    }
+}
+
 /// The Rice page's switches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -414,6 +473,12 @@ pub struct Extras {
     pub show_network_tags: bool,
     /// No image downloads or previews: just text, links and code.
     pub plain_text_mode: bool,
+    /// Messages in bubbles, ours on the right (cozy and compact).
+    pub bubbles: bool,
+    pub bubble_mine: BubbleColor,
+    pub bubble_theirs: BubbleColor,
+    /// The bubbles' opacity, in percent.
+    pub bubble_opacity: u8,
 }
 
 impl Default for Extras {
@@ -424,6 +489,10 @@ impl Default for Extras {
             translucent_panes: true,
             show_network_tags: true,
             plain_text_mode: false,
+            bubbles: true,
+            bubble_mine: BubbleColor::Theme,
+            bubble_theirs: BubbleColor::Theme,
+            bubble_opacity: 85,
         }
     }
 }

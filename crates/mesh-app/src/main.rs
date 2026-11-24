@@ -150,6 +150,12 @@ struct App {
     video: HashMap<String, VideoTile>,
     /// WhatsApp's call, while there is one.
     wa_call: Option<whatsapp::Call>,
+    /// Who's typing in each WhatsApp chat, by name.
+    wa_typing: HashMap<String, Vec<String>>,
+    /// WhatsApp contacts' online state and last seen (ms), for the open chat's header.
+    wa_presence: HashMap<String, (bool, Option<u64>)>,
+    /// The WhatsApp chat we last said we're typing in, and when (sent once every 5 s).
+    wa_typed: Option<(String, std::time::Instant)>,
     /// The share picker in WhatsApp's call bar: `Some(empty)` while it loads.
     wa_share: Option<Vec<ShareChoice>>,
     /// Whether Mesh's window has focus (no notifications for the chat in view).
@@ -341,7 +347,8 @@ struct Session {
     /// The Discord text channel or DM shown in the chat pane (through the
     /// hidden client) instead of `selected_room`.
     web_chat: Option<WebChat>,
-    /// In a Mesh chat: the messages that are ours (deleted for everyone),
+    /// In a Mesh chat: the messages that are ours (deleted for everyone; in
+    /// a WhatsApp or Discord chat just for drawing them as ours),
     /// the ones that can be edited (ours, without files), each message's
     /// small mark ("sending · edited · late"), and the one being edited.
     mesh_mine: std::collections::HashSet<String>,
@@ -358,6 +365,8 @@ struct Session {
     add_friend: Option<AddFriend>,
     /// The join-a-Discord-server dialog, while it's open.
     join_server: Option<JoinServer>,
+    /// The "+" menu is open.
+    create_menu: bool,
     /// Avatar thumbnails by media key; `None` while loading.
     avatars: HashMap<String, Option<iced::widget::image::Handle>>,
 }
@@ -414,6 +423,7 @@ enum Extra {
     Translucent,
     Tags,
     PlainText,
+    Bubbles,
 }
 
 /// The tiled shell's panes, for focus.
@@ -501,6 +511,7 @@ impl Session {
             images: HashMap::new(),
             add_friend: None,
             join_server: None,
+            create_menu: false,
             avatars: HashMap::new(),
         }
     }
@@ -620,6 +631,31 @@ impl Clients<'_> {
             self.discord.map(|e| e.fetch_media(url));
         }
     }
+}
+
+/// Our WhatsApp messages, and their delivery marks (WhatsApp's ticks).
+fn whatsapp_marks(
+    messages: &whatsapp::Messages,
+    me: &str,
+) -> (std::collections::HashSet<String>, HashMap<String, String>) {
+    let ours: Vec<&whatsapp::Message> = messages
+        .messages
+        .iter()
+        .filter(|m| m.author_id == me)
+        .collect();
+    let marks = ours
+        .iter()
+        .filter_map(|m| {
+            let mark = match m.ack {
+                1 => "✓ sent",
+                2 => "✓✓ delivered",
+                3 => "✓✓ read",
+                _ => return None,
+            };
+            Some((m.id.clone(), mark.to_string()))
+        })
+        .collect();
+    (ours.iter().map(|m| m.id.clone()).collect(), marks)
 }
 
 /// WhatsApp messages as timeline rows, like `discord_timeline` (photos are
@@ -1295,6 +1331,10 @@ enum Message {
     /// Show a Discord text channel or DM in the chat pane.
     WebChatSelected(WebChat),
     WindowFocused(bool),
+    /// The "+" menu: everything you can make or join, on any network.
+    OpenCreate,
+    /// A "+" menu choice: closes the menu, then does these.
+    Create(Vec<Message>),
     OpenJoinServer,
     JoinServerLink(String),
     /// Open a link from a message in the default browser.
@@ -1356,6 +1396,11 @@ enum Message {
     ToggleExtra(Extra),
     /// The animated background, or `None` for none.
     AnimationChosen(Option<theme::Animation>),
+    /// A bubble colour, for ours (true) or theirs.
+    BubbleColorChosen(bool, theme::BubbleColor),
+    /// The bubble opacity slider moved (percent); let go: save it.
+    BubbleOpacity(u8),
+    BubbleOpacitySaved,
     PickBackground,
     BackgroundPicked(Option<PathBuf>),
     ClearBackground,
@@ -1403,50 +1448,62 @@ fn boot() -> (App, Task<Message>) {
     let screen = Screen::Booting;
 
     let mut app = App {
-            palette,
-            theme_choice,
-            color_edit: None,
-            background: config.background_image.as_ref().map(PathBuf::from).filter(|p| p.is_file()).map(|p| (p.clone(), iced::widget::image::Handle::from_path(p))),
-            iced_theme,
-            layout: theme::layout_for_config(&config_path()),
-            layout_from_hyprland: config.layout_from_hyprland.unwrap_or(true),
-            density: config.density.unwrap_or_default(),
-            extras: config.extras,
-            theme_reloaded: Local::now().format("%H:%M").to_string(),
-            discord_socket: discord_socket(&config),
-            discord_command: config.discord_engine_command.clone(),
-            whatsapp_native: whatsapp_native.clone(),
-            discord_native,
-            discord_native_wrapper: config.discord_native_wrapper.clone().unwrap_or_default(),
-            dc_sign_in: accounts::DcSignIn::default(),
-            sounds: config.sounds.clone(),
-            ringer: None,
-            dc_ring_dismissed: Vec::new(),
-            discord: None,
-            discord_state: None,
-            whatsapp: None,
-            whatsapp_state: None,
-            login_qr: HashMap::new(),
-            discord_shown: None,
-            whatsapp_shown: None,
-            linked: config.linked.clone(),
-            sync_off: config.sync_off.clone(),
-            accounts: accounts::Panel::default(),
-            video: HashMap::new(),
-            wa_call: None,
-            wa_share: None,
-            window_focused: true,
-            theme_stamps: theme::stamps(&theme_files),
-            theme_files,
-            mesh_node,
-            mesh: mesh_ui::Mesh::default(),
-            matrix_login: LoginForm::default(),
-            screen,
-            rain_time: 0.0,
-        };
+        palette,
+        theme_choice,
+        color_edit: None,
+        background: config
+            .background_image
+            .as_ref()
+            .map(PathBuf::from)
+            .filter(|p| p.is_file())
+            .map(|p| (p.clone(), iced::widget::image::Handle::from_path(p))),
+        iced_theme,
+        layout: theme::layout_for_config(&config_path()),
+        layout_from_hyprland: config.layout_from_hyprland.unwrap_or(true),
+        density: config.density.unwrap_or_default(),
+        extras: config.extras,
+        theme_reloaded: Local::now().format("%H:%M").to_string(),
+        discord_socket: discord_socket(&config),
+        discord_command: config.discord_engine_command.clone(),
+        whatsapp_native: whatsapp_native.clone(),
+        discord_native,
+        discord_native_wrapper: config.discord_native_wrapper.clone().unwrap_or_default(),
+        dc_sign_in: accounts::DcSignIn::default(),
+        sounds: config.sounds.clone(),
+        ringer: None,
+        dc_ring_dismissed: Vec::new(),
+        discord: None,
+        discord_state: None,
+        whatsapp: None,
+        whatsapp_state: None,
+        login_qr: HashMap::new(),
+        discord_shown: None,
+        whatsapp_shown: None,
+        linked: config.linked.clone(),
+        sync_off: config.sync_off.clone(),
+        accounts: accounts::Panel::default(),
+        video: HashMap::new(),
+        wa_call: None,
+        wa_typing: HashMap::new(),
+        wa_presence: HashMap::new(),
+        wa_typed: None,
+        wa_share: None,
+        window_focused: true,
+        theme_stamps: theme::stamps(&theme_files),
+        theme_files,
+        mesh_node,
+        mesh: mesh_ui::Mesh::default(),
+        matrix_login: LoginForm::default(),
+        screen,
+        rain_time: 0.0,
+    };
     (app.mesh.muted_spaces, app.mesh.ptt) = (config.muted_spaces.clone(), config.push_to_talk);
     // With mesh-node, everything else waits until the Mesh identity is open.
-    let task = if app.mesh_node.is_some() { Task::none() } else { start_app(&mut app) };
+    let task = if app.mesh_node.is_some() {
+        Task::none()
+    } else {
+        start_app(&mut app)
+    };
     (app, Task::batch([task, open_window()]))
 }
 
@@ -2011,6 +2068,20 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::WindowFocused(focused) => {
             state.window_focused = focused;
+            // Away from Mesh, WhatsApp sees us offline and new messages stay unread
+            // (blue ticks only once you look); back, the chat opens (and reads) again.
+            if let (Screen::LoggedIn(session), Some(engine)) = (&state.screen, &state.whatsapp)
+                && let Some(chat) = session
+                    .web_chat
+                    .as_ref()
+                    .filter(|c| c.network == Network::WhatsApp)
+            {
+                if focused {
+                    engine.open_chat(&chat.id);
+                } else {
+                    engine.close_chat();
+                }
+            }
             // Push-to-talk only while Mesh is focused: leaving lets go.
             if !focused {
                 return mesh_calls::update(state, mesh_calls::Msg::Ptt(false));
@@ -2025,6 +2096,23 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     && let (Some(chat), Some(node)) = (session.web_chat.as_ref().filter(|c| c.network == Network::Mesh), &state.mesh.node)
                 {
                     mesh_spaces::typing(node, &chat.id);
+                }
+                // WhatsApp too, at most every 5 s (it shows "typing…" for a while after each).
+                if action.is_edit()
+                    && let (Some(chat), Some(engine)) = (
+                        session
+                            .web_chat
+                            .as_ref()
+                            .filter(|c| c.network == Network::WhatsApp),
+                        &state.whatsapp,
+                    )
+                    && !state
+                        .wa_typed
+                        .as_ref()
+                        .is_some_and(|(id, at)| *id == chat.id && at.elapsed().as_secs() < 5)
+                {
+                    engine.typing(&chat.id, true);
+                    state.wa_typed = Some((chat.id.clone(), std::time::Instant::now()));
                 }
                 session.message_draft.perform(action);
             }
@@ -2498,8 +2586,22 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 }
                 mesh_discord::Event::Messages(messages) => {
                     if let Screen::LoggedIn(session) = &mut state.screen
-                        && session.web_chat.as_ref().is_some_and(|c| c.id == messages.channel_id)
+                        && session
+                            .web_chat
+                            .as_ref()
+                            .is_some_and(|c| c.id == messages.channel_id)
                     {
+                        let me = state
+                            .discord_state
+                            .as_ref()
+                            .and_then(|d| d.me.as_ref())
+                            .map(|u| u.id.clone());
+                        session.mesh_mine = messages
+                            .messages
+                            .iter()
+                            .filter(|m| Some(&m.author_id) == me.as_ref())
+                            .map(|m| m.id.clone())
+                            .collect();
                         session.timeline = discord_timeline(messages);
                         load_web_media(session, &clients!(state));
                     }
@@ -2631,11 +2733,21 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                         for m in &messages.messages {
                             let key = format!("wa-thumb:{}", m.id);
                             if !session.images.contains_key(&key)
-                                && let Some(jpeg) = m.file.as_ref().and_then(whatsapp::FileMeta::thumbnail)
+                                && let Some(jpeg) =
+                                    m.file.as_ref().and_then(whatsapp::FileMeta::thumbnail)
                             {
-                                session.images.insert(key, Some(iced::widget::image::Handle::from_bytes(jpeg)));
+                                session.images.insert(
+                                    key,
+                                    Some(iced::widget::image::Handle::from_bytes(jpeg)),
+                                );
                             }
                         }
+                        let me = state
+                            .whatsapp_state
+                            .as_ref()
+                            .map(|w| w.me.as_str())
+                            .unwrap_or_default();
+                        (session.mesh_mine, session.web_marks) = whatsapp_marks(&messages, me);
                         session.timeline = whatsapp_timeline(messages);
                         load_web_media(session, &clients!(state));
                     }
@@ -2646,17 +2758,47 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                         Screen::LoggedIn(session) => session.web_chat.as_ref().is_some_and(|c| c.id == n.chat_id),
                         _ => false,
                     };
-                    if !(state.window_focused && open) {
-                        sounds::play(sounds::Sound::Message(Network::WhatsApp), &state.sounds, speaker(state));
+                    // Their message ends their "typing…"; archived chats stay quiet.
+                    state.wa_typing.remove(&n.chat_id);
+                    let archived = state
+                        .whatsapp_state
+                        .as_ref()
+                        .is_some_and(|w| w.archived.iter().any(|c| c.id == n.chat_id));
+                    if !(state.window_focused && open) && !archived {
+                        sounds::play(
+                            sounds::Sound::Message(Network::WhatsApp),
+                            &state.sounds,
+                            speaker(state),
+                        );
                         notify(n.title, n.body);
                     }
                 }
-                whatsapp::Event::Sent { result, .. } => return update(state, Message::AttachmentSent(result)),
-                whatsapp::Event::File { id, filename, bytes } => {
+                whatsapp::Event::Sent { result, .. } => {
+                    return update(state, Message::AttachmentSent(result));
+                }
+                whatsapp::Event::Typing(t) => {
+                    let names = state.wa_typing.entry(t.chat_id).or_default();
+                    names.retain(|n| *n != t.who);
+                    if t.typing {
+                        names.push(t.who);
+                    }
+                }
+                whatsapp::Event::Presence(p) => {
+                    state.wa_presence.insert(p.id, (p.online, p.last_seen));
+                }
+                whatsapp::Event::File {
+                    id,
+                    filename,
+                    bytes,
+                } => {
                     // Kept for the day, so opening it again skips the download.
                     let outcome = bytes.and_then(|data| {
-                        let path = cache::put_file(&whatsapp::file_url(&id), &safe_filename(&filename), &data)
-                            .map_err(|e| e.to_string())?;
+                        let path = cache::put_file(
+                            &whatsapp::file_url(&id),
+                            &safe_filename(&filename),
+                            &data,
+                        )
+                        .map_err(|e| e.to_string())?;
                         open_url(&path.to_string_lossy()).map_err(|e| e.to_string())
                     });
                     if let Screen::LoggedIn(session) = &mut state.screen {
@@ -2768,10 +2910,27 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::OpenCreate => {
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                session.create_menu = true;
+            }
+            Task::none()
+        }
+        Message::Create(then) => {
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                session.create_menu = false;
+            }
+            Task::batch(
+                then.into_iter()
+                    .map(|m| update(state, m))
+                    .collect::<Vec<_>>(),
+            )
+        }
         Message::OpenJoinServer => {
             let Screen::LoggedIn(session) = &mut state.screen else {
                 return Task::none();
             };
+            session.create_menu = false;
             session.jump = None;
             session.join_server = Some(JoinServer::default());
             iced::widget::operation::focus(iced::widget::Id::new(INVITE_INPUT))
@@ -3180,6 +3339,8 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     session.add_friend = None;
                 } else if session.join_server.is_some() {
                     session.join_server = None;
+                } else if session.create_menu {
+                    session.create_menu = false;
                 } else if session.jump.is_some() {
                     session.jump = None;
                 } else if session.forwarding.is_some() {
@@ -3474,6 +3635,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 Extra::Translucent => &mut x.translucent_panes,
                 Extra::Tags => &mut x.show_network_tags,
                 Extra::PlainText => &mut x.plain_text_mode,
+                Extra::Bubbles => &mut x.bubbles,
             };
             *flag = !*flag;
             let extras = *x;
@@ -3483,6 +3645,26 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 Screen::LoggedIn(session) if !extras.plain_text_mode => load_images(session),
                 _ => Task::none(),
             }
+        }
+        Message::BubbleColorChosen(mine, color) => {
+            let x = &mut state.extras;
+            *(if mine {
+                &mut x.bubble_mine
+            } else {
+                &mut x.bubble_theirs
+            }) = color;
+            let extras = *x;
+            persist(|c| c.extras = extras);
+            Task::none()
+        }
+        Message::BubbleOpacity(percent) => {
+            state.extras.bubble_opacity = percent;
+            Task::none()
+        }
+        Message::BubbleOpacitySaved => {
+            let extras = state.extras;
+            persist(|c| c.extras = extras);
+            Task::none()
         }
         Message::AnimationChosen(animation) => {
             state.extras.digital_rain = animation.is_some();
@@ -4455,6 +4637,8 @@ fn session_view<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message
             stack![shell, add_friend_view(session, dialog, p, l)].into()
         } else if let Some(dialog) = &session.join_server {
             stack![shell, join_server_view(dialog, state.discord.is_some(), p, l)].into()
+        } else if session.create_menu {
+            stack![shell, create_view(session, state, p, l)].into()
         } else if session.jump.is_some() {
             stack![shell, jump_palette(session, state, p, l)].into()
         } else if let Some(picker) = &session.new_chat {
@@ -4986,10 +5170,23 @@ fn rail_view<'a>(
                     .border_radius((l.rounding - 2.0).max(0.0))
                     .content_fit(iced::ContentFit::Cover)
                     .into(),
-                None => ui::mono_bold(initials(&guild.name), 13.0, if active { p.text_bright() } else { p.text() }).into(),
+                None => ui::mono_bold(
+                    initials(&guild.name),
+                    13.0,
+                    if active { p.text_bright() } else { p.text() },
+                )
+                .into(),
             };
+            // Its mentions of us, as Discord's red badge.
+            let tile = rail_tile(
+                face,
+                active,
+                Some(Message::GuildSelected(guild.id.clone())),
+                p,
+                l,
+            );
             iced::widget::tooltip(
-                rail_tile(face, active, Some(Message::GuildSelected(guild.id.clone())), p, l),
+                rail_badge(tile, guild_mentions(guild), p),
                 container(text(&guild.name).size(12).color(p.text())).padding([4, 8]),
                 iced::widget::tooltip::Position::Right,
             )
@@ -5040,20 +5237,39 @@ fn rail_view<'a>(
     }
     let mut folders = column![].spacing(8).align_x(iced::Alignment::Center);
     let ms = mesh_spaces::rail_tiles(session, &state.mesh, p, l);
-    for (network, tiles) in [
-        (Network::Mesh, ms),
-        (Network::Discord, dc),
-        (Network::Matrix, mx),
-        (Network::WhatsApp, wa),
+    // A closed folder still shows its count, so a mention is never hidden.
+    let dc_count = guilds.iter().map(guild_mentions).sum();
+    let wa_count = wa_groups.iter().map(|c| c.unread).sum();
+    for (network, tiles, count) in [
+        (Network::Mesh, ms, 0),
+        (Network::Discord, dc, dc_count),
+        (Network::Matrix, mx, 0),
+        (Network::WhatsApp, wa, wa_count),
     ] {
         if !tiles.is_empty() {
             let open = session.folders_open[folder_index(network)];
-            folders = folders.push(rail_folder(network, open, tiles, p, l));
+            let folder = rail_folder(network, open, tiles, p, l);
+            folders = folders.push(if open {
+                folder
+            } else {
+                rail_badge(folder, count, p)
+            });
         }
     }
     let add = iced::widget::tooltip(
-        rail_tile(ui::icon(ui::Icon::Plus, 18.0, p.text_muted()), false, Some(Message::OpenJoinServer), p, l),
-        container(text("Join a Discord server").size(12).color(p.text())).padding([4, 8]),
+        rail_tile(
+            ui::icon(ui::Icon::Plus, 18.0, p.text_muted()),
+            false,
+            Some(Message::OpenCreate),
+            p,
+            l,
+        ),
+        container(
+            text("Create or join: a Space, a chat, a server")
+                .size(12)
+                .color(p.text()),
+        )
+        .padding([4, 8]),
         iced::widget::tooltip::Position::Right,
     );
     scrollable(
@@ -5085,6 +5301,11 @@ fn rail_badge<'a>(tile: Element<'a, Message>, count: u64, p: &theme::Palette) ->
         container(badge).width(52).height(50).align_x(iced::Alignment::End).align_y(iced::Alignment::End),
     ]
     .into()
+}
+
+/// A Discord server's unread mentions of us, over its text channels.
+fn guild_mentions(guild: &mesh_discord::Guild) -> u64 {
+    guild.text_channels.iter().map(|c| c.mentions).sum()
 }
 
 /// Each rail folder's place in `folders_open`.
@@ -5245,10 +5466,10 @@ fn channel_pane<'a>(
             .width(Length::Fill),
     ]
     .align_y(iced::Alignment::Center);
-    if whatsapp.is_some() && !group.is_some_and(|g| g.space.is_some()) {
+    if !group.is_some_and(|g| g.space.is_some()) {
         title = title.push(iced::widget::tooltip(
-            ui::icon_button(ui::Icon::Plus, Some(Message::NewChatOpen), false, p, l),
-            container(text("New WhatsApp chat").size(12).color(p.text())).padding([4, 8]),
+            ui::icon_button(ui::Icon::Plus, Some(Message::OpenCreate), false, p, l),
+            container(text("New chat, Space or friend").size(12).color(p.text())).padding([4, 8]),
             iced::widget::tooltip::Position::Bottom,
         ));
     }
@@ -5344,6 +5565,52 @@ fn channel_pane<'a>(
         Some(w) if shows(Network::WhatsApp) => w.chats.as_slice(),
         _ => &[],
     };
+    // Archived WhatsApp chats: one row at the top that opens them, like WhatsApp's.
+    if let Some(w) = whatsapp.filter(|w| shows(Network::WhatsApp) && !w.archived.is_empty()) {
+        let unread: u64 = w.archived.iter().map(|c| c.unread).sum();
+        let arrow = if session.show_archived { "▾" } else { "▸" };
+        let mut line = row![
+            ui::icon(ui::Icon::WhatsApp, 16.0, p.text_muted()),
+            ui::sans(
+                format!("Archived ({})", w.archived.len()),
+                14.0,
+                Weight::Normal,
+                p.text()
+            )
+            .width(Length::Fill),
+        ]
+        .spacing(8)
+        .align_y(iced::Alignment::Center);
+        if unread > 0 {
+            line = line.push(ui::chip(unread.to_string(), p));
+        }
+        list = list.push(ui::row_button(
+            line.push(ui::mono(arrow, 12.0, p.text_muted())),
+            Message::ToggleArchived,
+            session.show_archived,
+            p,
+            l,
+        ));
+        if session.show_archived {
+            for chat in &w.archived {
+                let open = WebChat {
+                    network: Network::WhatsApp,
+                    id: chat.id.clone(),
+                    name: chat.name.clone(),
+                    dm: !chat.group,
+                };
+                list = list.push(web_chat_row(
+                    session,
+                    open,
+                    chat.avatar.as_deref(),
+                    chat.unread > 0,
+                    chat.unread,
+                    p,
+                    l,
+                ));
+            }
+        }
+    }
     for (label, rooms) in sections {
         let dm_section = home && label == "Direct messages";
         let mut rows: Vec<(u64, Element<'a, Message>)> = rooms
@@ -5378,19 +5645,6 @@ fn channel_pane<'a>(
         list = list.push(ui::section(label, p));
         for (_, row) in rows {
             list = list.push(row);
-        }
-    }
-
-    // Archived WhatsApp chats: one row that opens them, like WhatsApp's.
-    if let Some(w) = whatsapp.filter(|w| shows(Network::WhatsApp) && !w.archived.is_empty()) {
-        let arrow = if session.show_archived { "▾" } else { "▸" };
-        let line = row![ui::mono(format!("{arrow} archived ({})", w.archived.len()), 12.0, p.text_muted())];
-        list = list.push(ui::row_button(line, Message::ToggleArchived, false, p, l));
-        if session.show_archived {
-            for chat in &w.archived {
-                let open = WebChat { network: Network::WhatsApp, id: chat.id.clone(), name: chat.name.clone(), dm: !chat.group };
-                list = list.push(web_chat_row(session, open, chat.avatar.as_deref(), chat.unread > 0, chat.unread, p, l));
-            }
         }
     }
 
@@ -5593,7 +5847,15 @@ fn guild_pane<'a>(
                 name: channel.name.clone(),
                 dm: false,
             };
-            list = list.push(web_chat_row(session, open, None, false, 0, p, l));
+            list = list.push(web_chat_row(
+                session,
+                open,
+                None,
+                channel.unread,
+                channel.mentions,
+                p,
+                l,
+            ));
         }
         for channel in guild
             .voice_channels
@@ -5664,7 +5926,17 @@ fn web_chat_row<'a>(
     ]
     .spacing(8)
     .align_y(iced::Alignment::Center);
-    if count > 0 {
+    if count > 0 && channel.network == Network::Discord {
+        // Discord's counts are mentions of us: red, as Discord draws them.
+        let fill = p.danger();
+        let badge =
+            container(ui::mono_bold(format!("@{count}"), 11.0, p.background())).padding([1, 6]);
+        label = label.push(badge.style(move |_| container::Style {
+            background: Some(fill.into()),
+            border: iced::border::rounded(8),
+            ..container::Style::default()
+        }));
+    } else if count > 0 {
         label = label.push(ui::chip(count.to_string(), p));
     }
     // Server channels need no tag; DMs and chats say where they're from.
@@ -5798,6 +6070,64 @@ fn user_panel<'a>(
     .into()
 }
 
+/// Who's typing in a Discord DM or channel, from the client's snapshot.
+fn discord_typing<'a>(state: &'a App, id: &str) -> &'a [String] {
+    let Some(d) = &state.discord_state else {
+        return &[];
+    };
+    let dm = d.dms.iter().find(|dm| dm.id == id).map(|dm| &dm.typing);
+    let channels = d.guilds.iter().flat_map(|g| &g.text_channels);
+    dm.or_else(|| channels.filter(|c| c.id == id).map(|c| &c.typing).next())
+        .map(Vec::as_slice)
+        .unwrap_or_default()
+}
+
+/// A 1:1 chat's "online" / "last seen 14:02" line (and whether they're online).
+fn web_presence(state: &App, chat: &WebChat) -> Option<(String, bool)> {
+    if !chat.dm {
+        return None;
+    }
+    let status = match chat.network {
+        Network::WhatsApp => {
+            let (online, seen) = *state.wa_presence.get(&chat.id)?;
+            if !online {
+                let seen = seen.and_then(|ms| Local.timestamp_millis_opt(ms as i64).single())?;
+                let when = if seen.date_naive() == Local::now().date_naive() {
+                    seen.format("today at %H:%M").to_string()
+                } else {
+                    seen.format("%-d %b at %H:%M").to_string()
+                };
+                return Some((format!("last seen {when}"), false));
+            }
+            "online".to_string()
+        }
+        Network::Discord => state
+            .discord_state
+            .as_ref()?
+            .dms
+            .iter()
+            .find(|dm| dm.id == chat.id)?
+            .status
+            .clone()?,
+        Network::Mesh => {
+            let members = &state.mesh.chats.iter().find(|c| c.id == chat.id)?.members;
+            state
+                .mesh
+                .social
+                .friends
+                .iter()
+                .find(|f| members.contains(&f.id))?
+                .presence
+                .clone()
+        }
+        Network::Matrix => return None,
+    };
+    Some((
+        mesh_ui::presence_label(&status).to_lowercase(),
+        status == "online",
+    ))
+}
+
 fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
     if let Some(settings) = mesh_spaces::settings(session, state) {
         return settings;
@@ -5807,16 +6137,53 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
     let mut col = column![];
     if let Some(channel) = &session.web_chat {
         let face_url = match channel.network {
-            Network::WhatsApp => state.whatsapp_state.as_ref().and_then(|w| w.chats.iter().chain(&w.archived).find(|c| c.id == channel.id)).and_then(|c| c.avatar.clone()),
-            _ => state.discord_state.as_ref().and_then(|d| d.dms.iter().find(|dm| dm.id == channel.id)).and_then(|dm| dm.avatar.clone()),
+            Network::WhatsApp => state
+                .whatsapp_state
+                .as_ref()
+                .and_then(|w| {
+                    w.chats
+                        .iter()
+                        .chain(&w.archived)
+                        .find(|c| c.id == channel.id)
+                })
+                .and_then(|c| c.avatar.clone()),
+            _ => state
+                .discord_state
+                .as_ref()
+                .and_then(|d| d.dms.iter().find(|dm| dm.id == channel.id))
+                .and_then(|dm| dm.avatar.clone()),
         };
         let face = match web_picture(session, face_url.as_deref()) {
-            Some(handle) => zoomable(ui::avatar(&channel.name, Some(handle), 28.0, p.surface_alt(), p, None), face_url),
-            None => ui::icon(if channel.dm { ui::Icon::At } else { ui::Icon::Hash }, 18.0, p.text_muted()),
+            Some(handle) => zoomable(
+                ui::avatar(&channel.name, Some(handle), 28.0, p.surface_alt(), p, None),
+                face_url,
+            ),
+            None => ui::icon(
+                if channel.dm {
+                    ui::Icon::At
+                } else {
+                    ui::Icon::Hash
+                },
+                18.0,
+                p.text_muted(),
+            ),
         };
+        let mut title = column![ui::sans(
+            &channel.name,
+            15.0,
+            Weight::Semibold,
+            p.text_bright()
+        )];
+        if let Some((line, online)) = web_presence(state, channel) {
+            title = title.push(ui::mono(
+                line,
+                11.0,
+                if online { p.success() } else { p.text_muted() },
+            ));
+        }
         let mut header = row![
             face,
-            ui::sans(&channel.name, 15.0, Weight::Semibold, p.text_bright()).width(Length::Fill),
+            title.width(Length::Fill),
             ui::mono(channel.network.tag(), 11.0, net_color(channel.network, p)),
         ]
         .spacing(10)
@@ -5940,13 +6307,24 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
     if let Some(channel) = &session.web_chat {
         let (hash, account) = match channel.network {
             Network::WhatsApp => ("", channel.network.spec().name),
-            _ => (if channel.dm { "" } else { "#" }, channel.network.spec().name),
+            _ => (
+                if channel.dm { "" } else { "#" },
+                channel.network.spec().name,
+            ),
         };
-        let placeholder = format!("message {hash}{}  —  sends with your {account} account", channel.name);
-        let typing = if channel.network == Network::Mesh {
-            mesh_dm::typing(state, &channel.id)
-        } else {
-            &[]
+        let placeholder = format!(
+            "message {hash}{}  —  sends with your {account} account",
+            channel.name
+        );
+        let typing = match channel.network {
+            Network::Mesh => mesh_dm::typing(state, &channel.id),
+            Network::WhatsApp => state
+                .wa_typing
+                .get(&channel.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default(),
+            Network::Discord => discord_typing(state, &channel.id),
+            Network::Matrix => &[],
         };
         return body(col, placeholder, typing).into();
     }
@@ -6771,7 +7149,21 @@ fn timeline_view<'a>(
         }
 
         let irc = density == theme::Density::Irc;
-        let content = message_content(message, session, irc, x.plain_text_mode, p);
+        if x.bubbles && !irc {
+            let first = day_changed || previous_sender != Some(&message.sender);
+            list = list.push(bubble_row(
+                message,
+                session,
+                first,
+                &time_label,
+                density,
+                x,
+                p,
+            ));
+            previous_sender = Some(&message.sender);
+            continue;
+        }
+        let content = message_content(message, session, irc, x.plain_text_mode, true, p);
         let name_color = if is_me { p.accent() } else { p.text_bright() };
         list = list.push(match density {
             theme::Density::Cozy => {
@@ -6832,17 +7224,100 @@ fn timeline_view<'a>(
     list.into()
 }
 
+/// A message in a bubble: ours on the right in our colour, theirs on the
+/// left in theirs with (cozy) their picture and, first in a run, their name.
+fn bubble_row<'a>(
+    message: &'a TimelineMessage,
+    session: &'a Session,
+    first: bool,
+    time: &str,
+    density: theme::Density,
+    x: &theme::Extras,
+    p: &'a theme::Palette,
+) -> Element<'a, Message> {
+    let net = net_color(message.sender_network, p);
+    let me = session.my_profile.as_ref().map(|me| &me.user_id);
+    let mine = me == Some(&message.sender)
+        || message
+            .web_id
+            .as_ref()
+            .is_some_and(|id| session.mesh_mine.contains(id));
+    let fill = if mine {
+        x.bubble_mine
+            .fill(theme::mix(p.accent(), p.surface(), 0.7), net, p)
+    } else {
+        x.bubble_theirs.fill(p.surface_alt(), net, p)
+    };
+    let fill = theme::alpha(fill, f32::from(x.bubble_opacity.min(100)) / 100.0);
+    let mut inner = column![].spacing(4);
+    if first && !mine {
+        let mut name = row![ui::sans(&message.sender_name, 13.0, Weight::Semibold, net)].spacing(8);
+        if x.show_network_tags {
+            name = name.push(ui::mono(message.sender_network.tag(), 10.0, net));
+        }
+        inner = inner.push(name);
+    }
+    inner = inner
+        .push(message_content(
+            message,
+            session,
+            false,
+            x.plain_text_mode,
+            false,
+            p,
+        ))
+        .push(ui::mono(time.to_string(), 10.0, p.text_muted()));
+    let bubble = container(inner)
+        .padding([6, 10])
+        .max_width(560)
+        .style(move |_| container::Style {
+            background: Some(fill.into()),
+            border: iced::border::rounded(12),
+            ..container::Style::default()
+        });
+    let gap = iced::Padding {
+        top: if first { 8.0 } else { 0.0 },
+        ..iced::Padding::ZERO
+    };
+    if mine {
+        return row![Space::new().width(Length::Fill), bubble]
+            .padding(gap)
+            .into();
+    }
+    // Cozy: their picture by the first of a run, room for it by the rest.
+    let face: Element<'a, Message> = match density {
+        theme::Density::Cozy if first => ui::avatar(
+            &message.sender_name,
+            picture(session, message.sender_avatar.as_ref()),
+            32.0,
+            net,
+            p,
+            None,
+        ),
+        theme::Density::Cozy => Space::new().width(32.0).into(),
+        _ => Space::new().width(0.0).into(),
+    };
+    row![face, bubble, Space::new().width(Length::Fixed(48.0))]
+        .spacing(8)
+        .padding(gap)
+        .into()
+}
+
 /// A message's body: prose (with inline `code`), fenced code blocks, an
-/// image figure, and its reaction pills.
+/// image figure, and its reaction pills. `fill`: as wide as the timeline
+/// (else as wide as its text, for a bubble).
 fn message_content<'a>(
     message: &'a TimelineMessage,
     session: &'a Session,
     all_mono: bool,
     plain: bool,
+    fill: bool,
     p: &'a theme::Palette,
 ) -> Element<'a, Message> {
     let body_color = theme::mix(p.text(), p.text_bright(), 0.4);
-    let mut col = column![].spacing(6).width(Length::Fill);
+    let mut col = column![]
+        .spacing(6)
+        .width(if fill { Length::Fill } else { Length::Shrink });
 
     if message.forwarded {
         col = col.push(ui::mono("↪ Forwarded", 11.0, p.text_muted()));
@@ -6948,6 +7423,10 @@ fn message_content<'a>(
                 .width(Length::Fill)
                 .align_x(iced::alignment::Horizontal::Right),
         );
+    }
+    if !fill {
+        // The hover bar sits over the bubble, not the timeline's width.
+        layers = layers.width(Length::Shrink);
     }
     mouse_area(layers)
         .on_enter(Message::HoverMessage(id.to_string()))
@@ -7825,20 +8304,119 @@ fn rice_page<'a>(state: &'a App) -> Element<'a, Message> {
     let extras = column![
         heading("extras", p),
         background_rows(state, p, l),
-        switch_row("Translucent panes", "Panes at 92% opacity so Hyprland's blur shows through", x.translucent_panes, Some(Message::ToggleExtra(Extra::Translucent)), p),
-        switch_row("Show platform tags", "mx / dc next to names, so you always know where a message goes", x.show_network_tags, Some(Message::ToggleExtra(Extra::Tags)), p),
-        switch_row("Plain-text mode", "No image downloads or previews: just text, links and code", x.plain_text_mode, Some(Message::ToggleExtra(Extra::PlainText)), p),
+        switch_row(
+            "Translucent panes",
+            "Panes at 92% opacity so Hyprland's blur shows through",
+            x.translucent_panes,
+            Some(Message::ToggleExtra(Extra::Translucent)),
+            p
+        ),
+        switch_row(
+            "Show platform tags",
+            "mx / dc next to names, so you always know where a message goes",
+            x.show_network_tags,
+            Some(Message::ToggleExtra(Extra::Tags)),
+            p
+        ),
+        switch_row(
+            "Plain-text mode",
+            "No image downloads or previews: just text, links and code",
+            x.plain_text_mode,
+            Some(Message::ToggleExtra(Extra::PlainText)),
+            p
+        ),
+        switch_row(
+            "Message bubbles",
+            "Yours on the right, theirs on the left, as in WhatsApp (not in irc density)",
+            x.bubbles,
+            Some(Message::ToggleExtra(Extra::Bubbles)),
+            p
+        ),
     ]
     .spacing(2);
+    let extras = if x.bubbles {
+        extras.push(bubble_rows(state, p, l))
+    } else {
+        extras
+    };
 
     column![
-        page_header("Rice", "Mesh wears your desktop. Change your theme once, every pane follows.", p),
+        page_header(
+            "Rice",
+            "Mesh wears your desktop. Change your theme once, every pane follows.",
+            p
+        ),
         source_section,
         tokens,
         layout,
         extras,
     ]
     .spacing(20)
+    .into()
+}
+
+/// The Rice page's bubble colours (ours, theirs) and opacity.
+fn bubble_rows<'a>(
+    state: &'a App,
+    p: &'a theme::Palette,
+    l: &theme::Layout,
+) -> Element<'a, Message> {
+    let x = &state.extras;
+    let (fill, ctrl) = (p.background(), p.border_ctrl());
+    let picker = |mine: bool, now: theme::BubbleColor| {
+        let mut colors = row![].spacing(2);
+        for color in theme::BubbleColor::ALL {
+            colors = colors.push(segment(
+                color.label(),
+                now == color,
+                Message::BubbleColorChosen(mine, color),
+                p,
+                l,
+            ));
+        }
+        container(colors)
+            .padding(3)
+            .style(move |_| container::Style {
+                background: Some(fill.into()),
+                border: iced::border::rounded(8).color(ctrl).width(1),
+                ..container::Style::default()
+            })
+    };
+    let line = |title: &'a str, sub: String, control: Element<'a, Message>| {
+        column![
+            row![
+                column![ui::sans(title, 14.0, Weight::Normal, p.text_bright()), text(sub).size(12).color(p.text_muted())].width(Length::Fill),
+                control,
+            ]
+            .spacing(12)
+            .align_y(iced::Alignment::Center)
+            .padding([10, 0]),
+            ui::hline(p),
+        ]
+    };
+    let opacity = slider(10.0..=100.0, f32::from(x.bubble_opacity), |v| {
+        Message::BubbleOpacity(v.round() as u8)
+    })
+    .step(5.0_f32)
+    .on_release(Message::BubbleOpacitySaved)
+    .width(200);
+    column![
+        line(
+            "Your bubbles",
+            "theme: your accent · network: the network's colour".into(),
+            picker(true, x.bubble_mine).into()
+        ),
+        line(
+            "Their bubbles",
+            "theme: the panes' second colour".into(),
+            picker(false, x.bubble_theirs).into()
+        ),
+        line(
+            "Bubble opacity",
+            format!("{}%", x.bubble_opacity),
+            opacity.into()
+        ),
+    ]
     .into()
 }
 
@@ -8655,6 +9233,125 @@ struct JoinServer {
 const INVITE_INPUT: &str = "invite";
 
 /// The join-a-Discord-server dialog, over the shell.
+/// The "+" menu: each thing you can start, on the networks that are on.
+fn create_view<'a>(
+    session: &'a Session,
+    state: &'a App,
+    p: &'a theme::Palette,
+    l: &theme::Layout,
+) -> Element<'a, Message> {
+    let item =
+        |icon: ui::Icon, color: iced::Color, title: String, hint: &'a str, press: Vec<Message>| {
+            let line = row![
+                ui::icon(icon, 20.0, color),
+                column![
+                    ui::sans(title, 14.0, Weight::Semibold, p.text_bright()),
+                    text(hint).size(12).color(p.text_muted())
+                ]
+                .spacing(2),
+            ]
+            .spacing(14)
+            .align_y(iced::Alignment::Center);
+            Element::from(
+                ui::row_button(line, Message::Create(press), false, p, l).padding([10, 12]),
+            )
+        };
+    let mesh = net_color(Network::Mesh, p);
+    let mut list = column![].spacing(4);
+    if state.mesh_node.is_some() {
+        let space = state
+            .mesh
+            .spaces
+            .iter()
+            .find(|s| Some(&s.id) == session.active_mesh_space.as_ref());
+        if let Some(space) =
+            space.filter(|s| s.role.as_deref().is_some_and(|r| r != "member") && !s.ended)
+        {
+            let open = vec![Message::MeshSpace(mesh_spaces::Msg::Quick(Some((
+                space.id.clone(),
+                String::new(),
+            ))))];
+            list = list.push(item(
+                ui::Icon::Hash,
+                mesh,
+                format!("New channel in {}", space.name),
+                "A text channel in this Space",
+                open,
+            ));
+        }
+        // Its name is asked for on Home, under your friends.
+        let space = vec![
+            Message::ShowFriends(mesh_ui::Tab::Online),
+            Message::MeshSpace(mesh_spaces::Msg::NewSpace(true)),
+        ];
+        list = list.push(item(
+            ui::Icon::Plus,
+            mesh,
+            "New Mesh Space".into(),
+            "Your own server: channels, voice, your friends",
+            space,
+        ));
+        let add = vec![Message::ShowFriends(mesh_ui::Tab::Add)];
+        list = list.push(item(
+            ui::Icon::UserPlus,
+            mesh,
+            "Add a friend".into(),
+            "By their Mesh friend code or ID",
+            add,
+        ));
+    }
+    if state.whatsapp.is_some() {
+        let color = net_color(Network::WhatsApp, p);
+        list = list.push(item(
+            ui::Icon::WhatsApp,
+            color,
+            "New WhatsApp chat".into(),
+            "Message a contact or a number",
+            vec![Message::NewChatOpen],
+        ));
+    }
+    if state.discord.is_some() {
+        let color = net_color(Network::Discord, p);
+        list = list.push(item(
+            ui::Icon::Discord,
+            color,
+            "Join a Discord server".into(),
+            "Paste an invite link",
+            vec![Message::OpenJoinServer],
+        ));
+        let add = vec![Message::OpenAddFriendDialog];
+        list = list.push(item(
+            ui::Icon::UserPlus,
+            color,
+            "Add a Discord or Matrix friend".into(),
+            "By their username",
+            add,
+        ));
+    }
+    let col = column![
+        row![
+            ui::sans("Create or join", 20.0, Weight::Semibold, p.text_bright()).width(Length::Fill),
+            ui::icon_button(ui::Icon::Close, Some(Message::Escape), false, p, l),
+        ]
+        .align_y(iced::Alignment::Center),
+        list,
+    ]
+    .spacing(16);
+    let scrim = theme::alpha(p.background(), 0.6);
+    container(iced::widget::opaque(
+        ui::pane(col.padding(24), true, p, l, false).max_width(460),
+    ))
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .center_x(Length::Fill)
+    .center_y(Length::Fill)
+    .style(move |_| container::Style {
+        background: Some(scrim.into()),
+        ..container::Style::default()
+    })
+    .into()
+}
+
 fn join_server_view<'a>(
     dialog: &'a JoinServer,
     engine_up: bool,

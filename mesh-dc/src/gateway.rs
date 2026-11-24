@@ -171,6 +171,10 @@ pub struct State {
     pub stream_rtc: HashMap<String, String>,
     pub watching: std::collections::HashSet<String>,
     pub sharing: bool,
+    /// Friends' status (`online`, `idle`, `dnd`, `offline`), by user id.
+    pub presence: HashMap<String, String>,
+    /// channel id -> who's typing there and since when (Discord's lasts 10 s).
+    pub typing: HashMap<String, Vec<(String, std::time::Instant)>>,
 }
 
 impl State {
@@ -457,6 +461,18 @@ async fn dispatch(
             true
         }
         "READY_SUPPLEMENTAL" => {
+            // Friends' presences, for DMs' online dots.
+            let friends = d
+                .pointer("/merged_presences/friends")
+                .and_then(Value::as_array);
+            for p in friends.into_iter().flatten() {
+                if let (Some(id), Some(status)) = (
+                    p.get("user_id").and_then(Value::as_str),
+                    p.get("status").and_then(Value::as_str),
+                ) {
+                    s.presence.insert(id.to_owned(), status.to_owned());
+                }
+            }
             // Per-guild voice states that READY leaves out.
             for g in d
                 .get("guilds")
@@ -558,7 +574,47 @@ async fn dispatch(
             }
             true
         }
+        // A friend's (no guild_id): the server members' are too many to follow.
+        "PRESENCE_UPDATE" if d.get("guild_id").is_none_or(Value::is_null) => {
+            let id = d.pointer("/user/id").and_then(Value::as_str);
+            if let (Some(id), Some(status)) = (id, d.get("status").and_then(Value::as_str)) {
+                s.presence.insert(id.to_owned(), status.to_owned());
+            }
+            true
+        }
+        "TYPING_START" => {
+            let (Some(cid), Some(uid)) = (
+                d.get("channel_id").and_then(Value::as_str),
+                d.get("user_id").and_then(Value::as_str),
+            ) else {
+                return false;
+            };
+            if s.me_id().as_deref() == Some(uid) {
+                return false;
+            }
+            let now = std::time::Instant::now();
+            let list = s.typing.entry(cid.to_owned()).or_default();
+            list.retain(|(id, at)| id != uid && at.elapsed() < TYPING);
+            list.push((uid.to_owned(), now));
+            // Redraw when it runs out.
+            let events = events.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(TYPING).await;
+                let _ = events.send(Event::Snapshot);
+            });
+            true
+        }
         "MESSAGE_CREATE" => {
+            // Their message ends their "typing…".
+            let author = d
+                .pointer("/author/id")
+                .and_then(Value::as_str)
+                .map(str::to_owned);
+            if let (Some(cid), Some(author)) = (d.get("channel_id").and_then(Value::as_str), author)
+                && let Some(list) = s.typing.get_mut(cid)
+            {
+                list.retain(|(id, _)| *id != author);
+            }
             let changed = bump_dm_order(&mut s, d);
             notify(&s, d, events);
             dirty_if_open(&s, d, events);
@@ -818,6 +874,11 @@ fn bump_dm_order(s: &mut State, d: &Value) -> bool {
             entry.1 += 1; // every DM message counts, as Discord's own badge does
         }
     }
+    // A server message that mentions us counts toward the channel's badge.
+    let open = s.open_channel.as_deref() == Some(cid);
+    if !from_me && !open && d.get("guild_id").is_some_and(|g| !g.is_null()) && mentions_me(s, d) {
+        s.read_state.entry(cid.to_owned()).or_default().1 += 1;
+    }
     if let Some(ch) = s.channels.get_mut(cid) {
         if let (Some(obj), Some(mid)) = (ch.as_object_mut(), d.get("id").and_then(Value::as_str)) {
             obj.insert("last_message_id".into(), json!(mid));
@@ -847,11 +908,8 @@ fn notify(s: &State, d: &Value, events: &mpsc::UnboundedSender<Event>) {
     let Some(cid) = d.get("channel_id").and_then(Value::as_str) else { return };
     let ch = s.channels.get(cid);
     let guild = ch.and_then(|c| c.get("guild_id")).and_then(Value::as_str);
-    if guild.is_some() {
-        let mentioned = d.get("mentions").and_then(Value::as_array).is_some_and(|ms| ms.iter().any(|m| m.get("id").and_then(Value::as_str) == Some(me.as_str())));
-        if !mentioned {
-            return;
-        }
+    if guild.is_some() && !mentions_me(s, d) {
+        return;
     }
     let name = author.and_then(|a| a.get("global_name")).and_then(Value::as_str).or_else(|| author.and_then(|a| a.get("username")).and_then(Value::as_str)).unwrap_or("Someone");
     let where_ = match ch.and_then(|c| c.get("name")).and_then(Value::as_str) {
@@ -861,6 +919,32 @@ fn notify(s: &State, d: &Value, events: &mpsc::UnboundedSender<Event>) {
     };
     let body = d.get("content").and_then(Value::as_str).filter(|c| !c.is_empty()).unwrap_or("sent an attachment").to_owned();
     let _ = events.send(Event::Notify { channel_id: cid.to_owned(), title: format!("{name}{where_}"), body });
+}
+
+/// How long someone shows as typing after Discord's TYPING_START.
+pub const TYPING: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// A server message names us: @us, one of our roles, or @everyone / @here.
+// ponytail: @everyone counts even where we've muted it for the server.
+fn mentions_me(s: &State, d: &Value) -> bool {
+    let Some(me) = s.me_id() else { return false };
+    let ids = |key: &str| {
+        d.get(key)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default()
+    };
+    let us = ids("mentions")
+        .iter()
+        .any(|m| m.get("id").and_then(Value::as_str) == Some(me.as_str()));
+    let roles = d
+        .get("guild_id")
+        .and_then(Value::as_str)
+        .and_then(|g| s.my_roles.get(g));
+    let role = ids("mention_roles")
+        .iter()
+        .any(|r| roles.is_some_and(|mine| r.as_str().is_some_and(|r| mine.iter().any(|m| m == r))));
+    us || role || d.get("mention_everyone").and_then(Value::as_bool) == Some(true)
 }
 
 /// The REST base and the headers the web client sends with every call.
@@ -902,6 +986,28 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn mentions_count_us_our_roles_and_everyone() {
+        let mut s = State {
+            me: Some(json!({ "id": "1" })),
+            ..Default::default()
+        };
+        s.my_roles.insert("g".into(), vec!["r1".into()]);
+        let m = |extra: Value| {
+            let mut d = json!({ "guild_id": "g", "mentions": [], "mention_roles": [] });
+            d.as_object_mut()
+                .unwrap()
+                .extend(extra.as_object().unwrap().clone());
+            mentions_me(&s, &d)
+        };
+        assert!(m(json!({ "mentions": [{ "id": "1" }] })));
+        assert!(m(json!({ "mention_roles": ["r1"] })));
+        assert!(m(json!({ "mention_everyone": true })));
+        assert!(!m(
+            json!({ "mentions": [{ "id": "2" }], "mention_roles": ["r2"] })
+        ));
+    }
 
     #[test]
     fn zlib_stream_waits_for_the_sync_flush() {

@@ -1294,7 +1294,7 @@ fn friend_name(f: &mesh::Friend) -> String {
 }
 
 /// "Online", "Do not disturb", …
-fn presence_label(presence: &str) -> &'static str {
+pub(crate) fn presence_label(presence: &str) -> &'static str {
     match presence {
         "online" => "Online",
         "idle" => "Idle",

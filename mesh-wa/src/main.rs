@@ -28,6 +28,7 @@ use whatsapp_rust::{ProfilePictureRequest, ProfilePictureTarget, ProfilePictureT
 use whatsapp_rust::wacore::net::HttpRequest;
 use whatsapp_rust::wacore_binary::JidExt as _;
 use whatsapp_rust::wacore::proto_helpers::build_quote_context_with_info;
+use whatsapp_rust::wacore::types::presence::{ChatActivity, PresenceStatus, ReceiptType};
 use whatsapp_rust::voip::VideoUpgradeToken;
 use whatsapp_rust::wacore::types::call::{CallAction, IncomingCall, VideoState};
 
@@ -330,6 +331,47 @@ impl App {
                 self.store.chat(&id).archived = update.action.archived == Some(true);
                 self.changed();
             }
+            // Our messages reaching them (✓✓) and being read (blue ✓✓).
+            // ponytail: in a group the first member's receipt counts for all.
+            Event::Receipt(r) if !r.source.is_from_me => {
+                let ack = match r.r#type {
+                    ReceiptType::Delivered => 2,
+                    ReceiptType::Read | ReceiptType::Played => 3,
+                    _ => return,
+                };
+                let chat_id = self.store.canon(&r.source.chat.to_non_ad().to_string());
+                let ids: Vec<&str> = r.message_ids.iter().map(|id| id.as_str()).collect();
+                if self.store.ack(&chat_id, &ids, ack) {
+                    self.save_due = true;
+                    if self.is_open(&chat_id) {
+                        self.messages_due = true;
+                    }
+                }
+            }
+            Event::ChatPresence(update) if !update.source.is_from_me => {
+                let chat_id = self
+                    .store
+                    .canon(&update.source.chat.to_non_ad().to_string());
+                let who = self.store.name_of(
+                    &self
+                        .store
+                        .canon(&update.source.sender.to_non_ad().to_string()),
+                );
+                let typing = !matches!(update.state, ChatActivity::Idle);
+                emit(
+                    "waTyping",
+                    &json!({ "chat_id": chat_id, "who": who, "typing": typing }),
+                );
+            }
+            Event::Presence(update) => {
+                let id = self.store.canon(&update.from.to_non_ad().to_string());
+                let online = update.status == PresenceStatus::Available;
+                let last_seen = update.last_seen.map(|t| t.timestamp_millis().max(0) as u64);
+                emit(
+                    "waPresence",
+                    &json!({ "id": id, "online": online, "last_seen": last_seen }),
+                );
+            }
             Event::MarkChatAsReadUpdate(update) => {
                 let id = self.store.canon(&update.jid.to_string());
                 let chat = self.store.chat(&id);
@@ -411,7 +453,8 @@ impl App {
         } else {
             data.unread += 1;
         }
-        let muted = data.muted;
+        // Archived chats stay quiet, as on the phone.
+        let quiet = data.muted || data.archived;
         self.changed();
         if is_open {
             self.emit_messages(&chat_id);
@@ -421,7 +464,7 @@ impl App {
         if src.is_group {
             self.fetch_group_names(Some(&chat_id));
         }
-        if live && !m.info.is_offline && !from_me && !muted {
+        if live && !m.info.is_offline && !from_me && !quiet {
             let title = if src.is_group { format!("{author} in {}", self.store.name_of(&chat_id)) } else { author };
             emit("waNotify", &json!({ "chat_id": chat_id, "title": title, "body": notice }));
         }
@@ -504,6 +547,13 @@ impl App {
                     quote,
                     forwarded: store::forwarded(body),
                     reacts,
+                    // SERVER_ACK, DELIVERY_ACK, READ / PLAYED.
+                    ack: match wmi.status.filter(|_| from_me).map(|st| st as i32) {
+                        Some(2) => 1,
+                        Some(3) => 2,
+                        Some(4 | 5) => 3,
+                        _ => 0,
+                    },
                     ..Default::default()
                 });
             }
@@ -604,6 +654,7 @@ impl App {
                         media: body.media,
                         quote,
                         forwarded: store::forwarded(&message),
+                        ack: 1,
                         ..Default::default()
                     };
                     self.store.add(&chat_id, msg);
@@ -650,18 +701,46 @@ impl App {
                 let id = arg(0);
                 if id.is_empty() {
                     self.open = None;
+                    self.set_presence(false);
                     return;
                 }
                 self.emit_messages(&id);
                 self.open = Some(id.clone());
                 // Opening a chat marks it read, here and on the phone, as WhatsApp Web does.
                 self.mark_read(&id, true);
+                // Online and "last seen" come only while we're online too, as on WhatsApp Web.
+                self.set_presence(true);
+                if !id.ends_with("@g.us")
+                    && let Ok(jid) = id.parse::<Jid>()
+                {
+                    let client = self.client.clone();
+                    tokio::spawn(async move {
+                        if let Err(e) = client.presence().subscribe(jid).await {
+                            debug!("presence subscribe failed: {e}");
+                        }
+                    });
+                }
                 let mut pics = vec![id.clone()];
                 pics.extend(self.store.recent(&id).into_iter().map(|m| m.author_id).filter(|a| *a != self.store.me));
                 pics.dedup();
                 self.ask_avatars(pics);
             }
             "send" => self.send(arg(0), arg(1), arg(2)),
+            "typing" => {
+                if let Ok(jid) = arg(0).parse::<Jid>() {
+                    let (client, on) = (self.client.clone(), arg(1) != "false");
+                    tokio::spawn(async move {
+                        let sent = if on {
+                            client.chatstate().send_composing(&jid).await
+                        } else {
+                            client.chatstate().send_paused(&jid).await
+                        };
+                        if let Err(e) = sent {
+                            debug!("typing failed: {e}");
+                        }
+                    });
+                }
+            }
             "signOut" => {
                 let report = self.client.logout().await;
                 info!("logged out: {:?}", report.deregistration);
@@ -719,6 +798,20 @@ impl App {
             "listSources" => list_sources(),
             other => warn!("unknown command {other}"),
         }
+    }
+
+    fn set_presence(&self, online: bool) {
+        let client = self.client.clone();
+        tokio::spawn(async move {
+            let set = if online {
+                client.presence().set_available().await
+            } else {
+                client.presence().set_unavailable().await
+            };
+            if let Err(e) = set {
+                debug!("presence failed: {e}");
+            }
+        });
     }
 
     /// Sends read receipts for the chat's unread messages from others; `sync` also marks the chat
@@ -1336,6 +1429,32 @@ mod tests {
         assert_eq!((snap.chats[0].name.as_str(), snap.chats[0].group), ("Family", true));
         assert_eq!(snap.chats[1].name, "+4");
         assert_eq!(snap.archived.len(), 1);
+    }
+
+    #[test]
+    fn receipts_only_raise_our_own_marks() {
+        let mut store = Store::default();
+        store.me = "me@s.whatsapp.net".into();
+        for (id, author) in [("a", "me@s.whatsapp.net"), ("b", "them@s.whatsapp.net")] {
+            let msg = Message {
+                id: id.into(),
+                author_id: author.into(),
+                ..Default::default()
+            };
+            store.add("them@s.whatsapp.net", msg);
+        }
+        assert!(store.ack("them@s.whatsapp.net", &["a", "b"], 3));
+        assert!(
+            !store.ack("them@s.whatsapp.net", &["a"], 2),
+            "read stays read"
+        );
+        let acks: Vec<u8> = store
+            .chat("them@s.whatsapp.net")
+            .messages
+            .iter()
+            .map(|m| m.ack)
+            .collect();
+        assert_eq!(acks, [3, 0]);
     }
 
     #[test]

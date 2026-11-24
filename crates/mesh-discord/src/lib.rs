@@ -187,6 +187,12 @@ pub struct Dm {
     pub last_ms: u64,
     pub unread: bool,
     pub mentions: u64,
+    /// A one-to-one DM's friend: `online`, `idle`, `dnd` or `offline`.
+    #[serde(default)]
+    pub status: Option<String>,
+    /// Who's typing there, by name.
+    #[serde(default)]
+    pub typing: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -310,6 +316,15 @@ pub struct TextChannel {
     /// We can't see into it: shown, but not opened.
     #[serde(default)]
     pub locked: bool,
+    /// Messages we haven't read.
+    #[serde(default)]
+    pub unread: bool,
+    /// Mentions of us we haven't read (@us, our roles, @everyone).
+    #[serde(default)]
+    pub mentions: u64,
+    /// Who's typing there, by name.
+    #[serde(default)]
+    pub typing: Vec<String>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
