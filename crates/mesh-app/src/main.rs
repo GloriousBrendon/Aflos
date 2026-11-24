@@ -15,6 +15,7 @@ mod sounds;
 mod theme;
 mod titlebar;
 mod ui;
+mod update;
 
 use chrono::{DateTime, Local, TimeZone};
 use iced::font::Weight;
@@ -148,6 +149,8 @@ struct App {
     /// The call's video, by track: the latest frame of each camera
     /// (WhatsApp's ids start `wa-`).
     video: HashMap<String, VideoTile>,
+    /// Check for updates: where it's got to.
+    update: Updating,
     /// WhatsApp's call, while there is one.
     wa_call: Option<whatsapp::Call>,
     /// Who's typing in each WhatsApp chat, by name.
@@ -415,6 +418,17 @@ struct ColorEdit {
     key: &'static str,
     hex: String,
     hsl: [f32; 3],
+}
+
+/// Check for updates, as the Settings footer shows it.
+#[derive(Debug, Clone, PartialEq)]
+enum Updating {
+    Idle,
+    Checking,
+    UpToDate,
+    Available(update::Release),
+    Installing(String),
+    Failed(String),
 }
 
 /// The Rice page's switches.
@@ -1331,6 +1345,12 @@ enum Message {
     /// Show a Discord text channel or DM in the chat pane.
     WebChatSelected(WebChat),
     WindowFocused(bool),
+    /// Look for a newer Mesh on GitHub (true: asked for, so say if there's none).
+    CheckUpdate(bool),
+    UpdateChecked(bool, Result<Option<update::Release>, String>),
+    /// Download, check and install the newer Mesh found, then restart.
+    InstallUpdate,
+    UpdateInstalled(Result<(), String>),
     /// The "+" menu: everything you can make or join, on any network.
     OpenCreate,
     /// A "+" menu choice: closes the menu, then does these.
@@ -1483,6 +1503,7 @@ fn boot() -> (App, Task<Message>) {
         sync_off: config.sync_off.clone(),
         accounts: accounts::Panel::default(),
         video: HashMap::new(),
+        update: Updating::Idle,
         wa_call: None,
         wa_typing: HashMap::new(),
         wa_presence: HashMap::new(),
@@ -1504,7 +1525,8 @@ fn boot() -> (App, Task<Message>) {
     } else {
         start_app(&mut app)
     };
-    (app, Task::batch([task, open_window()]))
+    let check = Task::done(Message::CheckUpdate(false));
+    (app, Task::batch([task, open_window(), check]))
 }
 
 /// Starts the engine browser and its linked sites' tabs, where the native
@@ -2908,6 +2930,46 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     accounts::refresh_shown(state);
                 }
             }
+            Task::none()
+        }
+        Message::CheckUpdate(asked) => {
+            if matches!(state.update, Updating::Checking | Updating::Installing(_)) {
+                return Task::none();
+            }
+            state.update = Updating::Checking;
+            Task::perform(update::check(), move |found| {
+                Message::UpdateChecked(asked, found)
+            })
+        }
+        Message::UpdateChecked(asked, found) => {
+            state.update = match found {
+                Ok(Some(release)) => {
+                    if !asked {
+                        notify(
+                            format!("Mesh {} is out", release.version),
+                            "Update from Settings (the bottom left).".into(),
+                        );
+                    }
+                    Updating::Available(release)
+                }
+                Ok(None) if asked => Updating::UpToDate,
+                // On its own at start-up, offline or rate-limited: say nothing.
+                Err(err) if asked => Updating::Failed(err),
+                _ => Updating::Idle,
+            };
+            Task::none()
+        }
+        Message::InstallUpdate => {
+            let Updating::Available(release) = state.update.clone() else {
+                return Task::none();
+            };
+            state.update = Updating::Installing(release.version.clone());
+            Task::perform(update::install(release), Message::UpdateInstalled)
+        }
+        // The installer (or the relaunch) takes it from here.
+        Message::UpdateInstalled(Ok(())) => iced::exit(),
+        Message::UpdateInstalled(Err(err)) => {
+            state.update = Updating::Failed(err);
             Task::none()
         }
         Message::OpenCreate => {
@@ -8025,8 +8087,24 @@ fn settings_shell<'a>(session: &'a Session, state: &'a App, width: f32) -> Eleme
     let (p, l, x) = (&state.palette, &state.layout, &state.extras);
     let wide = width > 1100.0;
     let mut panes = row![
-        tile(session, Pane::Channels, settings_nav(session, p, l), 220.0, p, l, x),
-        tile(session, Pane::Chat, settings_page(session, state, width), 0.0, p, l, x),
+        tile(
+            session,
+            Pane::Channels,
+            settings_nav(session, state, p, l),
+            220.0,
+            p,
+            l,
+            x
+        ),
+        tile(
+            session,
+            Pane::Chat,
+            settings_page(session, state, width),
+            0.0,
+            p,
+            l,
+            x
+        ),
     ]
     .spacing(l.gaps_out)
     .height(Length::Fill);
@@ -8048,16 +8126,100 @@ fn settings_shell<'a>(session: &'a Session, state: &'a App, width: f32) -> Eleme
     panes.into()
 }
 
-fn settings_nav<'a>(session: &'a Session, p: &'a theme::Palette, l: &theme::Layout) -> Element<'a, Message> {
+/// The Settings footer: Mesh's version, and checking for (and installing) a newer one.
+fn update_footer<'a>(
+    updating: &'a Updating,
+    p: &'a theme::Palette,
+    l: &theme::Layout,
+) -> Element<'a, Message> {
+    let link = |label: &'a str, press: Message| {
+        button(ui::mono(label, 11.0, p.accent()))
+            .on_press(press)
+            .padding([2, 0])
+            .style(button::text)
+    };
+    let line: Element<'a, Message> = match updating {
+        Updating::Idle => link("Check for updates", Message::CheckUpdate(true)).into(),
+        Updating::Checking => ui::mono("Checking…", 11.0, p.text_muted()).into(),
+        Updating::UpToDate => column![
+            ui::mono("You have the newest.", 11.0, p.success()),
+            link("Check again", Message::CheckUpdate(true))
+        ]
+        .into(),
+        Updating::Available(release) => {
+            let label = ui::sans(
+                format!("Update to {}", release.version),
+                13.0,
+                Weight::Semibold,
+                p.accent_text(),
+            );
+            column![
+                ui::mono(
+                    format!("Mesh {} is out.", release.version),
+                    11.0,
+                    p.text_bright()
+                ),
+                ui::primary_button(label, Some(Message::InstallUpdate), p, l).padding([6, 12]),
+                ui::mono("Mesh restarts to finish.", 11.0, p.text_muted()),
+            ]
+            .spacing(6)
+            .into()
+        }
+        Updating::Installing(version) => {
+            ui::mono(format!("Installing {version}…"), 11.0, p.text_muted()).into()
+        }
+        Updating::Failed(err) => column![
+            text(format!("Update failed: {err}"))
+                .size(11)
+                .color(p.danger()),
+            link("Try again", Message::CheckUpdate(true)),
+        ]
+        .spacing(2)
+        .into(),
+    };
+    column![
+        ui::mono(
+            concat!(
+                "mesh ",
+                env!("CARGO_PKG_VERSION"),
+                "\niced · matrix-rust-sdk"
+            ),
+            11.0,
+            p.text_muted()
+        ),
+        line
+    ]
+    .spacing(6)
+    .padding(10)
+    .into()
+}
+
+fn settings_nav<'a>(
+    session: &'a Session,
+    state: &'a App,
+    p: &'a theme::Palette,
+    l: &theme::Layout,
+) -> Element<'a, Message> {
     let item = |label: &'static str, page: SettingsPage| -> Element<'a, Message> {
         let active = session.settings_page == page;
-        let bar = if active { p.accent() } else { iced::Color::TRANSPARENT };
+        let bar = if active {
+            p.accent()
+        } else {
+            iced::Color::TRANSPARENT
+        };
         let color = if active { p.text_bright() } else { p.text() };
-        let weight = if active { Weight::Semibold } else { Weight::Normal };
+        let weight = if active {
+            Weight::Semibold
+        } else {
+            Weight::Normal
+        };
         ui::row_button(
-            row![ui::swatch(bar, 2.0, 18.0, 1.0), ui::sans(label, 14.0, weight, color)]
-                .spacing(8)
-                .align_y(iced::Alignment::Center),
+            row![
+                ui::swatch(bar, 2.0, 18.0, 1.0),
+                ui::sans(label, 14.0, weight, color)
+            ]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
             Message::OpenSettings(page),
             active,
             p,
@@ -8091,12 +8253,7 @@ fn settings_nav<'a>(session: &'a Session, p: &'a theme::Palette, l: &theme::Layo
         item("Voice & audio", SettingsPage::Voice),
         item("Sounds", SettingsPage::Sounds),
         Space::new().height(Length::Fill),
-        container(ui::mono(
-            concat!("mesh ", env!("CARGO_PKG_VERSION"), "\niced · matrix-rust-sdk"),
-            11.0,
-            p.text_muted(),
-        ))
-        .padding(10),
+        update_footer(&state.update, p, l),
     ]
     .spacing(2)
     .padding([14, 10])

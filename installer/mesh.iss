@@ -73,6 +73,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: 
 
 [Run]
 Filename: "{app}\Mesh.exe"; Description: "Start Mesh"; Flags: nowait postinstall skipifsilent
+; An update from inside Mesh runs this silently: start the new Mesh when done.
+Filename: "{app}\Mesh.exe"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
 Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Mesh.exe /IM mesh-wa.exe /IM mesh-dc.exe /IM mesh-node.exe"; Flags: runhidden; RunOnceId: "StopMesh"
