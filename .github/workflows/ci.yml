@@ -1,0 +1,48 @@
+# Tests and clippy on every pull request, for each of the four cargo
+# workspaces (the app, and the helpers that are their own projects), on
+# Linux and Windows. Needs no secrets: the tests that want Mesh-Node, a
+# network or real devices are #[ignore]d.
+#
+# Clippy fails the job on errors only; the warnings that are already there
+# don't, so this doesn't block on them.
+name: ci
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: ${{ matrix.workspace }} (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # 24.04: 22.04's PipeWire is too old for libspa (aflos-wa, aflos-dc).
+        os: [ubuntu-24.04, windows-2022]
+        workspace: [., aflos-wa, aflos-dc, aflos-media]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: ${{ matrix.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ${{ matrix.workspace }}
+      - if: runner.os == 'Linux'
+        run: >
+          sudo apt-get update && sudo apt-get install -y libasound2-dev
+          libopus-dev libpipewire-0.3-dev libspa-0.2-dev clang pkg-config cmake
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked
