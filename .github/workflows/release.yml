@@ -3,8 +3,7 @@
 # Run workflow, or `gh workflow run release.yml --ref <branch>`) for a dry run:
 # it builds everything and checks the release's files and SHA256SUMS, keeps
 # them as the run's "release" artifact, and publishes nothing. mesh-node comes
-# from the private Mesh-Node repo's origin main, through a read-only deploy key
-# (secret MESH_NODE_KEY); no local checkout is involved.
+# from the public Mesh-Node repo's origin main; no local checkout is involved.
 #
 # Every file is also published under Mesh's old name (Mesh-Setup-*.exe,
 # mesh-*-linux-x86_64.tar.gz): Mesh 0.3.1's updater only looks for those.
@@ -30,7 +29,6 @@ jobs:
         with:
           repository: GloriousBrendon/Mesh-Node
           ref: main
-          ssh-key: ${{ secrets.MESH_NODE_KEY }}
           path: Mesh-Node
       - uses: dtolnay/rust-toolchain@stable
       - run: choco install innosetup -y --no-progress
@@ -61,7 +59,6 @@ jobs:
         with:
           repository: GloriousBrendon/Mesh-Node
           ref: main
-          ssh-key: ${{ secrets.MESH_NODE_KEY }}
           path: Mesh-Node
       - uses: dtolnay/rust-toolchain@stable
       - run: >
