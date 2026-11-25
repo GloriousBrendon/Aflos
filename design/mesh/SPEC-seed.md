@@ -110,6 +110,40 @@ differs from the rows above, this wins.
   as `&mail=<token>`. `--mail-max <bytes>`. `--clock-offset <secs>`, for
   tests only, as `--record-ttl` is on the helper.
 
+### Changed 2026-11-25 by `social` revision 2
+
+Draft with [SPEC-social.md](SPEC-social.md) revision 2 (consent-first
+friendship). Where this differs from the rows above, this wins once
+approved.
+
+- **Friend codes and requests go.** The services `code-hold`, `code-get`,
+  `code-revoke`, `knock-put` and `knock-get` are removed, with `codes.bin`
+  and `knocks.bin` (a 0.5.0 seed logs their counts and deletes them at
+  first start). **D7** and the code half of **D8** (lookups, holds, the
+  30-day hold life) no longer apply; **D9** keeps only the address store.
+- **New: the pairing service** (social D16, D24): `pair-claim`,
+  `pair-join`, `pair-put`, `pair-get`, `pair-close`. Short-lived
+  nameplates (2 minutes) with a mailbox each, held in memory only, never
+  written down.
+- **New: mutual tokens** (social D17): `mutual-put(token, side)` answers
+  `matched` or `waiting`; tokens last 7 days from their last put, in
+  `mutual.bin`.
+- **Kept:** `addr-put`/`addr-get` (routing, and device linking's
+  rendezvous), the mail services and mail records, and every limit on them.
+- **Abuse problems that no longer apply:** guessing friend codes (D8's
+  "any code among 100,000 live ones in about two weeks", which handed a
+  stranger someone's ID); junk codes filling the 100,000-entry store; holds
+  kept alive to crowd out real ones; flooding a code's request box. **What
+  replaces them:** claiming nameplates to crowd out real pairings (bounded
+  by D24's buckets and the 2-minute life, and it reveals nothing); guessing
+  a live pairing code (one guess, which ends that pairing and shows on the
+  owner's screen); putting junk tokens (bounded by D24, and a token matches
+  only the one pair that can compute it).
+- **What the seed learns (D10b):** for a pairing, a nameplate, two
+  throwaway keys, message sizes and timing, never the code (SPAKE2) or the
+  cards (sealed). For a mutual token, that two throwaway sessions are a
+  pair, as address records already show.
+
 ## Behaviour
 
 ### Seed mode
