@@ -27,15 +27,13 @@ icons="$share/icons/hicolor"
 configs="${XDG_CONFIG_HOME:-$HOME/.config}"
 sizes="16 32 48 64 128 256 512"
 
-old_mesh() {
-  rm -f "$bin/mesh-wa" "$bin/mesh-dc" "$apps/mesh.desktop" "$icons/256x256/apps/mesh.png"
-}
+# Our link from an earlier install (never someone else's ~/.local/bin/mesh).
+ours_mesh_link() { [[ -L "$bin/mesh" && "$(readlink "$bin/mesh")" == aflos ]]; }
 
 if [[ "${1:-}" == --uninstall ]]; then
   rm -fv "$bin/aflos" "$bin/aflos-wa" "$bin/aflos-dc" "$bin/mesh-node" "$apps/aflos.desktop" "$icons/scalable/apps/aflos.svg"
   for s in $sizes; do rm -fv "$icons/${s}x${s}/apps/aflos.png"; done
-  if [[ -L "$bin/mesh" ]]; then rm -fv "$bin/mesh"; fi
-  old_mesh
+  if ours_mesh_link; then rm -fv "$bin/mesh"; fi
   exit 0
 fi
 
@@ -57,9 +55,14 @@ else
 fi
 
 mkdir -p "$bin" "$apps"
-old_mesh
 install -m755 "$app" "$bin/aflos"
-ln -sfn aflos "$bin/mesh"
+# Over a Mesh install (its menu entry is the sign): drop its files, and point
+# its ~/.local/bin/mesh at aflos, which Mesh 0.3.1's updater starts after
+# installing. Without a Mesh install, a mesh that's there is left alone.
+if [[ -e "$apps/mesh.desktop" ]] || ours_mesh_link; then
+  rm -f "$bin/mesh-wa" "$bin/mesh-dc" "$apps/mesh.desktop" "$icons/256x256/apps/mesh.png"
+  ln -sfn aflos "$bin/mesh"
+fi
 install -m755 "$wa" "$bin/aflos-wa"
 if grep -qs '^discord_native_wrapper' "$configs/aflos/config.toml" "$configs/mesh/config.toml"; then
   install -m755 "$dc" "$bin/aflos-dc"
@@ -81,12 +84,14 @@ Type=Application
 Name=Aflos
 GenericName=Chat client
 Comment=Encrypted. Decentralized. Yours.
-Exec=$bin/aflos
+Exec="$bin/aflos"
 Icon=aflos
 StartupWMClass=aflos
 Terminal=false
 Categories=Network;InstantMessaging;Chat;
 EOF
 update-desktop-database "$apps" 2>/dev/null || true
-gtk-update-icon-cache -q -t "$icons" 2>/dev/null || true
+# A newer folder date makes the desktop rescan the icons. (No icon-theme.cache
+# here: a cache in your home folder goes stale and hides other apps' icons.)
+touch "$icons"
 echo "installed to $bin"
