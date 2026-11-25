@@ -250,3 +250,23 @@ checks it against the release's `SHA256SUMS` and installs it.
 Not there yet for Matrix: echo cancellation, video calls, group (Element Call)
 calls, history pagination on scroll-up, sending our own typing notices,
 joining or creating spaces, and Discord friend requests through the bridge.
+
+## License
+
+Copyright (C) 2026 GloriousBrendon
+
+Aflos is free software: you can redistribute it and/or modify it under the
+terms of the GNU Affero General Public License as published by the Free
+Software Foundation, either version 3 of the License, or (at your option) any
+later version. See [LICENSE](LICENSE). Contributions: see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+The vendored `songbird` and `serenity-voice-model` in `aflos-dc/vendor/` keep
+their ISC license, and the Michroma font keeps the SIL Open Font License.
+
+## Trademark
+
+The Aflos name and logo are not covered by the code license. Forks and
+redistributions of modified versions must use a different name and logo. The
+brand assets are all rights reserved; see
+[design/brand/aflos/LICENSE.txt](design/brand/aflos/LICENSE.txt).

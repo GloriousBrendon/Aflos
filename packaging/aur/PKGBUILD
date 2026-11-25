@@ -11,7 +11,7 @@ pkgrel=1
 pkgdesc="Encrypted, decentralized chat on its own peer-to-peer network, plus Matrix, Discord and WhatsApp"
 arch=('x86_64')
 url="https://github.com/GloriousBrendon/Mesh-Voice"
-license=('LicenseRef-TODO') # TODO: the repo has no LICENSE yet
+license=('AGPL-3.0-or-later')
 depends=('alsa-lib' 'fontconfig' 'gcc-libs' 'glibc' 'libpipewire' 'libxkbcommon' 'opus')
 makedepends=('cargo' 'clang' 'cmake' 'pkgconf')
 optdepends=('xdg-desktop-portal: pick a screen or window to share in WhatsApp calls')
@@ -60,6 +60,9 @@ package() {
   done
   install -Dm644 crates/aflos/assets/hicolor/scalable/apps/aflos.svg \
     "$pkgdir/usr/share/icons/hicolor/scalable/apps/aflos.svg"
+
+  # The name, logo and icons aren't under the AGPL (README: Trademark).
+  install -Dm644 design/brand/aflos/LICENSE.txt "$pkgdir/usr/share/licenses/$pkgname/BRAND-LICENSE.txt"
 
   install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/aflos.desktop" <<EOF
 [Desktop Entry]

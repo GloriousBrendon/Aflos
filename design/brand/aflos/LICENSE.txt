@@ -1,0 +1,19 @@
+AFLOS BRAND ASSETS
+Copyright (C) 2026 GloriousBrendon. All rights reserved.
+
+The Aflos name, the "jack" mark, the wordmark, the logo lockups, the icons
+and the social images in this folder are NOT covered by Aflos's code license
+(AGPL-3.0-or-later). The same goes for their copies elsewhere in the
+repository:
+
+  crates/aflos/assets/aflos.ico, aflos.png, aflos-mark.svg, aflos-stacked.svg
+  crates/aflos/assets/hicolor/
+  design/logo/
+  design/social/
+
+You may use them only to refer to the official Aflos project (for example, to
+link to it, write about it, or package and ship it unchanged under its own
+name). Forks and modified versions must use a different name and logo.
+
+The Michroma font in font/ is not part of this: it stays under the SIL Open
+Font License 1.1, see font/OFL.txt.
