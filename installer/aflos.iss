@@ -1,6 +1,8 @@
 ; Aflos's Windows installer (Inno Setup 6). Build with installer\build.ps1.
 ; Per-user: no admin prompt, installs to %LOCALAPPDATA%\Programs\Aflos, and
-; leaves your accounts and chats (%APPDATA%\mesh) alone on uninstall.
+; leaves your accounts and chats (%APPDATA%\aflos, and %APPDATA%\mesh from
+; before the rename) alone on uninstall. Same AppId as Mesh's setup, so it
+; updates a Mesh install in place (in its old Programs\Mesh folder).
 
 #define Root ".."
 ; What build.ps1 passes: the Mesh-Node checkout, the Rust target the
@@ -54,6 +56,15 @@ RestartApplications=no
 Name: desktopicon; Description: "Create a desktop shortcut"; Flags: unchecked
 Name: autostart; Description: "Start Aflos when I sign in to Windows"; Flags: unchecked
 
+[InstallDelete]
+; What Mesh (before the rename to Aflos) installed under its old names.
+Type: files; Name: "{app}\Mesh.exe"
+Type: files; Name: "{app}\mesh-wa.exe"
+Type: files; Name: "{app}\mesh-dc.exe"
+Type: files; Name: "{app}\mesh.png"
+Type: files; Name: "{userprograms}\Mesh.lnk"
+Type: files; Name: "{userdesktop}\Mesh.lnk"
+
 [Files]
 Source: "{#AppExe}"; DestDir: "{app}"; DestName: "Aflos.exe"; Flags: ignoreversion
 Source: "{#Root}\aflos-wa{#Bin}aflos-wa.exe"; DestDir: "{app}"; Flags: ignoreversion
@@ -70,6 +81,9 @@ Name: "{userdesktop}\Aflos"; Filename: "{app}\Aflos.exe"; Tasks: desktopicon
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\Aflos.Aflos"; ValueType: string; ValueName: "DisplayName"; ValueData: "Aflos"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\Aflos.Aflos"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\aflos.png"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Aflos"; ValueData: """{app}\Aflos.exe"""; Tasks: autostart; Flags: uninsdeletevalue
+; Mesh's autostart and notification entries, from before the rename.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: none; ValueName: "Mesh"; Flags: deletevalue
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\Mesh.Mesh"; ValueType: none; Flags: deletekey
 
 [Run]
 Filename: "{app}\Aflos.exe"; Description: "Start Aflos"; Flags: nowait postinstall skipifsilent
@@ -77,4 +91,15 @@ Filename: "{app}\Aflos.exe"; Description: "Start Aflos"; Flags: nowait postinsta
 Filename: "{app}\Aflos.exe"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Aflos.exe /IM aflos-wa.exe /IM aflos-dc.exe /IM mesh-node.exe"; Flags: runhidden; RunOnceId: "StopMesh"
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Aflos.exe /IM aflos-wa.exe /IM aflos-dc.exe /IM mesh-node.exe"; Flags: runhidden; RunOnceId: "StopAflos"
+
+[Code]
+// Restart Manager only closes programs whose files this setup replaces, and
+// Mesh.exe (before the rename) isn't one: stop it so its old files can go.
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  Code: Integer;
+begin
+  Exec(ExpandConstant('{sys}\taskkill.exe'), '/F /IM Mesh.exe /IM mesh-wa.exe /IM mesh-dc.exe', '', SW_HIDE, ewWaitUntilTerminated, Code);
+  Result := '';
+end;

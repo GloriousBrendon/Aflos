@@ -1,7 +1,7 @@
 #!/bin/bash
 # Builds Aflos and its helpers in release and installs them for this user
-# (no root): mesh, aflos-wa, aflos-dc and mesh-node in ~/.local/bin, Aflos's icon
-# and a .desktop entry. The Linux counterpart of build.ps1 + mesh.iss.
+# (no root): aflos, aflos-wa, aflos-dc and mesh-node in ~/.local/bin, Aflos's
+# icons and a .desktop entry. The Linux counterpart of build.ps1 + aflos.iss.
 #
 # mesh-node comes from a Mesh-Node checkout next to this one, or from
 # $MESH_NODE; without one, Aflos installs without its own network.
@@ -11,24 +11,38 @@
 #   installer/install-linux.sh --uninstall  remove them (keeps accounts and chats)
 #
 # aflos-dc is only installed once `discord_native_wrapper` is set in
-# ~/.config/mesh/config.toml, so Discord never connects from your own IP by
-# accident; see README.md.
+# ~/.config/aflos/config.toml (or Mesh's old ~/.config/mesh/config.toml), so
+# Discord never connects from your own IP by accident; see README.md.
+#
+# Upgrading from Mesh (before the rename): its mesh, mesh-wa, mesh-dc, menu
+# entry and icon are removed, and ~/.local/bin/mesh is left as a link to
+# aflos, which Mesh 0.3.1's updater starts after installing. Aflos copies
+# Mesh's accounts and settings on its first start and keeps the old ones.
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 bin="$HOME/.local/bin"
-apps="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
-icons="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
-config="${XDG_CONFIG_HOME:-$HOME/.config}/mesh/config.toml"
+share="${XDG_DATA_HOME:-$HOME/.local/share}"
+apps="$share/applications"
+icons="$share/icons/hicolor"
+configs="${XDG_CONFIG_HOME:-$HOME/.config}"
+sizes="16 32 48 64 128 256 512"
+
+old_mesh() {
+  rm -f "$bin/mesh-wa" "$bin/mesh-dc" "$apps/mesh.desktop" "$icons/256x256/apps/mesh.png"
+}
 
 if [[ "${1:-}" == --uninstall ]]; then
-  rm -fv "$bin/mesh" "$bin/aflos-wa" "$bin/aflos-dc" "$bin/mesh-node" "$apps/mesh.desktop" "$icons/aflos.png"
+  rm -fv "$bin/aflos" "$bin/aflos-wa" "$bin/aflos-dc" "$bin/mesh-node" "$apps/aflos.desktop" "$icons/scalable/apps/aflos.svg"
+  for s in $sizes; do rm -fv "$icons/${s}x${s}/apps/aflos.png"; done
+  if [[ -L "$bin/mesh" ]]; then rm -fv "$bin/mesh"; fi
+  old_mesh
   exit 0
 fi
 
 here=$(cd "$(dirname "$0")" && pwd)
-if [[ -x "$here/mesh" ]]; then
+if [[ -x "$here/aflos" ]]; then
   # An unpacked release download: the binaries sit beside this script.
-  app="$here/mesh" wa="$here/aflos-wa" dc="$here/aflos-dc" engine="$here/mesh-node" icon="$here/aflos.png"
+  app="$here/aflos" wa="$here/aflos-wa" dc="$here/aflos-dc" engine="$here/mesh-node" hicolor="$here/hicolor"
 else
   (cd "$root" && cargo build --release -p aflos)
   (cd "$root/aflos-wa" && cargo build --release)
@@ -39,34 +53,40 @@ else
     (cd "$node" && cargo build --release -p mesh-node)
   fi
   app="$root/target/release/aflos" wa="$root/aflos-wa/target/release/aflos-wa"
-  dc="$root/aflos-dc/target/release/aflos-dc" icon="$root/crates/aflos/assets/aflos.png"
+  dc="$root/aflos-dc/target/release/aflos-dc" hicolor="$root/crates/aflos/assets/hicolor"
 fi
 
-mkdir -p "$bin" "$apps" "$icons"
-install -m755 "$app" "$bin/mesh"
+mkdir -p "$bin" "$apps"
+old_mesh
+install -m755 "$app" "$bin/aflos"
+ln -sfn aflos "$bin/mesh"
 install -m755 "$wa" "$bin/aflos-wa"
-if grep -q '^discord_native_wrapper' "$config" 2>/dev/null; then
+if grep -qs '^discord_native_wrapper' "$configs/aflos/config.toml" "$configs/mesh/config.toml"; then
   install -m755 "$dc" "$bin/aflos-dc"
 else
-  echo "aflos-dc not installed: set discord_native_wrapper in $config first" >&2
+  echo "aflos-dc not installed: set discord_native_wrapper in $configs/aflos/config.toml first" >&2
 fi
 if [[ -x "$engine" ]]; then
   install -m755 "$engine" "$bin/mesh-node"
 else
   echo "mesh-node not installed: no Mesh-Node checkout (set MESH_NODE)" >&2
 fi
-install -m644 "$icon" "$icons/aflos.png"
-cat > "$apps/mesh.desktop" <<EOF
+for s in $sizes; do
+  install -Dm644 "$hicolor/${s}x${s}/apps/aflos.png" "$icons/${s}x${s}/apps/aflos.png"
+done
+install -Dm644 "$hicolor/scalable/apps/aflos.svg" "$icons/scalable/apps/aflos.svg"
+cat > "$apps/aflos.desktop" <<EOF
 [Desktop Entry]
 Type=Application
 Name=Aflos
 GenericName=Chat client
-Comment=Matrix, WhatsApp and Discord in one lightweight client
-Exec=$bin/mesh
-Icon=mesh
-StartupWMClass=mesh
+Comment=Encrypted. Decentralized. Yours.
+Exec=$bin/aflos
+Icon=aflos
+StartupWMClass=aflos
 Terminal=false
 Categories=Network;InstantMessaging;Chat;
 EOF
 update-desktop-database "$apps" 2>/dev/null || true
+gtk-update-icon-cache -q -t "$icons" 2>/dev/null || true
 echo "installed to $bin"
