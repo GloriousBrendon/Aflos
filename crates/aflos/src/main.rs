@@ -323,6 +323,8 @@ struct Session {
     pending_attachment: Option<Attachment>,
     /// More files dropped at once, sent after it (without a caption).
     queued_attachments: Vec<Attachment>,
+    /// Show the composer's one-time tip to paste files (`paste_tip_due`).
+    paste_tip: bool,
     /// A file send is in flight (so the send button waits).
     sending_attachment: bool,
     /// The message under the mouse (its web id), for the action bar.
@@ -507,6 +509,7 @@ impl Session {
             emoji_open: false,
             pending_attachment: None,
             queued_attachments: Vec::new(),
+            paste_tip: false,
             sending_attachment: false,
             hovered: None,
             reacting: None,
@@ -574,6 +577,70 @@ fn read_attachment(path: &std::path::Path) -> Result<Attachment, String> {
     let data = std::fs::read(path).map_err(|e| format!("Couldn't read {filename}: {e}"))?;
     let mime = mime_guess_from(&filename);
     Ok(Attachment::new(filename, mime, data, Some(path.to_owned())))
+}
+
+/// What Ctrl+V found on the clipboard besides text.
+#[derive(Debug, Clone)]
+enum Pasted {
+    /// Copied files (a file manager's `text/uri-list`, or Explorer's list),
+    /// each read in or refused, and the clipboard's text, which the composer
+    /// may have pasted too (some file managers offer the paths as text).
+    Files(Vec<Result<Attachment, String>>, Option<String>),
+    /// A picture (a screenshot), or nothing.
+    Image(Option<Attachment>),
+}
+
+/// Reads the clipboard for Ctrl+V: copied files if there are any, else a
+/// picture. `arboard` reads the file list on Wayland, X11 and Windows.
+fn pasted() -> Pasted {
+    let Ok(mut clipboard) = arboard::Clipboard::new() else { return Pasted::Image(None) };
+    match clipboard.get().file_list() {
+        Ok(paths) if !paths.is_empty() => Pasted::Files(read_files(&paths), clipboard.get_text().ok()),
+        _ => Pasted::Image(clipboard_image()),
+    }
+}
+
+/// Each pasted file read in, with the same checks as a drop.
+fn read_files(paths: &[PathBuf]) -> Vec<Result<Attachment, String>> {
+    paths.iter().map(|path| read_attachment(path)).collect()
+}
+
+/// Attaches pasted files (the ones that could be read) and says why the
+/// others weren't. Returns how many were attached.
+fn attach_files(session: &mut Session, read: Vec<Result<Attachment, String>>) -> usize {
+    let mut attached = 0;
+    let mut refused = Vec::new();
+    for file in read {
+        match file {
+            Ok(attachment) => {
+                let before = (session.pending_attachment.is_some(), session.queued_attachments.len());
+                attach(session, attachment);
+                attached += usize::from(before != (session.pending_attachment.is_some(), session.queued_attachments.len()));
+            }
+            Err(why) => refused.push(why),
+        }
+    }
+    if !refused.is_empty() {
+        session.status = Some(refused.join(" "));
+    }
+    attached
+}
+
+/// Files can't be dropped on Aflos under Wayland yet (winit#4571), so the
+/// composer says once to paste them instead, until it's closed or used.
+const PASTE_TIP_SEEN: &str = "paste-tip-seen";
+
+fn paste_tip_due() -> bool {
+    cfg!(target_os = "linux")
+        && std::env::var_os("WAYLAND_DISPLAY").is_some()
+        && !config_dir().join(PASTE_TIP_SEEN).exists()
+}
+
+fn paste_tip_done(session: &mut Session) {
+    if std::mem::take(&mut session.paste_tip) {
+        let _ = std::fs::create_dir_all(config_dir());
+        let _ = std::fs::write(config_dir().join(PASTE_TIP_SEEN), b"");
+    }
 }
 
 /// Where files dropped on the window would go.
@@ -1453,6 +1520,10 @@ enum Message {
     FilesLeft,
     /// A dropped or picked file, read in (or why it couldn't be).
     AttachmentRead(Result<Attachment, String>),
+    /// What Ctrl+V found: files or a picture.
+    Pasted(Pasted),
+    /// The composer's paste tip was closed.
+    PasteTipDone,
     /// Look for a newer Aflos on GitHub (true: asked for, so say if there's none).
     CheckUpdate(bool),
     UpdateChecked(bool, Result<Option<update::Release>, String>),
@@ -1728,6 +1799,7 @@ fn window_settings() -> iced::window::Settings {
 fn enter_session(state: &mut App) {
     let mut session = Session::new(None);
     session.mesh_name = state.mesh.identity.as_ref().and_then(|i| i.username.clone());
+    session.paste_tip = paste_tip_due();
     state.screen = Screen::LoggedIn(session);
     // Discord often connects before the session exists; catch up on its pictures.
     if let (Screen::LoggedIn(session), Some(snapshot), Some(engine)) =
@@ -2340,13 +2412,35 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::PasteImage => match &state.screen {
             Screen::LoggedIn(session) if session.selected_room.is_some() || session.web_chat.is_some() => {
-                Task::perform(async { clipboard_image() }, |image| match image {
-                    Some(attachment) => Message::AttachmentPicked(Some(attachment)),
-                    None => Message::Noop,
-                })
+                Task::perform(async { pasted() }, Message::Pasted)
             }
             _ => Task::none(),
         },
+        Message::Pasted(Pasted::Image(image)) => match image {
+            Some(attachment) => update(state, Message::AttachmentPicked(Some(attachment))),
+            None => Task::none(),
+        },
+        Message::Pasted(Pasted::Files(read, text)) => {
+            let Screen::LoggedIn(session) = &mut state.screen else { return Task::none() };
+            // The composer may have pasted the files' paths as text too.
+            if let Some(text) = text.as_deref().map(str::trim_end).filter(|t| !t.is_empty()) {
+                let draft = session.message_draft.text();
+                if let Some(kept) = draft.trim_end().strip_suffix(text) {
+                    session.message_draft = text_editor::Content::with_text(kept);
+                    session.message_draft.perform(text_editor::Action::Move(text_editor::Motion::DocumentEnd));
+                }
+            }
+            if attach_files(session, read) > 0 {
+                paste_tip_done(session);
+            }
+            focus_composer()
+        }
+        Message::PasteTipDone => {
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                paste_tip_done(session);
+            }
+            focus_composer()
+        }
         Message::AttachmentPicked(attachment) => {
             if let (Screen::LoggedIn(session), Some(attachment)) = (&mut state.screen, attachment) {
                 attach(session, attachment);
@@ -6766,6 +6860,15 @@ fn composer<'a>(
     if session.emoji_open {
         outer = outer.push(emoji_picker(p, l));
     }
+    if session.paste_tip && session.pending_attachment.is_none() {
+        outer = outer.push(
+            row![
+                ui::mono("Tip: copy files in your file manager and press Ctrl+V here.", 11.0, p.text_muted()).width(Length::Fill),
+                ui::icon_button(ui::Icon::Close, Some(Message::PasteTipDone), false, p, l),
+            ]
+            .align_y(iced::Alignment::Center),
+        );
+    }
     if let Some(att) = &session.pending_attachment {
         let more = match session.queued_attachments.len() {
             0 => String::new(),
@@ -10132,6 +10235,31 @@ mod tests {
     fn pictures_get_a_preview_and_other_files_dont() {
         assert!(file("shot.png").preview.is_some());
         assert!(file("notes.txt").preview.is_none());
+    }
+
+    #[test]
+    fn pasted_files_attach_and_a_folder_among_them_is_refused() {
+        let dir = std::env::temp_dir().join(format!("aflos-paste-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a folder")).unwrap();
+        let names = ["my holiday photo.png", "ñandú café 日本.txt"];
+        for name in names {
+            std::fs::write(dir.join(name), b"x").unwrap();
+        }
+        let paths = vec![dir.join(names[0]), dir.join("a folder"), dir.join(names[1])];
+        let mut session = Session::new(None);
+        session.web_chat = Some(chat(Network::WhatsApp, "Mom"));
+        assert_eq!(attach_files(&mut session, read_files(&paths)), 2);
+        assert_eq!(session.pending_attachment.as_ref().map(|a| a.filename.as_str()), Some(names[0]));
+        assert!(session.pending_attachment.as_ref().unwrap().preview.is_some(), "a picture has a preview");
+        assert_eq!(session.queued_attachments.iter().map(|a| a.filename.as_str()).collect::<Vec<_>>(), [names[1]]);
+        assert!(session.status.as_deref().is_some_and(|s| s.contains("a folder")), "{:?}", session.status);
+
+        let mut discord = Session::new(None);
+        discord.web_chat = Some(chat(Network::Discord, "nix"));
+        assert_eq!(attach_files(&mut discord, read_files(&paths[..1])), 0);
+        assert!(discord.status.as_deref().is_some_and(|s| s.contains("Discord")));
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
