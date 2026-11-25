@@ -1,6 +1,6 @@
-# WhatsApp inside Mesh: how WhatsApp Web works, and the plan (2026-10-20)
+# WhatsApp inside Aflos: how WhatsApp Web works, and the plan (2026-10-20)
 
-Goal: WhatsApp chats, voice and video calls in Mesh's own UI, the same way
+Goal: WhatsApp chats, voice and video calls in Aflos's own UI, the same way
 Discord works today (DISCORD-NATIVE.md, option A): the official WhatsApp Web
 client runs hidden in the engine browser and an injected agent reads its
 state and calls its own actions. No bridge, no protocol reimplementation.
@@ -75,11 +75,11 @@ through AudioWorklets (`WAWebVoipAudioCaptureWorklet`,
   for camera and mic on each site it connects to; that's also why the
   browser isn't started with `--use-fake-ui-for-media-stream`, which would
   answer the screen-share picker by itself with the primary screen).
-- Video in Mesh hooks WhatsApp's renderer: every frame passes through
+- Video in Aflos hooks WhatsApp's renderer: every frame passes through
   `videoRendererRegistry.onVideoFrameWasmToJs(source, …)`; for each new
   source the agent registers one more (off-screen) canvas with
   `registerVideoCanvas` + `assignSourceToCanvas({canvas, mirror, source})`
-  and sends Mesh a JPEG of it at ~15 fps.
+  and sends Aflos a JPEG of it at ~15 fps.
 - Call controls, as WhatsApp's call screen uses them: `acceptCall(withMic,
   withCamera, entryPoint)` (after `WAWebCallRingtone.stopCallRingtone()` and
   `WAWebVoipCallAudioUnlock.prepareCallAudioElement()`), `rejectCall()`,
@@ -97,7 +97,7 @@ it unnecessary.
 
 ## Plan
 
-1. **Generalise the engine.** `mesh-discord`'s CDP transport (socket or
+1. **Generalise the engine.** `aflos-discord`'s CDP transport (socket or
    host:port, page lookup, bindings, reconnect) is platform-neutral; let it
    attach one agent per page (match by URL), so Discord and WhatsApp share
    one engine browser.
@@ -107,9 +107,9 @@ it unnecessary.
    notifications from `MsgCollection` `add` (`isNewMsg`, not ours); calls
    through the VoIP stack interface, with `callbacks.onCallEvent` wrapped
    (keeping WhatsApp's own handler) to stream call state.
-3. **Mesh UI:** a WhatsApp network (tag, Home chip, rail folder); chats on
+3. **Aflos UI:** a WhatsApp network (tag, Home chip, rail folder); chats on
    Home; the existing chat pane, notifications and call bar.
-4. **Video:** frames from WhatsApp's renderer into Mesh (research first).
+4. **Video:** frames from WhatsApp's renderer into Aflos (research first).
 
 Open questions: exact `sendTextMsgToChat` / `startCall` signatures (confirm
 on the "Message yourself" chat and a test call), and whether WhatsApp flags

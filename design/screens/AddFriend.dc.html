@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Mesh — add friend</title>
+<title>Aflos — add friend</title>
 <script src="./support.js"></script>
 </head>
 <body>
@@ -21,7 +21,7 @@ input::placeholder{color:#8892a0}
     <div style="display: flex; align-items: flex-start; gap: 12px">
       <div style="flex: 1">
         <h1 id="af-title" style="margin: 0; color: #e3e7ee; font-size: 20px; font-weight: 600">Add a friend</h1>
-        <p style="margin: 4px 0 0; color: #8892a0">Paste anything — a Matrix ID, a Discord username. Mesh works out where it goes.</p>
+        <p style="margin: 4px 0 0; color: #8892a0">Paste anything — a Matrix ID, a Discord username. Aflos works out where it goes.</p>
       </div>
       <a href="Main.dc.html" aria-label="Close" style="width: 32px; height: 32px; border-radius: 6px; display: grid; place-items: center; color: #a8b0be; border: 1px solid #253040; text-decoration: none">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"></path></svg>
@@ -117,8 +117,8 @@ class Component extends DCLogic {
     if (isDc) { hint = '✓ discord username · via your bridge on strange.lab'; hintColor = DC; }
     if (r.kind === 'bad') { hint = '✗ ' + r.why; hintColor = '#e07a7a'; }
     const explain = isDc
-      ? 'Discord: the request goes out from your linked Discord account through the bridge. They accept it in Discord or in Mesh — both stay in sync.'
-      : 'Matrix has no friend list of its own, so Mesh opens an encrypted DM invite and saves them to your contacts (stored in your account data, so it follows you to every device).';
+      ? 'Discord: the request goes out from your linked Discord account through the bridge. They accept it in Discord or in Aflos — both stay in sync.'
+      : 'Matrix has no friend list of its own, so Aflos opens an encrypted DM invite and saves them to your contacts (stored in your account data, so it follows you to every device).';
     return {
       modes, pending, pendingCount: pending.length, query: s.query,
       onQuery: (e) => this.setState({ query: e.target.value }),

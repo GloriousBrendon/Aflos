@@ -1,4 +1,4 @@
-# Mesh — design spec (v0.2 "rice")
+# Aflos — design spec (v0.2 "rice")
 
 Source of truth for the redesign. The four screens in `screens/*.dc.html` are
 HTML mockups with every value written inline. Open them in a browser to read them
@@ -19,7 +19,7 @@ don't display). This file turns them into what the iced code needs.
    text, not only colour.
 4. **Keyboard first.** `Super`-style numbered spaces (`Alt+1..9`), `Ctrl+K`
    jump palette, `Esc` closes settings and dialogs, `/` commands in the composer.
-5. **mesh-core stays Matrix-only.** Discord support comes from a
+5. **aflos-core stays Matrix-only.** Discord support comes from a
    `mautrix-discord` bridge on the user's homeserver. The client detects bridged
    rooms and users. It never talks to Discord directly.
 
@@ -161,7 +161,7 @@ Notifications), content pane in the middle (focused), preview and export on the 
 - The hint line under the input is coloured by result: mx colour, dc colour or danger.
 - Preview card (profile lookup): avatar, name, route (`target → from <your account>`),
   shared rooms or servers.
-- Explanation box. **Matrix has no friend list.** Mesh opens an encrypted DM
+- Explanation box. **Matrix has no friend list.** Aflos opens an encrypted DM
   (`is_direct`) and stores contacts in account data
   (`m.direct` plus a custom `org.mesh.contacts` event). Discord: the request goes through the
   bridge (see §5).
@@ -172,7 +172,7 @@ Notifications), content pane in the middle (focused), preview and export on the 
 - **Matrix homeservers**: one row per account (initials tile, MXID, PRIMARY
   badge, server info, sync state, verification and key-backup state). An add row
   with the homeserver input (`.well-known` discovery), Sign in, and SSO/OIDC.
-  This is **multi-account**, so `mesh-core` needs `Vec<MeshClient>`, one per account.
+  This is **multi-account**, so `aflos-core` needs `Vec<AflosClient>`, one per account.
 - **Discord through a bridge**: radio cards for "My homeserver's bridge
   (mautrix-discord on <hs>)" (recommended) and "A bridge I trust" (enter the bot MXID).
   Linked-account row (QR login, server count, Unlink). Per-server bridge switches.
@@ -185,7 +185,7 @@ Notifications), content pane in the middle (focused), preview and export on the 
 
 | design element | where it lives today | change |
 |---|---|---|
-| Palette fields | `mesh-app/src/theme.rs` `Palette` (10 fields) | add the derived fields and a `Layout { gaps_in, gaps_out, border_size, rounding }`. Add a `colors.conf` loader and a `hyprland.conf` loader. Add a file watcher (notify, or poll mtime every 1 s in a `Subscription`) |
+| Palette fields | `aflos/src/theme.rs` `Palette` (10 fields) | add the derived fields and a `Layout { gaps_in, gaps_out, border_size, rounding }`. Add a `colors.conf` loader and a `hyprland.conf` loader. Add a file watcher (notify, or poll mtime every 1 s in a `Subscription`) |
 | Three panes | `view()` in `main.rs` | wrap each pane in a styled `container` (border width = `border_size`, radius = `rounding`); the window gets `padding(gaps_out)` and `spacing(gaps_out)`. Add the space rail and the top bar |
 | Focused pane | none | track `focused: Pane` in state, set on click or keyboard. The border colour switches to accent |
 | Rooms list | DM / Rooms sections | regroup as spaces (`m.space` hierarchy) → channels. DMs and friends move under Home |
@@ -193,7 +193,7 @@ Notifications), content pane in the middle (focused), preview and export on the 
 | Calls | `call.rs` 1:1 | the voice channel UI is future work; the user panel's mute and deafen already exist |
 | Settings | gear → theme switcher | becomes the settings layout with the Rice page; Accounts is a new page |
 
-## 5. Bridge detection (mesh-core, Matrix-only)
+## 5. Bridge detection (aflos-core, Matrix-only)
 
 - A room is bridged if its state has an `m.bridge` / `uk.half-shot.bridge`
   event (mautrix bridges send these). Read `protocol.id == "discord"`.
@@ -207,4 +207,4 @@ Notifications), content pane in the middle (focused), preview and export on the 
 - **Discord friend requests: not verified.** Check whether your mautrix-discord
   version supports sending or accepting relationships. If it doesn't, show the Discord
   path as "DM via shared server" or disable the button with a tooltip. Never call
-  Discord's API from Mesh directly.
+  Discord's API from Aflos directly.

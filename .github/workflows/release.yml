@@ -33,10 +33,10 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: Mesh-Voice/dist/Mesh-Setup-*.exe
+          path: Mesh-Voice/dist/Aflos-Setup-*.exe
 
   linux:
-    # 24.04: 22.04's PipeWire is too old for libspa (mesh-wa, mesh-dc). The
+    # 24.04: 22.04's PipeWire is too old for libspa (aflos-wa, aflos-dc). The
     # binaries need a C library as new as 24.04's (glibc 2.39, distros from 2024 on).
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -54,19 +54,19 @@ jobs:
           libopus-dev libpipewire-0.3-dev libspa-0.2-dev clang pkg-config cmake
       - name: Build
         run: |
-          (cd Mesh-Voice && cargo build --release -p mesh-app)
-          (cd Mesh-Voice/mesh-wa && cargo build --release)
-          (cd Mesh-Voice/mesh-dc && cargo build --release)
+          (cd Mesh-Voice && cargo build --release -p aflos)
+          (cd Mesh-Voice/aflos-wa && cargo build --release)
+          (cd Mesh-Voice/aflos-dc && cargo build --release)
           (cd Mesh-Node && cargo build --release -p mesh-node)
       - name: Pack
         run: |
-          v=$(grep -m1 '^version' Mesh-Voice/crates/mesh-app/Cargo.toml | cut -d'"' -f2)
+          v=$(grep -m1 '^version' Mesh-Voice/crates/aflos/Cargo.toml | cut -d'"' -f2)
           d=mesh-$v-linux-x86_64
           mkdir $d
-          cp Mesh-Voice/target/release/mesh-app $d/mesh
-          cp Mesh-Voice/mesh-wa/target/release/mesh-wa Mesh-Voice/mesh-dc/target/release/mesh-dc \
+          cp Mesh-Voice/target/release/aflos $d/mesh
+          cp Mesh-Voice/aflos-wa/target/release/aflos-wa Mesh-Voice/aflos-dc/target/release/aflos-dc \
              Mesh-Node/target/release/mesh-node Mesh-Voice/installer/install-linux.sh \
-             Mesh-Voice/crates/mesh-app/assets/mesh.png $d/
+             Mesh-Voice/crates/aflos/assets/mesh.png $d/
           tar czf $d.tar.gz $d
       - uses: actions/upload-artifact@v4
         with:
@@ -82,15 +82,15 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { merge-multiple: true }
-      - run: sha256sum Mesh-Setup-*.exe mesh-*.tar.gz > SHA256SUMS
+      - run: sha256sum Aflos-Setup-*.exe mesh-*.tar.gz > SHA256SUMS
       - env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease \
-            --title "Mesh $GITHUB_REF_NAME" --notes-file - Mesh-Setup-*.exe mesh-*.tar.gz SHA256SUMS <<'EOF'
+            --title "Aflos $GITHUB_REF_NAME" --notes-file - Aflos-Setup-*.exe mesh-*.tar.gz SHA256SUMS <<'EOF'
           A beta for friends.
 
-          **Windows:** run `Mesh-Setup-*.exe`. It isn't signed, so Windows shows
+          **Windows:** run `Aflos-Setup-*.exe`. It isn't signed, so Windows shows
           "Windows protected your PC": click **More info**, then **Run anyway**.
 
           **Linux (x86-64):** unpack the `.tar.gz` and run `./install-linux.sh`.

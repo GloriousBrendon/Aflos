@@ -1,0 +1,1602 @@
+//! Aflos's own identity screens (design/mesh/SPEC-identity.md): onboarding in
+//! two screens on first launch (or restoring a backup), and the unlock screen
+//! on every start after, shown before anything else while the identity isn't
+//! open. Once it's open, Aflos's Accounts panel is Your ID (`manage`).
+
+use super::*;
+use iced::widget::{column, pick_list, qr_code, row, scrollable};
+use mesh::State;
+
+/// The Friends page's tabs (Home → Friends).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) enum Tab {
+    #[default]
+    Online,
+    All,
+    Pending,
+    Blocked,
+    Add,
+}
+
+/// The `mesh-node` side of the app.
+#[derive(Default)]
+pub(crate) struct Mesh {
+    pub node: Option<mesh::Node>,
+    /// The latest report; `None` until the helper's first.
+    pub identity: Option<mesh::Identity>,
+    /// The identity has been opened once this run, so the other networks
+    /// have started (locking again doesn't stop them).
+    pub started: bool,
+    /// The `mesh://` link as a QR code, while unlocked.
+    qr: Option<qr_code::Data>,
+    /// The node's latest `meshNet`.
+    net: Option<mesh::Net>,
+    /// This device's live friend codes.
+    codes: Vec<mesh::Code>,
+    /// Friends, requests both ways, blocks and our status (social).
+    pub social: mesh::Social,
+    /// The chat list (SPEC-dm), newest activity first.
+    pub chats: Vec<mesh::Chat>,
+    /// The Spaces held (SPEC-spaces), as `meshSpaces` lists them.
+    pub spaces: Vec<mesh::Space>,
+    /// Spaces muted here (config.toml's `muted_spaces`).
+    pub muted_spaces: Vec<String>,
+    /// A Space's settings and New Space (mesh_spaces).
+    pub space_form: crate::mesh_spaces::Form,
+    /// The call, while it's on (SPEC-calls).
+    pub call: Option<mesh::Call>,
+    /// Who's in each voice channel: by Space and channel ID.
+    pub voice: HashMap<(String, String), Vec<String>>,
+    /// Push-to-talk is on (config.toml), and whether its key is held.
+    pub ptt: bool,
+    pub ptt_down: bool,
+    /// Who's typing, by name, in which chat, and when it was heard.
+    pub typing: Option<(String, Vec<String>, std::time::Instant)>,
+    /// The last received file clicked, and what that did (`mesh_dm::on_click`).
+    pub last_click: Option<(String, crate::mesh_dm::Click)>,
+    /// New group, while it's open: the friends picked, and its name.
+    new_group: Option<(Vec<String>, String)>,
+    /// The Friends page's open tab.
+    pub tab: Tab,
+    form: Form,
+    settings: Settings,
+}
+
+impl Mesh {
+    /// Our `mesh1…` ID, while unlocked.
+    pub fn my_id(&self) -> Option<String> {
+        self.identity.as_ref().and_then(|i| i.id.clone())
+    }
+
+    /// A person's name: ours, our name for a friend, the name they gave
+    /// themselves, else the start of their ID.
+    pub fn name_of(&self, id: &str) -> String {
+        if self.my_id().as_deref() == Some(id) {
+            return self.identity.as_ref().and_then(|i| i.username.clone()).unwrap_or_else(|| "you".to_string());
+        }
+        match self.social.friends.iter().find(|f| f.id == id) {
+            Some(f) if !f.nick.is_empty() => f.nick.clone(),
+            Some(f) if !f.name.is_empty() => f.name.clone(),
+            _ => id.chars().take(12).collect(),
+        }
+    }
+}
+
+/// What's typed into the onboarding, restore or unlock form.
+#[derive(Default)]
+struct Form {
+    username: String,
+    /// The new password (onboarding, restore) or the password (unlock).
+    password: String,
+    confirm: String,
+    /// Onboarding's second screen (the "can't be recovered" warning).
+    warned: bool,
+    /// Restoring a backup instead of making a new identity.
+    restoring: bool,
+    backup: Option<PathBuf>,
+    backup_password: String,
+    /// Linking this install to another device instead ("I already have Aflos").
+    joining: bool,
+    link_code: String,
+    device_name: String,
+    /// The identity arrived; its username. Then only a password is asked.
+    received: Option<String>,
+    /// The latest `idCheckPassword` verdict and its hint.
+    verdict: Option<(bool, String)>,
+    /// Sent; waiting for the helper.
+    busy: bool,
+    error: Option<String>,
+}
+
+/// Your ID's forms: change password and export a backup.
+#[derive(Default)]
+struct Settings {
+    old: String,
+    new: String,
+    confirm: String,
+    verdict: Option<(bool, String)>,
+    export_password: String,
+    /// Check an ID: what's pasted, and the safety number for it (with its QR).
+    check: String,
+    safety: Option<(mesh::Safety, Option<qr_code::Data>)>,
+    /// The command waiting for an answer.
+    busy: Option<&'static str>,
+    /// The last answer, for the section of the command it answers: (fn, ok, message).
+    note: Option<(String, bool, String)>,
+    copied: bool,
+    /// Network: the pasted ticket, the last ping's answer, and whether ours was copied.
+    ping: String,
+    pong: Option<mesh::Pong>,
+    ticket_copied: bool,
+    /// Friend codes: the chosen expiry and uses (labels; `None` is the default).
+    expiry: Option<&'static str>,
+    uses: Option<&'static str>,
+    /// The code just made, and the one last copied.
+    made: Option<String>,
+    code_copied: Option<String>,
+    /// The code Check an ID resolved, shown with the safety number.
+    resolved: Option<String>,
+    /// Check an ID's "Add by ID": the name to save them under (optional).
+    nick: String,
+    /// Check an ID's friend request: the note to send with it (optional).
+    request_note: String,
+    /// The last friend pinged by ID, and their answer.
+    contact_pong: Option<(String, mesh::Pong)>,
+    pinging: Option<String>,
+    /// Linking a new device from here.
+    link: Option<Linking>,
+}
+
+/// Linking a new device, as Your ID shows it.
+enum Linking {
+    /// The code to type there, and when it stops working (unix seconds).
+    Showing(String, u64),
+    /// The new device typed it: link the device with this name?
+    Asking(String),
+}
+
+/// The status choices: labels and `statusSet` arguments.
+const STATUSES: [(&str, &str); 4] = [("Online", "online"), ("Idle", "idle"), ("Do not disturb", "dnd"), ("Invisible", "invisible")];
+
+/// Friend-code expiry choices (identity's), as labels and `codeCreate` arguments.
+const EXPIRIES: [(&str, &str); 7] =
+    [("30 minutes", "1800"), ("1 hour", "3600"), ("6 hours", "21600"), ("12 hours", "43200"), ("24 hours", "86400"), ("7 days", ""), ("Never expires", "never")];
+const USES: [(&str, &str); 5] = [("Single use", ""), ("5 uses", "5"), ("10 uses", "10"), ("25 uses", "25"), ("Unlimited uses", "unlimited")];
+const DEFAULT_EXPIRY: &str = "7 days";
+const DEFAULT_USES: &str = "Single use";
+
+#[derive(Debug, Clone)]
+pub(crate) enum Msg {
+    Username(String),
+    Password(String),
+    Confirm(String),
+    /// Onboarding: on to the warning, or back from it.
+    Warned(bool),
+    /// Onboarding: restore a backup instead, or go back.
+    Restore(bool),
+    PickBackup,
+    BackupPicked(Option<PathBuf>),
+    BackupPassword(String),
+    Submit,
+    CopyId,
+    KeepUnlocked(bool),
+    Old(String),
+    New(String),
+    Again(String),
+    ChangePassword,
+    ExportPassword(String),
+    Export,
+    ExportTo(Option<PathBuf>),
+    CheckInput(String),
+    Check,
+    CopyTicket,
+    PingInput(String),
+    Ping,
+    Expiry(&'static str),
+    Uses(&'static str),
+    MakeCode,
+    CopyCode(String),
+    RevokeCode(String),
+    Nick(String),
+    AddById,
+    RequestNote(String),
+    SendRequest,
+    PingContact(String),
+    /// Removes a friend, or cancels a request we sent.
+    Remove(String),
+    Accept(String),
+    Decline(String),
+    Block(String),
+    Unblock(String),
+    Verify(String, bool),
+    Status(&'static str),
+    /// Removes another of our linked devices, by its key.
+    RemoveDevice(String),
+    /// New group: open (true) or close it, pick or unpick a friend, its name, make it.
+    NewGroup(bool),
+    GroupPick(String),
+    GroupName(String),
+    GroupCreate,
+    /// Your ID: show a link code for a new device.
+    LinkStart,
+    /// Your ID: yes or no to the device that typed the code.
+    LinkConfirm(bool),
+    LinkCancel,
+    /// Onboarding: link to another device instead, or go back.
+    Join(bool),
+    LinkCode(String),
+    DeviceName(String),
+}
+
+/// Aflos is open: the identity is unlocked, or there's no `mesh-node` to ask.
+pub(crate) fn open(state: &App) -> bool {
+    state.mesh_node.is_none() || state.mesh.identity.as_ref().is_some_and(|i| i.state == State::Unlocked)
+}
+
+/// The rest of Aflos is running (it starts the first time Aflos opens).
+pub(crate) fn started(state: &App) -> bool {
+    state.mesh_node.is_none() || state.mesh.started
+}
+
+pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
+    if matches!(
+        event,
+        mesh::Event::DmChats(_)
+            | mesh::Event::DmMessages(_)
+            | mesh::Event::DmNotify(_)
+            | mesh::Event::DmTyping { .. }
+            | mesh::Event::DmFile(_)
+            | mesh::Event::Spaces(_)
+            | mesh::Event::SpaceMessages(_)
+            | mesh::Event::SpaceNotify(_)
+            | mesh::Event::SpaceTyping { .. }
+    ) {
+        return crate::mesh_dm::event(state, event);
+    }
+    if let mesh::Event::Call(call) = event {
+        return crate::mesh_calls::event(state, call);
+    }
+    if let mesh::Event::Voice {
+        space,
+        channel,
+        people,
+    } = event
+    {
+        match people.is_empty() {
+            true => state.mesh.voice.remove(&(space, channel)),
+            false => state.mesh.voice.insert((space, channel), people),
+        };
+        return Task::none();
+    }
+    if let mesh::Event::Error(error) = &event
+        && (error.func.starts_with("dm")
+            || error.func.starts_with("space")
+            || error.func.starts_with("call")
+            || error.func.starts_with("voice"))
+    {
+        crate::mesh_dm::failed(state, error);
+        return Task::none();
+    }
+    let m = &mut state.mesh;
+    let unlocked = m.identity.as_ref().is_some_and(|i| i.state == State::Unlocked);
+    match event {
+        mesh::Event::Connected(node) => m.node = Some(node),
+        mesh::Event::Identity(identity) => {
+            let now_unlocked = identity.state == State::Unlocked;
+            m.qr = identity.link.as_deref().filter(|_| now_unlocked).and_then(|link| qr_code::Data::new(link).ok());
+            if !now_unlocked {
+                m.codes.clear();
+                m.social = mesh::Social::default();
+                (m.chats, m.spaces, m.typing, m.new_group, m.call) =
+                    (Vec::new(), Vec::new(), None, None, None);
+                m.voice.clear();
+            } else if let Some(node) = &m.node {
+                // Unlocking doesn't send them by itself.
+                node.social();
+                node.dm_list();
+            }
+            m.identity = Some(identity);
+            m.settings.busy = None;
+            if !now_unlocked {
+                m.settings = Settings::default();
+            }
+            if now_unlocked {
+                // Don't keep the password around once it has done its job.
+                m.form = Form::default();
+                if !m.started {
+                    m.started = true;
+                    return start_app(state);
+                }
+            }
+            m.form.busy = false;
+        }
+        mesh::Event::Password { ok, message } if unlocked => m.settings.verdict = Some((ok, message)),
+        mesh::Event::Password { ok, message } => m.form.verdict = Some((ok, message)),
+        mesh::Event::Error(error)
+            if matches!(error.func.as_str(), "idCreate" | "idUnlock" | "idImport" | "linkJoin" | "linkFinish") || (error.func == "link" && !unlocked) =>
+        {
+            let f = &mut m.form;
+            f.busy = false;
+            // The helper gives one message for every way unlocking can fail.
+            f.error = Some(error.message);
+            f.password.clear();
+            f.confirm.clear();
+            f.backup_password.clear();
+            f.verdict = None;
+            f.warned = false;
+        }
+        mesh::Event::Error(error) => {
+            let s = &mut m.settings;
+            s.busy = None;
+            if error.func.starts_with("link") {
+                s.link = None;
+            }
+            if error.func == "netPingId" {
+                s.contact_pong = None;
+            }
+            if error.func == "idChangePassword" {
+                s.old.clear();
+            }
+            s.note = Some((error.func, false, error.message));
+        }
+        mesh::Event::Safety(safety) => {
+            let qr = qr_code::Data::new(&safety.qr).ok();
+            m.settings.safety = Some((safety, qr));
+            m.settings.busy = None;
+        }
+        mesh::Event::Done(func) => {
+            let s = &mut m.settings;
+            s.busy = None;
+            let message = match func.as_str() {
+                "idChangePassword" => {
+                    (s.old, s.new, s.confirm, s.verdict) = Default::default();
+                    "Password changed. Use the new one from now on."
+                }
+                "linkConfirm" | "linkCancel" => {
+                    s.link = None;
+                    "Linking cancelled."
+                }
+                _ => {
+                    s.export_password.clear();
+                    "Backup saved. Keep it somewhere other than this computer."
+                }
+            };
+            s.note = Some((func, true, message.to_string()));
+        }
+        mesh::Event::Net(net) => m.net = Some(net),
+        mesh::Event::Ticket(ticket) => {
+            m.settings.busy = None;
+            m.settings.ticket_copied = true;
+            return iced::clipboard::write(ticket);
+        }
+        mesh::Event::Ping(pong) => {
+            let s = &mut m.settings;
+            match s.busy.take() {
+                Some("netPingId") => s.contact_pong = s.pinging.take().map(|id| (id, pong)),
+                _ => s.pong = Some(pong),
+            }
+        }
+        mesh::Event::Social(social) => {
+            let s = &mut m.settings;
+            // Also comes by itself (a request, a friend's presence), so only
+            // the answer to our own command ends the wait.
+            if let Some(func) = social.answers.as_deref().filter(|f| s.busy == Some(*f)) {
+                s.busy = None;
+                let done = match func {
+                    "friendRequest" => Some("Request sent. They'll see it the next time they open Aflos."),
+                    "friendAdd" => Some("Added. You'll be friends once they add your ID too."),
+                    _ => None,
+                };
+                if let Some(done) = done {
+                    (s.nick, s.request_note) = Default::default();
+                    s.note = Some((func.to_owned(), true, done.to_owned()));
+                }
+            }
+            m.social = social;
+        }
+        mesh::Event::Codes(codes) => {
+            m.codes = codes.codes;
+            let s = &mut m.settings;
+            // Also comes by itself when a seed answers, so only end our own wait.
+            if matches!(s.busy, Some("codeCreate" | "codeRevoke")) {
+                s.busy = None;
+            }
+            if codes.created.is_some() {
+                s.made = codes.created;
+            }
+        }
+        mesh::Event::Resolved(resolved) => {
+            // Check an ID took a code: now the safety number with the ID it points to.
+            if let Some(node) = &m.node {
+                m.settings.busy = Some("safetyNumber");
+                m.settings.resolved = Some(resolved.code);
+                node.safety_number(&resolved.id);
+            }
+        }
+        mesh::Event::Link { code, expires } => {
+            m.settings.busy = None;
+            m.settings.link = Some(Linking::Showing(code, expires));
+        }
+        mesh::Event::LinkConfirm(name) => m.settings.link = Some(Linking::Asking(name)),
+        mesh::Event::LinkDone(name) => {
+            let s = &mut m.settings;
+            (s.busy, s.link) = (None, None);
+            s.note = Some(("linkConfirm".into(), true, format!("Linked {name}. It now has your identity and friends.")));
+        }
+        mesh::Event::LinkReceived(username) => {
+            let f = &mut m.form;
+            f.busy = false;
+            f.username = username;
+            f.received = Some(f.username.clone());
+        }
+        // Taken above (mesh_dm).
+        mesh::Event::DmChats(_)
+        | mesh::Event::DmMessages(_)
+        | mesh::Event::DmNotify(_)
+        | mesh::Event::DmTyping { .. }
+        | mesh::Event::DmFile(_)
+        | mesh::Event::Spaces(_)
+        | mesh::Event::SpaceMessages(_)
+        | mesh::Event::SpaceNotify(_)
+        | mesh::Event::SpaceTyping { .. }
+        | mesh::Event::Call(_)
+        | mesh::Event::Voice { .. } => {}
+        mesh::Event::Disconnected => {
+            m.node = None;
+            m.identity = None;
+            m.qr = None;
+            m.net = None;
+            m.codes.clear();
+            m.social = mesh::Social::default();
+            (m.chats, m.spaces, m.typing, m.new_group, m.call) =
+                (Vec::new(), Vec::new(), None, None, None);
+            m.voice.clear();
+            m.form.busy = false;
+            m.settings = Settings::default();
+        }
+    }
+    Task::none()
+}
+
+pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
+    let m = &mut state.mesh;
+    let Some(node) = m.node.clone() else { return Task::none() };
+    let identity = m.identity.clone();
+    let username = identity.as_ref().and_then(|i| i.username.clone()).unwrap_or_default();
+    let onboarding = identity.as_ref().is_some_and(|i| i.state == State::None);
+    let (f, s) = (&mut m.form, &mut m.settings);
+    let recheck = matches!(msg, Msg::Username(_) | Msg::Password(_));
+    match msg {
+        Msg::Username(value) => f.username = value,
+        Msg::Password(value) => f.password = value,
+        Msg::Confirm(value) => f.confirm = value,
+        Msg::Warned(on) => f.warned = on && can_continue(f),
+        Msg::Restore(on) => *f = Form { restoring: on, ..Form::default() },
+        Msg::Join(on) => {
+            if !on && f.joining {
+                node.link_cancel();
+            }
+            *f = Form { joining: on, ..Form::default() };
+        }
+        Msg::LinkCode(value) => f.link_code = value,
+        Msg::DeviceName(value) => f.device_name = value,
+        Msg::LinkStart if s.busy.is_none() && s.link.is_none() => {
+            s.busy = Some("linkStart");
+            s.note = None;
+            node.link_start();
+        }
+        Msg::LinkConfirm(yes) if s.busy.is_none() => {
+            s.busy = Some("linkConfirm");
+            node.link_confirm(yes);
+        }
+        Msg::LinkCancel => {
+            s.link = None;
+            s.busy = None;
+            node.link_cancel();
+        }
+        Msg::LinkStart | Msg::LinkConfirm(_) => {}
+        Msg::PickBackup => {
+            return Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Aflos backup")
+                        .add_filter("Aflos backup", &["mks"])
+                        .pick_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                |path| Message::MeshForm(Msg::BackupPicked(path)),
+            );
+        }
+        Msg::BackupPicked(path) => f.backup = path.or(f.backup.take()),
+        Msg::BackupPassword(value) => f.backup_password = value,
+        Msg::Submit => {
+            if f.busy {
+                return Task::none();
+            }
+            f.error = None;
+            match (onboarding, f.restoring, &f.backup) {
+                (false, ..) => node.unlock(&f.username, &f.password),
+                (true, ..) if f.joining && f.received.is_some() => {
+                    if !can_continue(f) {
+                        return Task::none();
+                    }
+                    node.link_finish(&f.username, &f.password)
+                }
+                (true, ..) if f.joining => {
+                    if !can_join(f) {
+                        return Task::none();
+                    }
+                    node.link_join(f.link_code.trim(), f.device_name.trim())
+                }
+                (true, true, Some(path)) if can_restore(f) => {
+                    node.import(&path.to_string_lossy(), &f.username, &f.backup_password, &f.password)
+                }
+                (true, false, _) if f.warned => node.create(&f.username, &f.password),
+                (true, false, _) => {
+                    f.warned = can_continue(f);
+                    return Task::none();
+                }
+                _ => return Task::none(),
+            }
+            f.busy = true;
+            return Task::none();
+        }
+        Msg::CopyId => {
+            s.copied = true;
+            return identity.and_then(|i| i.id).map_or_else(Task::none, iced::clipboard::write);
+        }
+        Msg::KeepUnlocked(on) => {
+            s.busy = Some("idKeepUnlocked");
+            s.note = None;
+            node.keep_unlocked(on);
+        }
+        Msg::Old(value) => s.old = value,
+        Msg::New(value) => {
+            s.new = value;
+            s.verdict = None;
+            if !s.new.is_empty() {
+                node.check_password(&username, &s.new);
+            }
+        }
+        Msg::Again(value) => s.confirm = value,
+        Msg::ChangePassword => {
+            if s.busy.is_none() && can_change(s) {
+                s.busy = Some("idChangePassword");
+                s.note = None;
+                node.change_password(&username, &s.old, &s.new);
+            }
+        }
+        Msg::ExportPassword(value) => s.export_password = value,
+        Msg::Export => {
+            if s.busy.is_some() || s.export_password.is_empty() {
+                return Task::none();
+            }
+            return Task::perform(
+                async {
+                    rfd::AsyncFileDialog::new()
+                        .set_title("Save an Aflos backup")
+                        .set_file_name("aflos-backup.mks")
+                        .save_file()
+                        .await
+                        .map(|f| f.path().to_path_buf())
+                },
+                |path| Message::MeshForm(Msg::ExportTo(path)),
+            );
+        }
+        Msg::ExportTo(Some(path)) => {
+            s.busy = Some("idExport");
+            s.note = None;
+            node.export(&path.to_string_lossy(), &username, &s.export_password);
+        }
+        Msg::ExportTo(None) => {}
+        Msg::CheckInput(value) => {
+            s.check = value;
+            s.safety = None;
+            s.resolved = None;
+            s.note = None;
+        }
+        Msg::Check => {
+            if s.busy.is_none() && !s.check.trim().is_empty() {
+                s.note = None;
+                s.resolved = None;
+                if is_code(&s.check) {
+                    s.busy = Some("codeResolve");
+                    node.resolve(s.check.trim());
+                } else {
+                    s.busy = Some("safetyNumber");
+                    node.safety_number(s.check.trim());
+                }
+            }
+        }
+        Msg::Expiry(label) => s.expiry = Some(label),
+        Msg::Uses(label) => s.uses = Some(label),
+        Msg::MakeCode => {
+            if s.busy.is_none() {
+                let arg = |choices: &[(&str, &'static str)], label: Option<&str>| {
+                    label.and_then(|l| choices.iter().find(|(c, _)| *c == l)).map_or("", |(_, a)| *a)
+                };
+                s.busy = Some("codeCreate");
+                s.note = None;
+                node.create_code(arg(&EXPIRIES, s.expiry), arg(&USES, s.uses));
+            }
+        }
+        Msg::CopyCode(code) => {
+            s.code_copied = Some(code.clone());
+            return iced::clipboard::write(code);
+        }
+        Msg::RevokeCode(code) => {
+            if s.busy.is_none() {
+                s.busy = Some("codeRevoke");
+                s.note = None;
+                node.revoke_code(&code);
+            }
+        }
+        Msg::Nick(value) => s.nick = value,
+        Msg::AddById => {
+            if let (None, Some((safety, _))) = (s.busy, &s.safety) {
+                s.busy = Some("friendAdd");
+                s.note = None;
+                node.add_friend(&safety.id, s.nick.trim());
+            }
+        }
+        Msg::RequestNote(value) => s.request_note = value,
+        Msg::SendRequest => {
+            if let (None, Some(code)) = (s.busy, &s.resolved) {
+                s.busy = Some("friendRequest");
+                s.note = None;
+                node.request(code, s.request_note.trim());
+            }
+        }
+        Msg::PingContact(id) => {
+            if s.busy.is_none() {
+                s.busy = Some("netPingId");
+                s.note = None;
+                s.contact_pong = None;
+                node.ping_id(&id);
+                s.pinging = Some(id);
+            }
+        }
+        Msg::Remove(id) if s.busy.is_none() => {
+            s.busy = Some("friendRemove");
+            s.contact_pong = None;
+            node.remove_friend(&id);
+        }
+        Msg::Accept(id) if s.busy.is_none() => {
+            s.busy = Some("friendAccept");
+            node.accept(&id);
+        }
+        Msg::Decline(id) if s.busy.is_none() => {
+            s.busy = Some("friendDecline");
+            node.decline(&id);
+        }
+        Msg::Block(id) if s.busy.is_none() => {
+            s.busy = Some("block");
+            node.block(&id);
+        }
+        Msg::Unblock(id) if s.busy.is_none() => {
+            s.busy = Some("unblock");
+            node.unblock(&id);
+        }
+        Msg::Verify(id, verified) if s.busy.is_none() => {
+            s.busy = Some("friendVerify");
+            node.verify(&id, verified);
+        }
+        Msg::Status(label) if s.busy.is_none() => {
+            if let Some((_, arg)) = STATUSES.iter().find(|(l, _)| *l == label) {
+                s.busy = Some("statusSet");
+                node.set_status(arg);
+            }
+        }
+        Msg::RemoveDevice(key) if s.busy.is_none() => {
+            s.busy = Some("deviceRemove");
+            s.note = None;
+            node.remove_device(&key);
+        }
+        Msg::NewGroup(open) => m.new_group = open.then(Default::default),
+        Msg::GroupPick(id) => {
+            if let Some((picked, _)) = &mut m.new_group {
+                match picked.iter().position(|p| *p == id) {
+                    Some(i) => drop(picked.remove(i)),
+                    None => picked.push(id),
+                }
+            }
+        }
+        Msg::GroupName(name) => {
+            if let Some((_, n)) = &mut m.new_group {
+                *n = name;
+            }
+        }
+        Msg::GroupCreate => {
+            // It shows in the sidebar once mesh-node has made it (`DmChats`).
+            if let Some((picked, name)) = m.new_group.take() {
+                node.dm_group_create(&picked, name.trim());
+            }
+        }
+        // Another command is still waiting for its answer.
+        Msg::Remove(_) | Msg::Accept(_) | Msg::Decline(_) | Msg::Block(_) | Msg::Unblock(_) | Msg::Verify(..) | Msg::Status(_) | Msg::RemoveDevice(_) => {}
+        Msg::CopyTicket => {
+            if s.busy.is_none() {
+                s.busy = Some("netTicket");
+                s.note = None;
+                node.ticket();
+            }
+        }
+        Msg::PingInput(value) => {
+            s.ping = value;
+            s.pong = None;
+            s.note = None;
+        }
+        Msg::Ping => {
+            if s.busy.is_none() && !s.ping.trim().is_empty() {
+                s.busy = Some("netPing");
+                s.note = None;
+                s.pong = None;
+                node.ping(s.ping.trim());
+            }
+        }
+    }
+    f.error = None;
+    // The password rule involves the username too, so either change rechecks it.
+    if onboarding && recheck {
+        if f.password.is_empty() {
+            f.verdict = None;
+        } else {
+            node.check_password(&f.username, &f.password);
+        }
+    }
+    Task::none()
+}
+
+/// Onboarding's first screen is filled in well enough to go on.
+fn can_continue(f: &Form) -> bool {
+    !f.username.trim().is_empty() && f.verdict.as_ref().is_some_and(|(ok, _)| *ok) && f.password == f.confirm
+}
+
+/// The join form has something shaped like a link code (`XXXX-XXXX`) and a
+/// name; the helper checks the code itself.
+fn can_join(f: &Form) -> bool {
+    let code: String = f.link_code.chars().filter(|c| !matches!(c, '-' | ' ')).collect();
+    code.chars().count() == 8 && code.chars().all(|c| c.is_ascii_alphanumeric()) && !f.device_name.trim().is_empty()
+}
+
+fn can_restore(f: &Form) -> bool {
+    f.backup.is_some() && !f.backup_password.is_empty() && can_continue(f)
+}
+
+fn can_change(s: &Settings) -> bool {
+    !s.old.is_empty() && s.verdict.as_ref().is_some_and(|(ok, _)| *ok) && s.new == s.confirm
+}
+
+/// Whether Check an ID's text is a friend code rather than an ID.
+fn is_code(text: &str) -> bool {
+    let text = text.trim().to_ascii_lowercase();
+    text.starts_with("mesh://code/") || !(text.starts_with("mesh1") || text.starts_with("mesh://"))
+}
+
+/// A code's limits, for example "until 3 Nov 14:00 · single use".
+fn describe(c: &mesh::Code) -> String {
+    let until = match c.expires_at.and_then(|t| Local.timestamp_opt(t as i64, 0).single()) {
+        Some(t) => format!("until {}", t.format("%-d %b %H:%M")),
+        None => "never expires".into(),
+    };
+    let uses = match c.max_uses {
+        Some(1) => "single use".into(),
+        Some(n) => format!("up to {n} uses"),
+        None => "unlimited uses".into(),
+    };
+    format!("{until} · {uses}")
+}
+
+/// Network's status line, for example "Online · relay aps1 · 1 connection, direct".
+fn net_line(net: Option<&mesh::Net>) -> String {
+    let Some(net) = net.filter(|n| n.state != mesh::NetState::Off) else { return "Offline".into() };
+    if net.state == mesh::NetState::Connecting {
+        return "Connecting…".into();
+    }
+    let mut line = format!("Online · relay {}", net.relay.as_deref().map(relay_name).unwrap_or("?"));
+    if net.connections > 0 {
+        let s = if net.connections == 1 { "" } else { "s" };
+        line.push_str(&format!(" · {} connection{s}{}", net.connections, if net.direct { ", direct" } else { "" }));
+    }
+    if net.published {
+        line.push_str(" · findable by contacts");
+    }
+    line
+}
+
+/// `mesh1qch7…utrz3`: enough to tell IDs apart in a list.
+fn short_id(id: &str) -> String {
+    match (id.get(..9), id.len().checked_sub(5).and_then(|i| id.get(i..))) {
+        (Some(head), Some(tail)) if id.len() > 16 => format!("{head}…{tail}"),
+        _ => id.to_owned(),
+    }
+}
+
+/// "seen 5 Nov, 14:02" or "not reached yet".
+fn seen_line(seen: Option<u64>) -> String {
+    seen.and_then(|t| Local.timestamp_opt(t as i64, 0).single())
+        .map_or_else(|| "not reached yet".to_owned(), |t| format!("seen {}", t.format("%-d %b, %H:%M")))
+}
+
+/// n0's relays by their short name (`aps1`); any other relay by its host.
+fn relay_name(url: &str) -> &str {
+    let host = url.split("://").nth(1).unwrap_or(url).split(['/', ':']).next().unwrap_or(url);
+    let host = host.strip_suffix('.').unwrap_or(host);
+    match host.strip_suffix(".relay.n0.iroh.link") {
+        Some(name) => name.split('-').next().unwrap_or(name),
+        None => host,
+    }
+}
+
+/// "direct · 0.7 ms", "relay · 24 ms".
+fn pong_line(pong: &mesh::Pong) -> String {
+    let ms = if pong.ms < 10.0 { format!("{:.1}", pong.ms) } else { format!("{:.0}", pong.ms) };
+    format!("{} · {ms} ms", pong.path)
+}
+
+/// The new-password hint: the helper's verdict, or that the two don't match.
+fn hint<'a>(verdict: &Option<(bool, String)>, password: &str, confirm: &str, p: &theme::Palette) -> Element<'a, Message> {
+    if !confirm.is_empty() && confirm != password {
+        return text("The passwords don't match.").size(12).color(p.warning()).into();
+    }
+    match verdict {
+        Some((true, _)) => text("Strong enough.").size(12).color(p.success()).into(),
+        Some((false, message)) => text(message.clone()).size(12).color(p.warning()).into(),
+        None => text("At least 10 characters, and not your username.").size(12).color(p.text_muted()).into(),
+    }
+}
+
+fn field<'a>(label: &'static str, value: &str, on: fn(String) -> Msg, secure: bool, submit: Msg, p: &theme::Palette) -> Element<'a, Message> {
+    column![
+        ui::mono(label, 11.0, p.text_muted()),
+        text_input("", value).on_input(move |v| Message::MeshForm(on(v))).on_submit(Message::MeshForm(submit)).secure(secure).padding(10),
+    ]
+    .spacing(6)
+    .into()
+}
+
+fn link_button<'a>(label: &'static str, msg: Msg, p: &theme::Palette) -> Element<'a, Message> {
+    button(ui::sans(label, 13.0, Weight::Normal, p.accent())).on_press(Message::MeshForm(msg)).padding(0).style(iced::widget::button::text).into()
+}
+
+pub(crate) fn view(state: &App) -> Element<'_, Message> {
+    let (p, l) = (&state.palette, &state.layout);
+    let m = &state.mesh;
+    let f = &m.form;
+    let field = |label, value, on, secure| field(label, value, on, secure, Msg::Submit, p);
+    let title = |sub: &'static str| {
+        column![
+            row![ui::mono_bold(">_", 28.0, p.accent()), ui::mono_bold("mesh", 28.0, p.text_bright())].spacing(10),
+            ui::mono(sub, 12.0, p.text_muted()),
+        ]
+        .spacing(4)
+    };
+    let submit = |label: &'static str, ready: bool| {
+        let label = if f.busy { "One moment…" } else { label };
+        ui::primary_button(
+            container(ui::sans(label, 14.0, Weight::Semibold, p.accent_text())).center_x(Length::Fill),
+            (ready && !f.busy).then_some(Message::MeshForm(Msg::Submit)),
+            p,
+            l,
+        )
+        .width(Length::Fill)
+        .padding(10)
+    };
+    let back = |msg: Msg| {
+        button(ui::sans("Back", 14.0, Weight::Normal, p.text_bright()))
+            .on_press_maybe((!f.busy).then_some(Message::MeshForm(msg)))
+            .padding([10, 16])
+            .style(flat_button_style(p))
+    };
+
+    let mut body = match m.identity.as_ref().map(|i| i.state) {
+        None => column![title("starting…"), text("Starting Aflos's engine…").size(13).color(p.text())],
+        Some(State::Unlocked) => column![],
+        Some(State::Locked) => column![
+            title("unlock your identity"),
+            field("USERNAME", &f.username, Msg::Username, false),
+            field("PASSWORD", &f.password, Msg::Password, true),
+            submit("Unlock", !f.username.trim().is_empty() && !f.password.is_empty()),
+        ],
+        Some(State::None) if f.restoring => {
+            let file = f.backup.as_ref().and_then(|b| b.file_name()).map(|n| n.to_string_lossy().into_owned());
+            column![
+                title("restore a backup"),
+                text("This install becomes a new device of the identity in the backup.").size(13).color(p.text()),
+                row![
+                    button(ui::sans("Choose backup file…", 13.0, Weight::Normal, p.text_bright()))
+                        .on_press(Message::MeshForm(Msg::PickBackup))
+                        .padding([8, 12])
+                        .style(flat_button_style(p)),
+                    ui::mono(file.unwrap_or_else(|| "none chosen".into()), 12.0, p.text_muted()),
+                ]
+                .spacing(10)
+                .align_y(iced::Alignment::Center),
+                field("ITS USERNAME", &f.username, Msg::Username, false),
+                field("ITS PASSWORD", &f.backup_password, Msg::BackupPassword, true),
+                field("NEW PASSWORD FOR THIS DEVICE", &f.password, Msg::Password, true),
+                field("NEW PASSWORD AGAIN", &f.confirm, Msg::Confirm, true),
+                hint(&f.verdict, &f.password, &f.confirm, p),
+                row![back(Msg::Restore(false)), submit("Restore", can_restore(f))].spacing(8),
+            ]
+        }
+        Some(State::None) if f.joining && f.received.is_some() => column![
+            title("link · a password for this device"),
+            text(format!("Linked to \"{}\". Each device has its own password: pick one for this one. It can't be recovered either.", f.username))
+                .size(13)
+                .color(p.text()),
+            field("PASSWORD FOR THIS DEVICE", &f.password, Msg::Password, true),
+            field("PASSWORD AGAIN", &f.confirm, Msg::Confirm, true),
+            hint(&f.verdict, &f.password, &f.confirm, p),
+            row![back(Msg::Join(false)), submit("Finish", can_continue(f))].spacing(8),
+        ],
+        Some(State::None) if f.joining => column![
+            title("link to your other device"),
+            text("On a device that already has your identity, open Your ID and choose Link a device. Type the code it shows here.")
+                .size(13)
+                .color(p.text()),
+            field("LINK CODE", &f.link_code, Msg::LinkCode, false),
+            field("A NAME FOR THIS DEVICE", &f.device_name, Msg::DeviceName, false),
+            row![back(Msg::Join(false)), submit("Link", can_join(f))].spacing(8),
+        ],
+        Some(State::None) if !f.warned => column![
+            title("make your identity · 1 of 2"),
+            text("No email, no phone number. Pick a username and a password; you'll need both every time Aflos starts.")
+                .size(13)
+                .color(p.text()),
+            field("USERNAME", &f.username, Msg::Username, false),
+            field("PASSWORD", &f.password, Msg::Password, true),
+            field("PASSWORD AGAIN", &f.confirm, Msg::Confirm, true),
+            hint(&f.verdict, &f.password, &f.confirm, p),
+            submit("Continue", can_continue(f)),
+            link_button("I have a backup", Msg::Restore(true), p),
+            link_button("I already have Aflos on another device", Msg::Join(true), p),
+        ],
+        Some(State::None) => column![
+            title("make your identity · 2 of 2"),
+            ui::sans("Your password can't be recovered.", 15.0, Weight::Semibold, p.warning()),
+            text(format!(
+                "There's no account and no server, so there's no reset link. If you forget the username \"{}\" or its password, \
+                 this identity and everyone who knows it are gone. Write them down somewhere safe.",
+                f.username.trim()
+            ))
+            .size(13)
+            .color(p.text()),
+            row![back(Msg::Warned(false)), submit("I understand, create it", true)].spacing(8),
+        ],
+    }
+    .spacing(14);
+    if let Some(error) = &f.error {
+        body = body.push(text(error.clone()).size(13).color(p.danger()));
+    }
+
+    container(ui::pane(body.padding(28), true, p, l, state.extras.translucent_panes).max_width(440))
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
+        .into()
+}
+
+/// Your ID: Aflos's Accounts panel once it's open.
+pub(crate) fn manage(state: &App) -> Element<'_, Message> {
+    let (p, l) = (&state.palette, &state.layout);
+    let m = &state.mesh;
+    let s = &m.settings;
+    let Some(identity) = m.identity.as_ref().filter(|i| i.state == State::Unlocked) else {
+        return text("Aflos isn't open.").size(13).color(p.text_muted()).into();
+    };
+    let note = |func: &str| -> Option<Element<'_, Message>> {
+        let (_, ok, message) = s.note.as_ref().filter(|(f, ..)| f == func)?;
+        Some(text(message.clone()).size(12).color(if *ok { p.success() } else { p.danger() }).into())
+    };
+    let action = |label: &'static str, busy_fn: &'static str, msg: Option<Msg>| {
+        let label = if s.busy == Some(busy_fn) { "One moment…" } else { label };
+        ui::primary_button(
+            container(ui::sans(label, 13.0, Weight::Semibold, p.accent_text())).center_x(Length::Fill),
+            msg.filter(|_| s.busy.is_none()).map(Message::MeshForm),
+            p,
+            l,
+        )
+        .width(Length::Fill)
+        .padding([8, 12])
+    };
+
+    // Your ID: the text, copy, and its QR code (the mesh:// link).
+    let mut id = column![
+        heading("your id", p),
+        text(identity.id.clone().unwrap_or_default()).font(iced::Font::MONOSPACE).size(12).color(p.text_bright()),
+        button(ui::sans(if s.copied { "Copied" } else { "Copy ID" }, 13.0, Weight::Normal, p.text_bright()))
+            .on_press(Message::MeshForm(Msg::CopyId))
+            .padding([6, 12])
+            .style(flat_button_style(p)),
+    ]
+    .spacing(8);
+    if let Some(qr) = &m.qr {
+        id = id.push(
+            container(qr_code(qr).cell_size(4).style(|_| qr_code::Style { cell: iced::Color::BLACK, background: iced::Color::WHITE }))
+                .padding(10)
+                .style(|_| container::Style { background: Some(iced::Color::WHITE.into()), border: iced::border::rounded(8), ..container::Style::default() }),
+        );
+    }
+
+    // Friends, codes and Check an ID live on Home → Friends now.
+    let friends = column![
+        heading("friends", p),
+        text("Friends, requests and friend codes are on Home, under Friends.")
+            .size(12)
+            .color(p.text()),
+        button(ui::sans("Open Friends →", 13.0, Weight::Normal, p.accent()))
+            .on_press(Message::ShowFriends(Tab::Online))
+            .padding([4, 0])
+            .style(flat_button_style(p)),
+    ]
+    .spacing(8);
+
+    // Network: is this device on Aflos, and can it reach another (a test until friends exist).
+    let mut network = column![
+        heading("network", p),
+        ui::sans(net_line(m.net.as_ref()), 13.0, Weight::Normal, p.text_bright()),
+        text("To test a connection, copy your ticket and send it to someone on another Aflos; paste theirs below.")
+            .size(12)
+            .color(p.text()),
+        button(ui::sans(if s.ticket_copied { "Ticket copied" } else { "Copy test ticket" }, 13.0, Weight::Normal, p.text_bright()))
+            .on_press_maybe(s.busy.is_none().then_some(Message::MeshForm(Msg::CopyTicket)))
+            .padding([6, 12])
+            .style(flat_button_style(p)),
+    ]
+    .spacing(8)
+    .extend(note("netTicket"))
+    .push(field("THEIR TICKET", &s.ping, Msg::PingInput, false, Msg::Ping, p))
+    .push(action("Ping", "netPing", (!s.ping.trim().is_empty()).then_some(Msg::Ping)))
+    .extend(note("netPing"));
+    if let Some(pong) = &s.pong {
+        network = network
+            .push(ui::sans(format!("{} answered · {}", pong.name, pong_line(pong)), 13.0, Weight::Normal, p.success()))
+            .push(ui::mono(pong.id.clone(), 11.0, p.text_muted()));
+    }
+
+    let mut devices = column![heading("devices", p)].spacing(6);
+    let keys = m.net.as_ref().is_some_and(|n| n.keys);
+    for d in &identity.devices {
+        let added = Local.timestamp_opt(d.created_at as i64, 0).single().map(|t| t.format("%-d %b %Y").to_string()).unwrap_or_default();
+        // Only this device's keys are reported (`meshNet`'s `keys`).
+        let detail = match (d.this_device, keys) {
+            (true, true) => format!("this device · {added} · secure messages ready"),
+            (true, false) => format!("this device · {added}"),
+            _ => added,
+        };
+        let mut line = row![ui::sans(d.name.clone(), 13.0, Weight::Normal, p.text_bright()), ui::mono(detail, 11.0, p.text_muted())]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+        if !d.this_device {
+            line = line.push(Space::new().width(Length::Fill)).push(
+                button(ui::sans(if s.busy == Some("deviceRemove") { "One moment…" } else { "Remove" }, 12.0, Weight::Normal, p.danger()))
+                    .on_press_maybe(s.busy.is_none().then(|| Message::MeshForm(Msg::RemoveDevice(d.key.clone()))))
+                    .padding([4, 10])
+                    .style(flat_button_style(p)),
+            );
+        }
+        devices = devices.push(line);
+    }
+    devices = devices.extend(note("deviceRemove"));
+    devices = match &s.link {
+        None => devices.push(action("Link a device", "linkStart", Some(Msg::LinkStart))),
+        Some(Linking::Showing(code, expires)) => {
+            let until = Local.timestamp_opt(*expires as i64, 0).single().map(|t| t.format("%H:%M").to_string()).unwrap_or_default();
+            devices
+                .push(ui::mono_bold(code.clone(), 22.0, p.text_bright()))
+                .push(text(format!("On the new device, choose \"I already have Aflos\" and type this code. It works once, until {until}.")).size(13).color(p.text()))
+                .push(action("Cancel", "linkCancel", Some(Msg::LinkCancel)))
+        }
+        Some(Linking::Asking(name)) => devices
+            .push(ui::sans(format!("Link \"{name}\"?"), 14.0, Weight::Semibold, p.text_bright()))
+            .push(text("It gets your identity, friends and messages. Only say yes if you typed the code on it yourself.").size(13).color(p.text()))
+            .push(row![action("Link", "linkConfirm", Some(Msg::LinkConfirm(true))), action("Cancel", "linkCancel", Some(Msg::LinkConfirm(false)))].spacing(8)),
+    };
+    for func in ["link", "linkStart", "linkConfirm"] {
+        devices = devices.extend(note(func));
+    }
+
+    let keep = column![
+        switch_row(
+            "Keep unlocked on this device",
+            identity.keyring.as_deref().unwrap_or("Opens without asking. Only as safe as your computer login."),
+            identity.keep_unlocked,
+            (identity.keyring.is_none() && s.busy.is_none()).then(|| Message::MeshForm(Msg::KeepUnlocked(!identity.keep_unlocked))),
+            p,
+        ),
+    ]
+    .extend(note("idKeepUnlocked"));
+
+    let password = column![
+        heading("change password", p),
+        field("CURRENT PASSWORD", &s.old, Msg::Old, true, Msg::ChangePassword, p),
+        field("NEW PASSWORD", &s.new, Msg::New, true, Msg::ChangePassword, p),
+        field("NEW PASSWORD AGAIN", &s.confirm, Msg::Again, true, Msg::ChangePassword, p),
+        hint(&s.verdict, &s.new, &s.confirm, p),
+        action("Change password", "idChangePassword", can_change(s).then_some(Msg::ChangePassword)),
+    ]
+    .spacing(8)
+    .extend(note("idChangePassword"));
+
+    let backup = column![
+        heading("backup", p),
+        text("A file that holds your identity. It opens with your username and your password.").size(12).color(p.text()),
+        field("YOUR PASSWORD", &s.export_password, Msg::ExportPassword, true, Msg::Export, p),
+        action("Export a backup…", "idExport", (!s.export_password.is_empty()).then_some(Msg::Export)),
+    ]
+    .spacing(8)
+    .extend(note("idExport"));
+
+    scrollable(
+        column![id, friends, network, devices, keep, password, backup]
+            .spacing(22)
+            .padding(iced::Padding {
+                right: 12.0,
+                ..iced::Padding::ZERO
+            }),
+    )
+    .height(Length::Fill)
+    .into()
+}
+
+/// The Friends page's Add friend tab: your friend codes, and a friend's
+/// code (or ID) to check and send a request to.
+fn add_view(state: &App) -> Element<'_, Message> {
+    let (p, l) = (&state.palette, &state.layout);
+    let m = &state.mesh;
+    let s = &m.settings;
+    let Some(identity) = m.identity.as_ref() else {
+        return column![].into();
+    };
+    let note = |func: &str| -> Option<Element<'_, Message>> {
+        let (_, ok, message) = s.note.as_ref().filter(|(f, ..)| f == func)?;
+        Some(text(message.clone()).size(12).color(if *ok { p.success() } else { p.danger() }).into())
+    };
+    let action = |label: &'static str, busy_fn: &'static str, msg: Option<Msg>| {
+        let label = if s.busy == Some(busy_fn) { "One moment…" } else { label };
+        ui::primary_button(
+            container(ui::sans(label, 13.0, Weight::Semibold, p.accent_text())).center_x(Length::Fill),
+            msg.filter(|_| s.busy.is_none()).map(Message::MeshForm),
+            p,
+            l,
+        )
+        .width(Length::Fill)
+        .padding([8, 12])
+    };
+
+    // Check an ID: the safety number both people read out (D7).
+    let mut check = column![
+        heading("add a friend", p),
+        text("Type a friend's code (or paste their ID or mesh:// link), then send them a request. The safety number lets you check, together, that nobody is in the middle.")
+            .size(12)
+            .color(p.text()),
+        field("THEIR CODE OR ID", &s.check, Msg::CheckInput, false, Msg::Check, p),
+        action("Check", if s.busy == Some("codeResolve") { "codeResolve" } else { "safetyNumber" }, (!s.check.trim().is_empty()).then_some(Msg::Check)),
+    ]
+    .spacing(8)
+    .extend(note("codeResolve"))
+    .extend(note("safetyNumber"));
+    if let Some((safety, qr)) = &s.safety {
+        let groups: Vec<&str> = safety.number.split_whitespace().collect();
+        let mut digits = column![].spacing(4);
+        for line in groups.chunks(4) {
+            digits = digits.push(text(line.join("  ")).font(iced::Font::MONOSPACE).size(15).color(p.text_bright()));
+        }
+        if let Some(code) = &s.resolved {
+            check = check.push(ui::sans(format!("The code {code} is this ID:"), 12.0, Weight::Normal, p.text()));
+        }
+        check = check.push(ui::mono(format!("with {}", safety.id), 11.0, p.text_muted())).push(digits);
+        if let Some(qr) = qr {
+            check = check.push(
+                container(qr_code(qr).cell_size(3).style(|_| qr_code::Style { cell: iced::Color::BLACK, background: iced::Color::WHITE }))
+                    .padding(10)
+                    .style(|_| container::Style { background: Some(iced::Color::WHITE.into()), border: iced::border::rounded(8), ..container::Style::default() }),
+            );
+        }
+        let social = &m.social;
+        let them = safety.id.as_str();
+        if let Some(friend) = social.friends.iter().find(|f| f.id == them) {
+            let (label, verified) = if friend.verified { ("Verified · undo", false) } else { ("Mark as verified", true) };
+            check = check.push(ui::sans(format!("Already friends: {}", friend_name(friend)), 12.0, Weight::Normal, p.text())).push(
+                button(ui::sans(label, 12.0, Weight::Normal, p.text_bright()))
+                    .on_press_maybe(s.busy.is_none().then(|| Message::MeshForm(Msg::Verify(friend.id.clone(), verified))))
+                    .padding([4, 10])
+                    .style(flat_button_style(p)),
+            );
+        } else if social.incoming.iter().any(|r| r.id == them) {
+            check = check.push(ui::sans("They've sent you a request: see Pending.", 12.0, Weight::Normal, p.text()));
+        } else if social.blocked.iter().any(|b| b.id == them) {
+            check = check.push(ui::sans("You've blocked them. Unblock them under Blocked first.", 12.0, Weight::Normal, p.warning()));
+        } else if social.outgoing.iter().any(|o| o.id == them) {
+            check = check.push(ui::sans("Asked: you'll be friends once their device connects to yours.", 12.0, Weight::Normal, p.text()));
+        } else if identity.id.as_deref() != Some(them) {
+            check = match &s.resolved {
+                // A live code can carry a request (SPEC-social D1).
+                Some(_) => check
+                    .push(field("NOTE (OPTIONAL)", &s.request_note, Msg::RequestNote, false, Msg::SendRequest, p))
+                    .push(action("Send friend request", "friendRequest", Some(Msg::SendRequest))),
+                // An ID alone can't: both of you add the other (D2).
+                None => check
+                    .push(text("An ID can't carry a request. Add theirs, and ask them to add yours: you're friends once both have.").size(12).color(p.text()))
+                    .push(field("SAVE THEM AS (OPTIONAL)", &s.nick, Msg::Nick, false, Msg::AddById, p))
+                    .push(action("Add by ID", "friendAdd", Some(Msg::AddById))),
+            };
+        }
+    }
+    check = check.extend(note("friendRequest")).extend(note("friendAdd")).extend(note("friendVerify"));
+
+    // Friend codes: short, expiring stand-ins for the ID, held by the seeds.
+    let expiry = s.expiry.unwrap_or(DEFAULT_EXPIRY);
+    let mut codes = column![
+        heading("your friend code", p),
+        text("Give someone a short code instead of your ID. Whoever types it in sees your ID; check the safety number together after.")
+            .size(12)
+            .color(p.text()),
+        row![
+            pick_list(EXPIRIES.map(|(l, _)| l).to_vec(), Some(expiry), |l| Message::MeshForm(Msg::Expiry(l))).padding(6),
+            pick_list(USES.map(|(l, _)| l).to_vec(), Some(s.uses.unwrap_or(DEFAULT_USES)), |l| Message::MeshForm(Msg::Uses(l))).padding(6),
+        ]
+        .spacing(8),
+    ]
+    .spacing(8);
+    if expiry == "Never expires" {
+        codes = codes.push(text("A code that never expires works until you revoke it.").size(12).color(p.warning()));
+    }
+    codes = codes.push(action("Make a code", "codeCreate", Some(Msg::MakeCode))).extend(note("codeCreate"));
+    for c in &m.codes {
+        let mut info = column![ui::mono(describe(c), 11.0, p.text_muted())].spacing(2);
+        if !c.held {
+            info = info.push(ui::mono("not saved to a seed yet", 11.0, p.warning()));
+        }
+        let new = s.made.as_deref() == Some(c.code.as_str());
+        let copied = s.code_copied.as_deref() == Some(c.code.as_str());
+        codes = codes.push(
+            row![
+                ui::mono_bold(c.code.clone(), 15.0, if new { p.accent() } else { p.text_bright() }),
+                info,
+                Space::new().width(Length::Fill),
+                button(ui::sans(if copied { "Copied" } else { "Copy" }, 12.0, Weight::Normal, p.text_bright()))
+                    .on_press(Message::MeshForm(Msg::CopyCode(c.code.clone())))
+                    .padding([4, 10])
+                    .style(flat_button_style(p)),
+                button(ui::sans("Revoke", 12.0, Weight::Normal, p.danger()))
+                    .on_press_maybe(s.busy.is_none().then(|| Message::MeshForm(Msg::RevokeCode(c.code.clone()))))
+                    .padding([4, 10])
+                    .style(flat_button_style(p)),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+        );
+    }
+    codes = codes.extend(note("codeRevoke"));
+
+    let others = button(ui::sans(
+        "Add someone on Discord or Matrix instead…",
+        12.0,
+        Weight::Normal,
+        p.accent(),
+    ))
+    .on_press(Message::OpenAddFriendDialog)
+    .padding([4, 0])
+    .style(flat_button_style(p));
+    column![codes, check, others]
+        .spacing(22)
+        .max_width(560)
+        .into()
+}
+
+/// A friend's name: ours for them if we set one, else theirs, else their ID.
+fn friend_name(f: &mesh::Friend) -> String {
+    [&f.nick, &f.name].into_iter().find(|n| !n.is_empty()).cloned().unwrap_or_else(|| short_id(&f.id))
+}
+
+/// "Online", "Do not disturb", …
+pub(crate) fn presence_label(presence: &str) -> &'static str {
+    match presence {
+        "online" => "Online",
+        "idle" => "Idle",
+        "dnd" => "Do not disturb",
+        _ => "Offline",
+    }
+}
+
+/// Home's main pane with no chat open: friends, requests and your status,
+/// once Aflos is open. Codes and Check an ID stay on Your ID.
+pub(crate) fn home(state: &App) -> Option<Element<'_, Message>> {
+    if state.mesh_node.is_none() || !open(state) {
+        return None;
+    }
+    let mut page = column![friends_view(state)].spacing(12);
+    if matches!(state.mesh.tab, Tab::Online | Tab::All) {
+        page = page.push(crate::mesh_spaces::new_space(state));
+    }
+    Some(page.into())
+}
+
+/// A flat button whose label is made at runtime.
+fn small_owned<'a>(label: String, color: iced::Color, msg: Msg, p: &'a theme::Palette) -> Element<'a, Message> {
+    button(ui::sans(label, 12.0, Weight::Normal, color))
+        .on_press(Message::MeshForm(msg))
+        .padding([4, 10])
+        .style(flat_button_style(p))
+        .into()
+}
+
+/// Friends (SPEC-social): our status, requests to us, friends, the ones we
+/// asked, and who we've blocked.
+fn friends_view(state: &App) -> Element<'_, Message> {
+    let p = &state.palette;
+    let (social, s) = (&state.mesh.social, &state.mesh.settings);
+    let free = s.busy.is_none();
+    let small = |label: &'static str, color: iced::Color, msg: Msg| {
+        button(ui::sans(label, 12.0, Weight::Normal, color))
+            .on_press_maybe(free.then_some(Message::MeshForm(msg)))
+            .padding([4, 10])
+            .style(flat_button_style(p))
+    };
+    let line = |name: String, detail: String| {
+        // Fills the row and wraps, so the buttons beside it always fit.
+        column![ui::sans(name, 13.0, Weight::Semibold, p.text_bright()), ui::mono(detail, 11.0, p.text_muted())]
+            .spacing(2)
+            .width(Length::Fill)
+    };
+    let status = STATUSES.iter().find(|(_, a)| *a == social.status).map_or("Online", |(l, _)| *l);
+    let tab = state.mesh.tab;
+    let tab_button = |label: String, t: Tab| {
+        let on = tab == t;
+        let label = ui::sans(label, 13.0, if on { Weight::Semibold } else { Weight::Normal }, if on { p.text_bright() } else { p.text() });
+        let b = ui::row_button(label, Message::ShowFriends(t), on, p, &state.layout).width(Length::Shrink).padding([4, 12]);
+        if t == Tab::Add { b.style(flat_button_style(p)) } else { b }
+    };
+    let pending = if social.incoming.is_empty() { "Pending".to_string() } else { format!("Pending ({})", social.incoming.len()) };
+    let tabs = row![
+        ui::sans("Friends", 15.0, Weight::Semibold, p.text_bright()),
+        tab_button("Online".into(), Tab::Online),
+        tab_button("All".into(), Tab::All),
+        tab_button(pending, Tab::Pending),
+        tab_button("Blocked".into(), Tab::Blocked),
+        ui::primary_button(ui::sans("Add friend", 13.0, Weight::Semibold, p.accent_text()), Some(Message::ShowFriends(Tab::Add)), p, &state.layout)
+            .padding([4, 12]),
+        Space::new().width(Length::Fill),
+        ui::mono("STATUS", 11.0, p.text_muted()),
+        pick_list(STATUSES.map(|(l, _)| l).to_vec(), Some(status), |l| Message::MeshForm(Msg::Status(l))).padding(6),
+    ]
+    .spacing(6)
+    .align_y(iced::Alignment::Center)
+    .wrap();
+    let mut col = column![tabs, ui::hline(p)].spacing(10);
+    if tab == Tab::Add {
+        return col.push(add_view(state)).into();
+    }
+    if status == "Invisible" {
+        col = col.push(text("Friends see you as offline, but can still reach you.").size(12).color(p.text_muted()));
+    }
+
+    let incoming: &[_] = if tab == Tab::Pending { &social.incoming } else { &[] };
+    for r in incoming {
+        let name = if r.name.is_empty() { short_id(&r.id) } else { r.name.clone() };
+        let mut who = line(format!("{name} wants to be friends"), short_id(&r.id));
+        if !r.note.is_empty() {
+            who = who.push(ui::sans(format!("“{}”", r.note), 12.0, Weight::Normal, p.text()));
+        }
+        col = col.push(
+            row![
+                who,
+                small("Accept", p.success(), Msg::Accept(r.id.clone())),
+                small("Decline", p.text_bright(), Msg::Decline(r.id.clone())),
+                small("Block", p.danger(), Msg::Block(r.id.clone())),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+        );
+    }
+
+    // A group needs at least two friends; up to nine with you (SPEC-dm D6).
+    let listing = matches!(tab, Tab::Online | Tab::All);
+    if listing && social.friends.len() >= 2 {
+        match &state.mesh.new_group {
+            None => col = col.push(small("New group", p.accent(), Msg::NewGroup(true))),
+            Some((picked, name)) => {
+                let mut pick = column![ui::mono("NEW GROUP: PICK 2 TO 9 FRIENDS", 11.0, p.text_muted())].spacing(4);
+                for f in &social.friends {
+                    let on = picked.contains(&f.id);
+                    let label = format!("{} {}", if on { "☑" } else { "☐" }, friend_name(f));
+                    pick = pick.push(small_owned(label, if on { p.text_bright() } else { p.text() }, Msg::GroupPick(f.id.clone()), p));
+                }
+                let ready = (2..=9).contains(&picked.len()) && !name.trim().is_empty();
+                col = col.push(pick).push(field("GROUP NAME", name, Msg::GroupName, false, Msg::GroupCreate, p)).push(
+                    row![
+                        button(ui::sans("Create", 12.0, Weight::Normal, p.accent()))
+                            .on_press_maybe(ready.then_some(Message::MeshForm(Msg::GroupCreate)))
+                            .padding([4, 10])
+                            .style(flat_button_style(p)),
+                        small("Cancel", p.text_bright(), Msg::NewGroup(false)),
+                    ]
+                    .spacing(4),
+                );
+            }
+        }
+    }
+    let shown: Vec<&mesh::Friend> = social.friends.iter().filter(|f| tab == Tab::All || (tab == Tab::Online && f.presence != "offline")).collect();
+    let empty = match tab {
+        Tab::All if shown.is_empty() => Some("No friends yet. Under Add friend, make a code to give someone, or type theirs."),
+        Tab::Online if shown.is_empty() && social.friends.is_empty() => Some("No friends yet. Under Add friend, make a code to give someone, or type theirs."),
+        Tab::Online if shown.is_empty() => Some("Nobody's online right now."),
+        Tab::Pending if social.incoming.is_empty() && social.outgoing.is_empty() => Some("No requests, either way."),
+        Tab::Blocked if social.blocked.is_empty() => Some("Nobody's blocked."),
+        _ => None,
+    };
+    if let Some(empty) = empty {
+        col = col.push(ui::sans(empty, 13.0, Weight::Normal, p.text_muted()));
+    }
+    if listing && social.friends.is_empty() {
+        col = col.push(button(ui::sans("Add friend →", 12.0, Weight::Normal, p.accent())).on_press(Message::ShowFriends(Tab::Add)).padding([4, 10]).style(flat_button_style(p)));
+    }
+    for f in shown {
+        let pinging = s.busy == Some("netPingId") && s.pinging.as_deref() == Some(f.id.as_str());
+        let mut detail = format!("{} · {}", presence_label(&f.presence), short_id(&f.id));
+        if f.verified {
+            detail.push_str(" · verified");
+        }
+        if f.presence == "offline" {
+            detail = format!("{detail} · {}", seen_line(f.seen));
+        }
+        let call = state.mesh.call.is_none().then(|| Message::MeshCall(crate::mesh_calls::Msg::Start(f.id.clone())));
+        col = col.push(row![
+            line(friend_name(f), detail),
+            row![
+                button(ui::sans("Message", 12.0, Weight::Normal, p.accent()))
+                    .on_press(Message::WebChatSelected(WebChat {
+                        network: Network::Mesh,
+                        id: f.id.clone(),
+                        name: friend_name(f),
+                        dm: true
+                    }))
+                    .padding([4, 10])
+                    .style(flat_button_style(p)),
+                button(ui::sans("Call", 12.0, Weight::Normal, p.accent())).on_press_maybe(call).padding([4, 10]).style(flat_button_style(p)),
+                small(if pinging { "Pinging…" } else { "Ping" }, p.text_bright(), Msg::PingContact(f.id.clone())),
+                small("Remove", p.danger(), Msg::Remove(f.id.clone())),
+                small("Block", p.danger(), Msg::Block(f.id.clone())),
+            ]
+            .spacing(4)
+            .wrap(),
+        ]
+        .spacing(10)
+        .align_y(iced::Alignment::Center));
+        if let Some((_, pong)) = s.contact_pong.as_ref().filter(|(id, _)| *id == f.id) {
+            col = col.push(ui::sans(format!("{} answered · {}", pong.name, pong_line(pong)), 12.0, Weight::Normal, p.success()));
+        }
+    }
+
+    let outgoing: &[_] = if tab == Tab::Pending { &social.outgoing } else { &[] };
+    for o in outgoing {
+        let name = if o.nick.is_empty() { short_id(&o.id) } else { o.nick.clone() };
+        col = col.push(
+            row![
+                line(name, format!("asked · {}", short_id(&o.id))),
+                small("Cancel", p.text_bright(), Msg::Remove(o.id.clone())),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+        );
+    }
+    let blocked: &[_] = if tab == Tab::Blocked { &social.blocked } else { &[] };
+    for b in blocked {
+        let name = if b.nick.is_empty() { short_id(&b.id) } else { b.nick.clone() };
+        col = col.push(
+            row![
+                line(name, format!("blocked · {}", short_id(&b.id))),
+                small("Unblock", p.text_bright(), Msg::Unblock(b.id.clone())),
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center),
+        );
+    }
+    let note = |func: &str| -> Option<Element<'_, Message>> {
+        let (_, ok, message) = s.note.as_ref().filter(|(f, ..)| f == func)?;
+        Some(text(message.clone()).size(12).color(if *ok { p.success() } else { p.danger() }).into())
+    };
+    for func in ["netPingId", "friendRemove", "friendAccept", "friendDecline", "block", "unblock", "statusSet"] {
+        col = col.extend(note(func));
+    }
+    col.into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn joining_needs_a_code_and_a_name() {
+        let mut f = Form { link_code: "k7qm-3xpa".into(), ..Form::default() };
+        assert!(!can_join(&f), "no device name");
+        f.device_name = "Kitchen laptop".into();
+        assert!(can_join(&f));
+        f.link_code = "K7QM 3XP".into();
+        assert!(!can_join(&f), "one character short");
+    }
+
+    #[test]
+    fn continue_needs_a_good_matching_password() {
+        let mut f = Form { username: "brendon".into(), password: "correct horse battery".into(), confirm: "correct horse battery".into(), ..Form::default() };
+        assert!(!can_continue(&f), "no verdict yet");
+        f.verdict = Some((false, "Add another word.".into()));
+        assert!(!can_continue(&f));
+        f.verdict = Some((true, String::new()));
+        assert!(can_continue(&f));
+        assert!(!can_restore(&f), "no backup chosen");
+        f.backup = Some(PathBuf::from("/tmp/b.mks"));
+        f.backup_password = "old one".into();
+        assert!(can_restore(&f));
+        f.confirm.push('x');
+        assert!(!can_continue(&f), "mismatch");
+        f.confirm.pop();
+        f.username = "  ".into();
+        assert!(!can_continue(&f), "no username");
+    }
+
+    #[test]
+    fn codes() {
+        for code in ["K7QM-3XPA", "k7qm3xpa", "mesh://code/K7QM-3XPA", " MESH://CODE/k7qm-3xpa "] {
+            assert!(is_code(code), "{code}");
+        }
+        for id in ["mesh1qch7juuwr5jfh3ue964tak2jhx3qj5mt2dhnf8j4lusjfyl6llmsrutrz3", "mesh://id/mesh1abc", "MESH1ABC"] {
+            assert!(!is_code(id), "{id}");
+        }
+        let mut c = mesh::Code { code: "K7QM-3XPA".into(), link: String::new(), created_at: 0, expires_at: None, max_uses: Some(1), held: true };
+        assert_eq!(describe(&c), "never expires · single use");
+        (c.max_uses, c.expires_at) = (None, Some(1_800_000_000));
+        assert!(describe(&c).starts_with("until "), "{}", describe(&c));
+        assert!(describe(&c).ends_with(" · unlimited uses"));
+        c.max_uses = Some(25);
+        assert!(describe(&c).ends_with("up to 25 uses"));
+    }
+
+    #[test]
+    fn network_lines() {
+        let mut net = mesh::Net { state: mesh::NetState::Online, relay: Some("https://aps1-1.relay.n0.iroh.link./".into()), direct: false, connections: 0, published: false, keys: false };
+        assert_eq!(net_line(Some(&net)), "Online · relay aps1");
+        (net.connections, net.direct) = (2, true);
+        assert_eq!(net_line(Some(&net)), "Online · relay aps1 · 2 connections, direct");
+        net.published = true;
+        assert!(net_line(Some(&net)).ends_with(" · findable by contacts"));
+        net.relay = Some("https://relay.example.org:8443/".into());
+        assert!(net_line(Some(&net)).starts_with("Online · relay relay.example.org ·"));
+        net.state = mesh::NetState::Connecting;
+        assert_eq!(net_line(Some(&net)), "Connecting…");
+        assert_eq!(net_line(None), "Offline");
+        let pong = mesh::Pong { id: "mesh1abc".into(), name: "box".into(), path: "direct".into(), ms: 0.74 };
+        assert_eq!(pong_line(&pong), "direct · 0.7 ms");
+        assert_eq!(pong_line(&mesh::Pong { ms: 24.4, path: "relay".into(), ..pong }), "relay · 24 ms");
+    }
+
+    #[test]
+    fn contact_lines() {
+        let id = "mesh1qch7juuwr5jfh3ue964tak2jhx3qj5mt2dhnf8j4lusjfyl6llmsrutrz3";
+        assert_eq!(short_id(id), "mesh1qch7…utrz3");
+        assert_eq!(short_id("mesh1abc"), "mesh1abc");
+        assert_eq!(seen_line(None), "not reached yet");
+        assert!(seen_line(Some(1_800_000_000)).starts_with("seen "));
+        let mut f = mesh::Friend { id: id.into(), name: "sam".into(), nick: String::new(), verified: false, presence: "dnd".into(), seen: None };
+        assert_eq!(friend_name(&f), "sam");
+        f.nick = "Sam P".into();
+        assert_eq!(friend_name(&f), "Sam P");
+        (f.nick, f.name) = (String::new(), String::new());
+        assert_eq!(friend_name(&f), "mesh1qch7…utrz3");
+        assert_eq!((presence_label("dnd"), presence_label("idle"), presence_label("offline")), ("Do not disturb", "Idle", "Offline"));
+    }
+
+    #[test]
+    fn change_needs_the_old_and_a_good_new_password() {
+        let mut s = Settings { old: "old".into(), new: "violet harbor quantum".into(), confirm: "violet harbor quantum".into(), ..Settings::default() };
+        assert!(!can_change(&s), "no verdict yet");
+        s.verdict = Some((true, String::new()));
+        assert!(can_change(&s));
+        s.old.clear();
+        assert!(!can_change(&s));
+    }
+}

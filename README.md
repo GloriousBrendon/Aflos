@@ -1,4 +1,4 @@
-# Mesh
+# Aflos
 
 A lightweight Matrix client written in Rust. One codebase for Linux and Windows:
 pure-Rust rendering via [iced](https://iced.rs), Matrix via
@@ -8,25 +8,25 @@ pure-Rust rendering via [iced](https://iced.rs), Matrix via
 
 ```
 crates/
-  mesh-core   Matrix logic: login, session persistence, sync, rooms, timeline,
+  aflos-core   Matrix logic: login, session persistence, sync, rooms, timeline,
               push updates, SAS device verification, sending, and 1:1 voice
               calls (WebRTC + Opus, pure Rust). No UI dependencies — any
               frontend can sit on top of it.
-  mesh-app    The iced GUI: login screen, room list, timeline, message
+  aflos    The iced GUI: login screen, room list, timeline, message
               composer, call controls, settings/theme switcher, theme loader.
 ```
 
 ## Theming
 
-Mesh wears your desktop. By default it follows your rice:
+Aflos wears your desktop. By default it follows your rice:
 
 - **Colours** from `~/.config/themes/active/colors.conf` (`$bg2`, `$bg1`,
   `$surface`, `$accent`, `$text` as `$key = rgba(rrggbbaa)`; override the path
-  with `MESH_THEME_FILE`). The other colours (bright and muted text, borders,
+  with `AFLOS_THEME_FILE`). The other colours (bright and muted text, borders,
   text on accent) are derived, and muted text is lightened until it passes
   4.5:1 contrast.
 - **Fonts** from fontconfig on Linux (`fc-match sans-serif` and `monospace`),
-  read when Mesh starts. Set `font_from_system = false` in `config.toml` to
+  read when Aflos starts. Set `font_from_system = false` in `config.toml` to
   use the bundled IBM Plex Sans and JetBrains Mono instead (Windows always
   does).
 - **Gaps, border width and rounding** from `~/.config/hypr/hyprland.conf`
@@ -34,7 +34,7 @@ Mesh wears your desktop. By default it follows your rice:
   following `source = …` includes). Set `layout_from_hyprland = false` in
   `config.toml` to use the defaults instead.
 
-Both files are watched: edit them and Mesh restyles within a second.
+Both files are watched: edit them and Aflos restyles within a second.
 Missing files fall back to the defaults in [design/DESIGN.md](design/DESIGN.md).
 
 Settings → **Rice** (gear icon in the user panel) switches between "Follow my
@@ -59,22 +59,22 @@ running Discord web, for voice alongside a text-only Discord bridge. Or set
 `discord_voice_command = "…"` to have the button run a command instead (say, a
 script that shows or hides a voice window); it wins over the URL.
 
-### Discord voice inside Mesh
+### Discord voice inside Aflos
 
-Mesh can drive a hidden official Discord web client for voice
-(`crates/mesh-discord`): it connects to the client's DevTools socket
+Aflos can drive a hidden official Discord web client for voice
+(`crates/aflos-discord`): it connects to the client's DevTools socket
 (`discord_engine_socket` in `config.toml`, default
 `$XDG_RUNTIME_DIR/discord-engine.sock`), installs a small script in the page
 and reads Discord's own voice state. You get Discord voice channels (with who's
 talking) in the channel pane, a call button in bridged Discord DMs, a voice bar
 in the chat pane, and the user panel's mic / deafen / leave buttons acting on
-the Discord call. Set `discord_engine_command` to start that client when Mesh
+the Discord call. Set `discord_engine_command` to start that client when Aflos
 starts and it isn't running. On Linux the client itself (a browser behind a
-VPN) is set up outside Mesh; see design/DISCORD-NATIVE.md.
+VPN) is set up outside Aflos; see design/DISCORD-NATIVE.md.
 
 On Windows the engine is Edge with DevTools on `127.0.0.1:9222` (the default
 there; `discord_engine_socket` also takes any `host:port`). Put this in
-`%APPDATA%\mesh\config.toml`, start Mesh, log into Discord once in the window
+`%APPDATA%\mesh\config.toml`, start Aflos, log into Discord once in the window
 that opens and link WhatsApp in its second tab (WhatsApp → Linked devices);
 minimize it after that, but don't close the tabs:
 
@@ -91,12 +91,12 @@ sessions in it, so only run it on a PC you trust.
 
 ### Native WhatsApp and Discord (no browser)
 
-Two helper programs replace the engine browser: `mesh-wa` (WhatsApp, on
-[whatsapp-rust](https://github.com/oxidezap/whatsapp-rust)) and `mesh-dc`
+Two helper programs replace the engine browser: `aflos-wa` (WhatsApp, on
+[whatsapp-rust](https://github.com/oxidezap/whatsapp-rust)) and `aflos-dc`
 (Discord: gateway, REST and voice with DAVE). Each is its own cargo project;
-build them with `cargo build --release` in `mesh-wa/` and `mesh-dc/` (they need
+build them with `cargo build --release` in `aflos-wa/` and `aflos-dc/` (they need
 `cmake` and `clang`, plus ALSA headers on Linux) and put the binaries next to
-Mesh's own. Mesh uses a helper when it finds it there and the engine browser
+Aflos's own. Aflos uses a helper when it finds it there and the engine browser
 otherwise. Link WhatsApp from the QR code on the Accounts page; sign in to
 Discord there with email and password (or its QR code). WhatsApp calls can
 send your camera or screen: on Linux the camera is any V4L2 webcam, and
@@ -104,10 +104,10 @@ send your camera or screen: on Linux the camera is any V4L2 webcam, and
 (xdg-desktop-portal, frames over PipeWire). Discord video and screen sharing
 are left out on purpose.
 
-On Linux, where Discord goes through a VPN, have `mesh-dc` run inside the
+On Linux, where Discord goes through a VPN, have `aflos-dc` run inside the
 VPN's network namespace too, or it connects from your own IP. In
-`~/.config/mesh/config.toml`, give the command Mesh should put in front of the
-helper (it must work without a password prompt: Mesh has no terminal):
+`~/.config/mesh/config.toml`, give the command Aflos should put in front of the
+helper (it must work without a password prompt: Aflos has no terminal):
 
 ```toml
 discord_native_wrapper = ["sudo", "-n", "ip", "netns", "exec", "vpn", "sudo", "-n", "-u", "you"]
@@ -116,7 +116,7 @@ discord_native_wrapper = ["/home/you/.local/bin/discord-voice"]
 ```
 
 The wrapper must pass stdin through to the helper (a shell script that starts
-it with `&` hands it `/dev/null` instead), and Mesh stops it with SIGKILL, so
+it with `&` hands it `/dev/null` instead), and Aflos stops it with SIGKILL, so
 anything it starts should go down when the helper's stdin closes.
 
 If the wrapper can't start, Discord stays offline; it never falls back to a
@@ -125,7 +125,7 @@ direct connection.
 ## Build & run
 
 ```sh
-cargo run -p mesh-app
+cargo run -p aflos
 ```
 
 Session data (access token + sqlite store, including E2EE keys) is kept in the
@@ -133,18 +133,18 @@ platform data dir (`~/.local/share/mesh` on Linux).
 
 ## Linux
 
-`installer/install-linux.sh` builds Mesh and both helpers and installs them
-for your user: `mesh`, `mesh-wa` and `mesh-dc` in `~/.local/bin`, Mesh's icon
-and a `.desktop` entry. `mesh-dc` is left out until `discord_native_wrapper`
+`installer/install-linux.sh` builds Aflos and both helpers and installs them
+for your user: `mesh`, `aflos-wa` and `aflos-dc` in `~/.local/bin`, Aflos's icon
+and a `.desktop` entry. `aflos-dc` is left out until `discord_native_wrapper`
 is set. `--uninstall` removes them and keeps your accounts and chats.
 
 ## Windows
 
-`installer\build.ps1` builds Mesh, both helpers and `dist\Mesh-Setup-<version>.exe`
+`installer\build.ps1` builds Aflos, both helpers and `dist\Aflos-Setup-<version>.exe`
 (needs [Inno Setup 6](https://jrsoftware.org/isinfo.php):
 `winget install JRSoftware.InnoSetup --scope user`). The setup installs per user
-without an admin prompt, adds Mesh to the Start menu and Settings → Apps, and
-can add a desktop shortcut and start Mesh at sign-in. Uninstalling keeps your
+without an admin prompt, adds Aflos to the Start menu and Settings → Apps, and
+can add a desktop shortcut and start Aflos at sign-in. Uninstalling keeps your
 accounts and chats in `%APPDATA%\mesh`.
 
 The whole stack is pure Rust — build on a Windows machine with
@@ -169,7 +169,7 @@ Working today:
 - Push-driven updates: the UI refreshes when sync delivers events (no polling).
 - Sending messages (composed as Markdown — `**bold**` etc. works).
 - E2EE device verification: incoming verification requests show a banner with
-  accept/decline and the emoji SAS confirm flow. Verify Mesh from another
+  accept/decline and the emoji SAS confirm flow. Verify Aflos from another
   client (e.g. Element) to unlock encrypted rooms.
 - Secure Backup (server-side key backup + recovery). The Settings screen shows
   backup status, sets it up (and shows a recovery key to save once), and can
@@ -180,7 +180,7 @@ Working today:
   rules), Privacy & E2EE (Secure Backup), Rice, Keybinds, Voice & audio
   (devices). `Esc` goes back.
 - Add friend (top bar, or Settings → Friends): paste a Matrix ID or a
-  Discord username and Mesh works out which it is (or force matrix/discord),
+  Discord username and Aflos works out which it is (or force matrix/discord),
   with specific errors for `name#1234` and `@name` without a server. For
   Matrix it looks up the profile and opens an encrypted DM invite (Matrix has
   no friend list; the DM is recorded in `m.direct`). The pending list shows
@@ -195,12 +195,12 @@ Working today:
   rooms outside any space) and one tile per space with its mention count;
   `Alt+1..9` switches space. `Ctrl+K` opens a jump palette over all rooms and
   spaces (type, then Enter or click).
-- Network tags: Mesh spots Discord rooms bridged by mautrix-discord (their
+- Network tags: Aflos spots Discord rooms bridged by mautrix-discord (their
   `m.bridge` state event) and Discord users (bridge ghosts, `@discord_<id>:…`),
   and tags them `dc`; everything else is `mx`. Tags show on space tiles,
   message authors (`mx · server`), members and the top bar's connection chips.
   In bridged rooms the composer says the message goes to Discord via the
-  bridge. Mesh only ever talks Matrix; Discord is reached through the bridge.
+  bridge. Aflos only ever talks Matrix; Discord is reached through the bridge.
 - Animated "digital rain" background (an iced canvas), drawn in the palette's
   colors so it still follows your rice/theme. Side panels are slightly
   translucent so it glows faintly behind them.
