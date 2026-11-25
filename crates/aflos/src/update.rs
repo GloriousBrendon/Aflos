@@ -233,13 +233,21 @@ mod tests {
         assert!(version("v0.10.0") > version("v0.9.1"));
     }
 
-    /// Against the real v0.2.0 release: `cargo test -p aflos -- --ignored live_download`.
+    /// Against the real releases at `RELEASES`: `cargo test -p aflos -- --ignored live_download`.
+    /// Releases from before the rename only have Mesh-named files, which this
+    /// build doesn't take, so then it downloads and checks one of those instead.
     #[tokio::test(flavor = "multi_thread")]
     #[ignore = "downloads from GitHub"]
     async fn live_download_checks_out() {
         let body = get(&client().unwrap(), RELEASES).await.unwrap();
         let releases: Vec<GhRelease> = serde_json::from_slice(&body).unwrap();
-        let release = newest(&releases, "0.1.0").expect("a release newer than 0.1.0");
+        let release = newest(&releases, "0.1.0").unwrap_or_else(|| {
+            let mesh = |n: &str| if cfg!(windows) { n.starts_with("Mesh-Setup-") } else { n.starts_with("mesh-") && n.ends_with("-linux-x86_64.tar.gz") };
+            let r = releases.iter().find(|r| r.assets.iter().any(|a| mesh(&a.name))).expect("a release with a download");
+            let file = r.assets.iter().find(|a| mesh(&a.name)).unwrap();
+            let sums = r.assets.iter().find(|a| a.name == "SHA256SUMS").expect("its SHA256SUMS");
+            Release { version: r.tag_name.trim_start_matches('v').into(), file: file.name.clone(), url: file.browser_download_url.clone(), sums_url: sums.browser_download_url.clone() }
+        });
         let path = download(&release).await.unwrap();
         assert!(path.metadata().unwrap().len() > 1_000_000);
     }
