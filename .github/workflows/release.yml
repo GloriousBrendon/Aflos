@@ -1,8 +1,10 @@
 # Builds the Windows setup and the Linux download, and publishes them as a
 # GitHub Release when a v* tag is pushed. Run it by hand (Actions → release →
-# Run workflow) to build without publishing: the files are then kept as the
-# run's artifacts. mesh-node comes from the private Mesh-Node repo through a
-# read-only deploy key (secret MESH_NODE_KEY), at its main branch.
+# Run workflow, or `gh workflow run release.yml --ref <branch>`) for a dry run:
+# it builds everything and checks the release's files and SHA256SUMS, keeps
+# them as the run's "release" artifact, and publishes nothing. mesh-node comes
+# from the private Mesh-Node repo's origin main, through a read-only deploy key
+# (secret MESH_NODE_KEY); no local checkout is involved.
 #
 # Every file is also published under Mesh's old name (Mesh-Setup-*.exe,
 # mesh-*-linux-x86_64.tar.gz): Mesh 0.3.1's updater only looks for those.
@@ -27,6 +29,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GloriousBrendon/Mesh-Node
+          ref: main
           ssh-key: ${{ secrets.MESH_NODE_KEY }}
           path: Mesh-Node
       - uses: dtolnay/rust-toolchain@stable
@@ -57,6 +60,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GloriousBrendon/Mesh-Node
+          ref: main
           ssh-key: ${{ secrets.MESH_NODE_KEY }}
           path: Mesh-Node
       - uses: dtolnay/rust-toolchain@stable
@@ -89,8 +93,9 @@ jobs:
           name: linux
           path: "*-linux-x86_64.tar.gz"
 
+  # Runs on a dry run too: the files and their SHA256SUMS are checked either
+  # way; only a v* tag publishes them.
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
     needs: [windows, linux]
     runs-on: ubuntu-24.04
     permissions:
@@ -98,8 +103,26 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { merge-multiple: true }
-      - run: sha256sum Aflos-Setup-*.exe aflos-*.tar.gz Mesh-Setup-*.exe mesh-*.tar.gz > SHA256SUMS
-      - env:
+      - name: Check the files and write SHA256SUMS
+        run: |
+          for pattern in 'Aflos-Setup-*.exe' 'aflos-*-linux-x86_64.tar.gz' 'Mesh-Setup-*.exe' 'mesh-*-linux-x86_64.tar.gz'; do
+            n=$(compgen -G "$pattern" | wc -l)
+            [ "$n" -eq 1 ] || { echo "::error::expected one $pattern, found $n"; ls -l; exit 1; }
+          done
+          cmp Aflos-Setup-*.exe Mesh-Setup-*.exe
+          sha256sum Aflos-Setup-*.exe aflos-*.tar.gz Mesh-Setup-*.exe mesh-*.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          retention-days: 7
+          path: |
+            *.exe
+            *.tar.gz
+            SHA256SUMS
+      - if: startsWith(github.ref, 'refs/tags/v')
+        env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease \
