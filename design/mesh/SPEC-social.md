@@ -1,6 +1,7 @@
 # Spec: `social` (Aflos)
 
-Status: **DRAFT revision 2 (2026-11-25)**, for review. Revision 1 was
+Status: **DRAFT revision 2 (2026-11-25)**, for review, with the review answers
+of the same day folded in (D16, D17, D21, D25). Revision 1 was
 approved 2026-11-10 (requests through a live friend code). Revision 2 makes
 friendship consent-first: two people become friends only when both agree,
 and nothing is ever shown to someone because another person added them.
@@ -22,8 +23,8 @@ There are three ways to become friends, all mutual:
 
 1. **Pairing** (outside a Space): one of you taps Pair and reads out or
    sends a short code like `7-gitaar-koffie`; the other types it within 2
-   minutes; both see the other's name and picture and tap Confirm. In person,
-   one shows a QR code and the other scans it.
+   minutes; both see the other's name and identicon and tap Confirm. In person,
+   one shows a QR code and the other scans it, which also marks you verified.
 2. **Add friend in a Space**: on a member's profile. When both of you have
    pressed it, you're friends. If only one has, the other never knows.
 3. **Add by ID** (revision 1's D2, kept): two people who already have each
@@ -44,7 +45,7 @@ the seed (designed below, built later).
 **User stories**
 
 - I'm on the phone with a friend. I tap Pair and read out `7-gitaar-koffie`.
-  They type it; we each see the other's name and picture, tap Confirm, and
+  They type it; we each see the other's name and identicon, tap Confirm, and
   we're friends.
 - At a braai, my friend shows a QR code and I scan it. Same result, nothing
   typed.
@@ -72,14 +73,15 @@ at D16.
 | D10 | **Blocking.** *Kept, simplified.* `block(id)` makes the ID `blocked`, drops any `outgoing` entry, closes their connections and rotates your direct key. There are no requests to filter any more. A blocked person's later tokens can never match, because you never put one for them. | As before, minus requests. |
 | D11 | **Account sync.** *Kept,* without `incoming` entries or request notes. | |
 | D12–D15 | **Presence, status, names, logs.** *Kept unchanged.* | |
-| D16 | **Pairing codes, Magic Wormhole style, with SPAKE2** (RustCrypto `spake2`, already a dependency for device linking). (1) A taps **Pair**. A's throwaway node (relay-only, connection-privacy P9) claims a **nameplate** from the seed's pairing service: the lowest free number, so it's short (`7`). A picks **two words** at random and shows `7-gitaar-koffie`. (2) B types it within **2 minutes**. B claims that nameplate as the second side; **only one second side is ever allowed**. (3) Both run SPAKE2 with the whole code as the password and the nameplate in the identity, exchanging messages through the seed's mailbox for that nameplate. (4) With the shared key, each sends a sealed **card**: its ID, signed `DeviceList`, display name and picture (D21). (5) Both see the other's card and tap **Confirm**; each sends a sealed confirm. When both have confirmed, both add the other as `friend` (no token needed). (6) The nameplate is released: done, cancelled, wrong code, or 2 minutes up. **One guess per attempt:** a wrong code (SPAKE2 key confirmation fails) ends the pairing on both sides, and A must start again with a new code. *Your choice; mechanism proposed.* | Magic Wormhole's design: a short code is safe because a wrong guess burns it, so an attacker gets one try at about 1 in 65,536 (two words of 256; D18), and A sees the failed try. The seed only relays: it sees a nameplate, two throwaway keys and ciphertext (SPAKE2 messages are random-looking). Reusing the link module's SPAKE2 setup keeps new crypto to zero. |
+| D16 | **Pairing codes, Magic Wormhole style, with SPAKE2** (RustCrypto `spake2`, already a dependency for device linking). (1) A taps **Pair**. A's throwaway node (relay-only, connection-privacy P9) claims a **nameplate** from the seed's pairing service: the lowest free number, so it's short (`7`). A picks **two words** at random and shows `7-gitaar-koffie`. (2) B types it within **2 minutes**. B claims that nameplate as the second side; **only one second side is ever allowed**. (3) Both run SPAKE2 with the whole code as the password and the nameplate in the identity, exchanging messages through the seed's mailbox for that nameplate. (4) With the shared key, each sends a sealed **card**: its ID, signed `DeviceList` and display name; the other side shows it with the ID's identicon (D21). (5) Both see the other's card and tap **Confirm**; each sends a sealed confirm. When both have confirmed, both add the other as `friend` (no token needed). A pairing by QR (D20) also marks the friend **verified** (D14); a typed or spoken code doesn't, and those friends can compare the safety number later. (6) The nameplate is released: done, cancelled, wrong code, or 2 minutes up. **One guess per attempt:** a wrong code (SPAKE2 key confirmation fails) ends the pairing on both sides, and A must start again with a new code. *Your choice; mechanism proposed.* | Magic Wormhole's design: a short code is safe because a wrong guess burns it, so an attacker gets one try at about 1 in 65,536 (two words of 256; D18), and A sees the failed try. The seed only relays: it sees a nameplate, two throwaway keys and ciphertext (SPAKE2 messages are random-looking). Reusing the link module's SPAKE2 setup keeps new crypto to zero. |
 | D17 | **The mutual token** (for D2 and D19). For a pair of IDs, both sides can compute the same token: `blake3::derive_key("mesh/v1/mutual", pair secret)` (routing D1's pair secret, from either root key and the other's ID), plus a **side** bit (0 for the lower ID). New seed service `mutual-put(token, side)`: the seed stores `(token, side)` for **7 days** and answers `matched` if the other side's entry is there, else `waiting`. There's no get and no delete. While you have someone as `outgoing`, your device puts the token again at unlock and each refresh (routing's 30 minutes), so it learns of a match within a refresh, and the token never lapses while you still want it. On `matched`, both become `friend` and connect. *Proposed.* | The seed compares; neither side learns anything without putting its own token, and putting is pressing (so "probing" is consenting). No delete means nobody can put, read the answer, and take it back before the other notices. The seed learns that two throwaway sessions are a pair, as it already can from address records (seed D10b), but not who. |
 | D18 | **Code words: Afrikaans and English lists, 256 words each**, no word on both lists, no two words within one edit of each other, all 3 to 8 letters. The code is `nameplate-word-word`; the words come from your app language's list; the typing side accepts words from either list (each word maps to its index in its own list), lowercase, with spaces or hyphens. | Two words of 8 bits is Wormhole's strength, and one guess per attempt makes it enough. Accepting both lists lets an Afrikaans speaker read a code to an English speaker. Edit distance keeps typos from becoming another valid word. |
 | D19 | **Add friend inside a Space.** On a member's profile, "Add friend" makes them `outgoing` and puts the mutual token (D17). When both have pressed it, both are told "You and <name> are now friends". A one-sided press shows only on the presser's side ("Added; if they add you too, you'll be friends"). *Your choice.* | Space members already know each other's IDs, so this is D2 with a button. |
 | D20 | **In person: a QR code** carrying `mesh://pair/<nameplate>/<secret>`, where the secret is 128 random bits instead of two words. Scanning runs the same flow (D16) with no typing; both still see cards and Confirm. The QR expires with its nameplate (2 minutes). *Your choice.* | A long secret needs no guess limit, but keeping the same flow means one code path. |
-| D21 | **A profile picture, small and optional.** Aflos identities have no picture today. Your ID gains one: an image you pick, scaled to 128×128 and kept under 32 KiB, stored in the keystore and synced (D11). Without one, the card shows a pattern drawn from the ID. The picture is sent only in pairing cards and to friends. *Proposed; needed by D16's "name and picture".* | Seeing a face before confirming is what makes the confirm meaningful. |
+| D21 | **An identicon, no pictures yet.** The pairing card, the friends list, contacts and Space member lists show the name beside a pattern generated from the ID (an identicon: a symmetric 5×5 grid in a colour, both from `blake3(ID)`), so two people with the same name look different. Profile pictures come later. *Your choice (2026-11-25).* | Seeing something that belongs to that ID before confirming makes the confirm meaningful, without building pictures, their sync and their limits now. |
 | D22 | **DMs and calls only between friends.** In a Space you can talk in channels with every member, but you can't DM or call someone who isn't your friend; their profile shows "Add friend" instead. Group DMs contain only friends of the creator, and each member only sees DMs from their own friends (dm D7 as is). Existing DM threads with non-friends stay readable but closed for sending. *Your choice.* | Private messages are for people who both agreed to be friends. |
 | D23 | **Friend codes go away** (identity's 30-day `FriendCode`, `mesh://code/` links, the seed's `code-hold`, `code-get`, `code-revoke`). See *What replaces friend codes*. *Your choice.* | Pairing does their job with consent on both sides, and needs nothing stored for 30 days. |
+| D25 | **Device linking moves onto pairing codes.** The link code becomes a pairing code (`nameplate-word-word`, D18) and linking's rendezvous moves from an address record keyed by the code to the pairing service's nameplate and mailbox (D16). Linking's own SPAKE2 messages and the identity hand-over (`link.rs`) stay as they are; only the code format and where the two sides meet change. Identity's `FriendCode` type then goes. In 0.5.0 if the plan shows it's a small change; otherwise 0.5.1, and the plan says which. *Your choice (2026-11-25).* | One kind of code is simpler for people. |
 | D24 | **Seed limits for pairing and tokens** (connection-privacy: all callers are relayed, so the shared relayed buckets are what bind). Per throwaway key: 10 nameplate claims an hour and 64 token puts an hour. Everyone together: 600 nameplate claims an hour, 20,000 token puts an hour, 200,000 tokens held, 1,000 live nameplates. Per nameplate: 2 sides, 8 messages a side, 64 KiB a message. *Proposed.* | Ten users pair a handful of times a day and put tokens for their few `outgoing` people every 30 minutes: well under 1% of each. |
 
 ### Removed in revision 2
@@ -128,7 +130,8 @@ Also gone with them: `knock.rs` (identity), `knocks.rs` (seed store),
 - **Commands:**
   - `pairStart()` → `meshPair {state:"code", code, qr, expires}`.
   - `pairJoin(code)` (typed, or the scanned `mesh://pair/…`) → `meshPair
-    {state:"card", id, name, picture}` once the other card arrives.
+    {state:"card", id, name}` once the other card arrives (Aflos draws the
+    identicon from the ID).
   - `pairConfirm()`, `pairCancel()`.
   - `meshPair {state:"done", id}` or `{state:"failed", reason:"wrong-code" |
     "expired" | "cancelled" | "taken" | "offline"}`.
@@ -160,7 +163,7 @@ Also gone with them: `knock.rs` (identity), `knocks.rs` (seed store),
 | Friends list empty states ("make a code to give someone, or type theirs") | "No friends yet. Under Add friend, tap Pair and give them the code." |
 | Your ID: "Friends, requests and friend codes are on Home, under Friends." | "Friends and pairing are on Home, under Friends." |
 | `mesh://code/<code>` links | Gone; a pasted one says "Friend codes were replaced by pairing; ask them to Pair with you." |
-| **Onboarding** | Onboarding never showed a friend code. Its only code is the **device link code** ("I already have Aflos": type the code from your other device), which is device linking, not friendship. It keeps working in 0.5.0. Proposed for later (open question 2): move linking onto the pairing service and code format, so there's one kind of code. |
+| **Onboarding** | Onboarding never showed a friend code. Its only code is the **device link code** ("I already have Aflos": type the code from your other device), which is device linking, not friendship. **D25** moves it onto the pairing service and code format, so there's one kind of code. |
 | The seed's code store and limits (seed D7, D8's code limits, D9's `codes.bin`) | Removed; pairing and tokens (D24) instead. |
 
 **Migration at the first unlock on 0.5.0:**
@@ -251,17 +254,14 @@ pkarr/mainline, or a later Aflos DHT) without changing the user's flow:
   dependency (the word lists are data, not a crate).
 - **Never:** friend requests, suggestions, a public directory or search.
 
+## Resolved questions (2026-11-25)
+
+1. **Picture:** not in 0.5.0; the name and an identicon (D21).
+2. **Device linking onto pairing:** yes, if small (D25).
+3. **Pairing marks verified:** by QR in person, yes; by a typed or spoken
+   code, no (D16).
+4. **Token life:** 7 days (D17).
+
 ## Open questions
 
-1. **Picture (D21):** build the profile picture in 0.5.0, or pair with the
-   name and the ID's pattern first?
-2. **Device linking onto pairing:** move linking to the pairing service and
-   code format in 0.5.0, so there's one kind of code and identity's
-   `FriendCode` type goes too, or keep linking as it is until later?
-3. **Pairing marks verified?** A pairing done by QR in person, or by a code
-   read out on a call, proves you reached the right person. Should it set
-   *verified* (D14) automatically for QR, for both, or neither (today you
-   compare the safety number by hand)?
-4. **Token life:** 7 days after a cancel is the price of no delete. Shorter
-   (2 days) means `outgoing` presses must be renewed more often by a device
-   that's online; 7 days fits someone away for a week.
+None.
