@@ -8,7 +8,7 @@ use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
 const RELEASES: &str =
-    "https://api.github.com/repos/GloriousBrendon/Mesh-Voice/releases?per_page=10";
+    "https://api.github.com/repos/GloriousBrendon/Aflos/releases?per_page=10";
 
 /// A release newer than this build, with the file for this computer.
 #[derive(Debug, Clone, PartialEq)]

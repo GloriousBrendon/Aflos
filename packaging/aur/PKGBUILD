@@ -1,6 +1,6 @@
 # Maintainer: TODO <TODO>
 #
-# Aflos: builds aflos, aflos-wa and aflos-dc from the public Mesh-Voice
+# Aflos: builds aflos, aflos-wa and aflos-dc from the public Aflos
 # release tag. mesh-node (Aflos's own network) lives in the private Mesh-Node
 # repo, so it is taken prebuilt from the same release's Linux download.
 # Not published to the AUR yet: run `updpkgsums` once v$pkgver is released.
@@ -10,19 +10,19 @@ pkgver=0.4.0
 pkgrel=1
 pkgdesc="Encrypted, decentralized chat on its own peer-to-peer network, plus Matrix, Discord and WhatsApp"
 arch=('x86_64')
-url="https://github.com/GloriousBrendon/Mesh-Voice"
+url="https://github.com/GloriousBrendon/Aflos"
 license=('AGPL-3.0-or-later')
 depends=('alsa-lib' 'fontconfig' 'gcc-libs' 'glibc' 'libpipewire' 'libxkbcommon' 'opus')
 makedepends=('cargo' 'clang' 'cmake' 'pkgconf')
 optdepends=('xdg-desktop-portal: pick a screen or window to share in WhatsApp calls')
 install=aflos-chat.install
-source=("Mesh-Voice-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
+source=("Aflos-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
         "aflos-$pkgver-linux-x86_64.tar.gz::$url/releases/download/v$pkgver/aflos-$pkgver-linux-x86_64.tar.gz")
 # TODO: SKIP until v$pkgver exists, then `updpkgsums`.
 sha256sums=('SKIP'
             'SKIP')
 
-_src="Mesh-Voice-$pkgver"
+_src="Aflos-$pkgver"
 
 prepare() {
   cd "$_src"
