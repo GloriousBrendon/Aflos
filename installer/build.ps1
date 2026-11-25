@@ -1,4 +1,4 @@
-# Builds Mesh and its helpers in release, then dist\Mesh-Setup-<version>.exe:
+# Builds Aflos and its helpers in release, then dist\Aflos-Setup-<version>.exe:
 # the one file a friend installs (SPEC-packaging). Runs on the Windows PC,
 # not the Linux box: it needs the MSVC toolchain and Inno Setup 6
 # (winget install JRSoftware.InnoSetup --scope user).
@@ -23,14 +23,14 @@ $target = 'x86_64-pc-windows-msvc'
 $oldFlags = $env:RUSTFLAGS
 $env:RUSTFLAGS = '-C target-feature=+crt-static'
 try {
-    foreach ($dir in $root, "$root\mesh-wa", "$root\mesh-dc", $node) {
+    foreach ($dir in $root, "$root\aflos-wa", "$root\aflos-dc", $node) {
         Push-Location $dir
         try {
-            if ($dir -eq $root) { cargo build --release --target $target -p mesh-app }
+            if ($dir -eq $root) { cargo build --release --target $target -p aflos }
             elseif ($dir -eq $node) { cargo build --release --target $target -p mesh-node }
-            elseif ($dir -in "$root\mesh-wa", "$root\mesh-dc") {
-                # The bundled Opus in opusic-sys (mesh-wa) and libopus_sys (mesh-dc) links the DLL runtime unless OPUS_STATIC_RUNTIME is on, which neither build.rs sets (Task 1, fallback a).
-                $opus = if ($dir -eq "$root\mesh-wa") { 'opusic-sys' } else { 'libopus_sys' }
+            elseif ($dir -in "$root\aflos-wa", "$root\aflos-dc") {
+                # The bundled Opus in opusic-sys (aflos-wa) and libopus_sys (aflos-dc) links the DLL runtime unless OPUS_STATIC_RUNTIME is on, which neither build.rs sets (Task 1, fallback a).
+                $opus = if ($dir -eq "$root\aflos-wa") { 'opusic-sys' } else { 'libopus_sys' }
                 $oldToolchain = $env:CMAKE_TOOLCHAIN_FILE
                 $env:CMAKE_TOOLCHAIN_FILE = "$PSScriptRoot\opus-static.cmake" -replace '\\', '/'
                 try {
@@ -49,8 +49,8 @@ try {
 $iscc = @("$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe", "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe") |
     Where-Object { Test-Path $_ } | Select-Object -First 1
 if (-not $iscc) { throw 'Inno Setup 6 not found' }
-& $iscc /Q "/DNode=$node" "/DTarget=$target" "/DAppCommit=$appCommit" "/DNodeCommit=$nodeCommit" "$PSScriptRoot\mesh.iss"
+& $iscc /Q "/DNode=$node" "/DTarget=$target" "/DAppCommit=$appCommit" "/DNodeCommit=$nodeCommit" "$PSScriptRoot\aflos.iss"
 if ($LASTEXITCODE) { throw 'ISCC failed' }
-$setup = Get-ChildItem "$root\dist\Mesh-Setup-*.exe" | Sort-Object LastWriteTime | Select-Object -Last 1
+$setup = Get-ChildItem "$root\dist\Aflos-Setup-*.exe" | Sort-Object LastWriteTime | Select-Object -Last 1
 "$($setup.FullName)  $($setup.Length) bytes  app $appCommit, engine $nodeCommit"
 "SHA-256 $((Get-FileHash -Algorithm SHA256 $setup.FullName).Hash)"

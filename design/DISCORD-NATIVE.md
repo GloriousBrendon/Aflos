@@ -1,6 +1,6 @@
-# Discord inside Mesh: research and plan (2026-10-19)
+# Discord inside Aflos: research and plan (2026-10-19)
 
-Goal: every Discord feature (text, voice, video, servers, friends) from Mesh's
+Goal: every Discord feature (text, voice, video, servers, friends) from Aflos's
 own UI, never seeing a Discord window. Later: no Discord code on the PC at all.
 The owner accepts the ban risk.
 
@@ -40,9 +40,9 @@ after login (not yet checked against a logged-in session).
 
 ## Options
 
-| | A. Mesh skin over hidden official web client | B. Native Rust client in Mesh |
+| | A. Aflos skin over hidden official web client | B. Native Rust client in Aflos |
 |---|---|---|
-| How | discord-voice browser runs hidden; Mesh drives it via CDP + an injected script that reads Flux stores and dispatches actions | Gateway + REST + voice websocket + UDP/Opus + DAVE (davey), in a new `mesh-discord` crate |
+| How | discord-voice browser runs hidden; Aflos drives it via CDP + an injected script that reads Flux stores and dispatches actions | Gateway + REST + voice websocket + UDP/Opus + DAVE (davey), in a new `aflos-discord` crate |
 | Features | All of them, including video/screen share, because it *is* Discord | Whatever we build; voice/DAVE is the big part |
 | DAVE, captchas, new features | Discord's own code handles them | Ours to implement and keep up with |
 | Ban risk | Lowest: official client; our script isn't one of the mods it checks for | Highest: different fingerprint |
@@ -73,22 +73,22 @@ silently in a call.
 1. `discord-voice --engine`: launch the browser hidden (headed but in the
    scratchpad first; headless only if Discord doesn't flag it) with
    `--remote-debugging-port` and the unix-socket relay.
-2. Spike: from Mesh, log store contents for a logged-in session: guilds,
+2. Spike: from Aflos, log store contents for a logged-in session: guilds,
    channels, voice states; join a voice channel and toggle mute via dispatched
-   actions. Done when Mesh can join/leave a voice channel and mute with the
+   actions. Done when Aflos can join/leave a voice channel and mute with the
    window never shown.
 3. Then UI: voice channels under VOICE in the channel pane, who's speaking,
    mute/deafen wired to the existing user panel.
 
-Keep `mesh-core` Matrix-only (design rule): Discord-engine code goes in its
+Keep `aflos-core` Matrix-only (design rule): Discord-engine code goes in its
 own crate.
 
 ## Progress
 
-- 2026-10-19: step A1 done. `mesh-discord` crate connects over the unix
+- 2026-10-19: step A1 done. `aflos-discord` crate connects over the unix
   socket, installs `agent.js` (finds the live webpack runtime, Discord's stores
   and its `selectVoiceChannel` / `toggleSelfMute` / `call` actions), and streams
-  voice snapshots via a DevTools binding. Mesh shows voice channels, a DM call
+  voice snapshots via a DevTools binding. Aflos shows voice channels, a DM call
   button, a call bar and Discord mute/deafen/leave. Verified: connection,
   snapshots and mute toggling against the live client. Not yet verified: an
   actual call (needs a friend on the other end). Voice members show initials:

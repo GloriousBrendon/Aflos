@@ -1,8 +1,14 @@
 # Builds the Windows setup and the Linux download, and publishes them as a
 # GitHub Release when a v* tag is pushed. Run it by hand (Actions → release →
-# Run workflow) to build without publishing: the files are then kept as the
-# run's artifacts. mesh-node comes from the private Mesh-Node repo through a
-# read-only deploy key (secret MESH_NODE_KEY), at its main branch.
+# Run workflow, or `gh workflow run release.yml --ref <branch>`) for a dry run:
+# it builds everything and checks the release's files and SHA256SUMS, keeps
+# them as the run's "release" artifact, and publishes nothing. mesh-node comes
+# from the private Mesh-Node repo's origin main, through a read-only deploy key
+# (secret MESH_NODE_KEY); no local checkout is involved.
+#
+# Every file is also published under Mesh's old name (Mesh-Setup-*.exe,
+# mesh-*-linux-x86_64.tar.gz): Mesh 0.3.1's updater only looks for those.
+# Drop the copies once nobody runs Mesh 0.3.1 any more.
 name: release
 
 on:
@@ -23,6 +29,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GloriousBrendon/Mesh-Node
+          ref: main
           ssh-key: ${{ secrets.MESH_NODE_KEY }}
           path: Mesh-Node
       - uses: dtolnay/rust-toolchain@stable
@@ -30,13 +37,20 @@ jobs:
       # build.ps1 is the same script as on your PC (SPEC-packaging P1).
       - run: Mesh-Voice\installer\build.ps1
         shell: pwsh
+      - name: Copy under Mesh's old name, for Mesh 0.3.1's updater
+        shell: pwsh
+        run: |
+          $setup = Get-ChildItem Mesh-Voice/dist/Aflos-Setup-*.exe | Select-Object -Last 1
+          Copy-Item $setup.FullName (Join-Path $setup.DirectoryName ($setup.Name -replace '^Aflos-', 'Mesh-'))
       - uses: actions/upload-artifact@v4
         with:
           name: windows
-          path: Mesh-Voice/dist/Mesh-Setup-*.exe
+          path: |
+            Mesh-Voice/dist/Aflos-Setup-*.exe
+            Mesh-Voice/dist/Mesh-Setup-*.exe
 
   linux:
-    # 24.04: 22.04's PipeWire is too old for libspa (mesh-wa, mesh-dc). The
+    # 24.04: 22.04's PipeWire is too old for libspa (aflos-wa, aflos-dc). The
     # binaries need a C library as new as 24.04's (glibc 2.39, distros from 2024 on).
     runs-on: ubuntu-24.04
     timeout-minutes: 90
@@ -46,6 +60,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           repository: GloriousBrendon/Mesh-Node
+          ref: main
           ssh-key: ${{ secrets.MESH_NODE_KEY }}
           path: Mesh-Node
       - uses: dtolnay/rust-toolchain@stable
@@ -54,27 +69,33 @@ jobs:
           libopus-dev libpipewire-0.3-dev libspa-0.2-dev clang pkg-config cmake
       - name: Build
         run: |
-          (cd Mesh-Voice && cargo build --release -p mesh-app)
-          (cd Mesh-Voice/mesh-wa && cargo build --release)
-          (cd Mesh-Voice/mesh-dc && cargo build --release)
+          (cd Mesh-Voice && cargo build --release -p aflos)
+          (cd Mesh-Voice/aflos-wa && cargo build --release)
+          (cd Mesh-Voice/aflos-dc && cargo build --release)
           (cd Mesh-Node && cargo build --release -p mesh-node)
       - name: Pack
         run: |
-          v=$(grep -m1 '^version' Mesh-Voice/crates/mesh-app/Cargo.toml | cut -d'"' -f2)
-          d=mesh-$v-linux-x86_64
+          v=$(grep -m1 '^version' Mesh-Voice/crates/aflos/Cargo.toml | cut -d'"' -f2)
+          d=aflos-$v-linux-x86_64
           mkdir $d
-          cp Mesh-Voice/target/release/mesh-app $d/mesh
-          cp Mesh-Voice/mesh-wa/target/release/mesh-wa Mesh-Voice/mesh-dc/target/release/mesh-dc \
+          cp Mesh-Voice/target/release/aflos $d/aflos
+          cp Mesh-Voice/aflos-wa/target/release/aflos-wa Mesh-Voice/aflos-dc/target/release/aflos-dc \
              Mesh-Node/target/release/mesh-node Mesh-Voice/installer/install-linux.sh \
-             Mesh-Voice/crates/mesh-app/assets/mesh.png $d/
+             $d/
+          cp -r Mesh-Voice/crates/aflos/assets/hicolor $d/
           tar czf $d.tar.gz $d
+          # Mesh 0.3.1's updater runs <file name>/install-linux.sh: same files, old names.
+          old=mesh-$v-linux-x86_64
+          cp -r $d $old
+          tar czf $old.tar.gz $old
       - uses: actions/upload-artifact@v4
         with:
           name: linux
-          path: mesh-*-linux-x86_64.tar.gz
+          path: "*-linux-x86_64.tar.gz"
 
+  # Runs on a dry run too: the files and their SHA256SUMS are checked either
+  # way; only a v* tag publishes them.
   publish:
-    if: startsWith(github.ref, 'refs/tags/v')
     needs: [windows, linux]
     runs-on: ubuntu-24.04
     permissions:
@@ -82,20 +103,41 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with: { merge-multiple: true }
-      - run: sha256sum Mesh-Setup-*.exe mesh-*.tar.gz > SHA256SUMS
-      - env:
+      - name: Check the files and write SHA256SUMS
+        run: |
+          for pattern in 'Aflos-Setup-*.exe' 'aflos-*-linux-x86_64.tar.gz' 'Mesh-Setup-*.exe' 'mesh-*-linux-x86_64.tar.gz'; do
+            n=$(compgen -G "$pattern" | wc -l)
+            [ "$n" -eq 1 ] || { echo "::error::expected one $pattern, found $n"; ls -l; exit 1; }
+          done
+          cmp Aflos-Setup-*.exe Mesh-Setup-*.exe
+          sha256sum Aflos-Setup-*.exe aflos-*.tar.gz Mesh-Setup-*.exe mesh-*.tar.gz > SHA256SUMS
+          sha256sum -c SHA256SUMS
+          cat SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release
+          retention-days: 7
+          path: |
+            *.exe
+            *.tar.gz
+            SHA256SUMS
+      - if: startsWith(github.ref, 'refs/tags/v')
+        env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease \
-            --title "Mesh $GITHUB_REF_NAME" --notes-file - Mesh-Setup-*.exe mesh-*.tar.gz SHA256SUMS <<'EOF'
+            --title "Aflos $GITHUB_REF_NAME" --notes-file - Aflos-Setup-*.exe aflos-*.tar.gz Mesh-Setup-*.exe mesh-*.tar.gz SHA256SUMS <<'EOF'
           A beta for friends.
 
-          **Windows:** run `Mesh-Setup-*.exe`. It isn't signed, so Windows shows
+          **Windows:** run `Aflos-Setup-*.exe`. It isn't signed, so Windows shows
           "Windows protected your PC": click **More info**, then **Run anyway**.
 
           **Linux (x86-64):** unpack the `.tar.gz` and run `./install-linux.sh`.
           It installs into `~/.local/bin` with a menu entry, no root needed.
           It needs opus, ALSA and PipeWire, which desktop distros have.
+
+          The `Mesh-Setup-*.exe` and `mesh-*.tar.gz` files are the same Aflos under
+          Mesh's old name, so Mesh 0.3.1 can update itself. New installs: take the Aflos ones.
 
           Check your download against `SHA256SUMS`.
           EOF

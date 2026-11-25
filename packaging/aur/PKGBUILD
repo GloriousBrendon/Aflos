@@ -1,0 +1,79 @@
+# Maintainer: TODO <TODO>
+#
+# Aflos: builds aflos, aflos-wa and aflos-dc from the public Mesh-Voice
+# release tag. mesh-node (Aflos's own network) lives in the private Mesh-Node
+# repo, so it is taken prebuilt from the same release's Linux download.
+# Not published to the AUR yet: run `updpkgsums` once v$pkgver is released.
+
+pkgname=aflos-chat
+pkgver=0.4.0
+pkgrel=1
+pkgdesc="Encrypted, decentralized chat on its own peer-to-peer network, plus Matrix, Discord and WhatsApp"
+arch=('x86_64')
+url="https://github.com/GloriousBrendon/Mesh-Voice"
+license=('AGPL-3.0-or-later')
+depends=('alsa-lib' 'fontconfig' 'gcc-libs' 'glibc' 'libpipewire' 'libxkbcommon' 'opus')
+makedepends=('cargo' 'clang' 'cmake' 'pkgconf')
+optdepends=('xdg-desktop-portal: pick a screen or window to share in WhatsApp calls')
+install=aflos-chat.install
+source=("Mesh-Voice-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
+        "aflos-$pkgver-linux-x86_64.tar.gz::$url/releases/download/v$pkgver/aflos-$pkgver-linux-x86_64.tar.gz")
+# TODO: SKIP until v$pkgver exists, then `updpkgsums`.
+sha256sums=('SKIP'
+            'SKIP')
+
+_src="Mesh-Voice-$pkgver"
+
+prepare() {
+  cd "$_src"
+  export RUSTUP_TOOLCHAIN=stable
+  local target="$(rustc -vV | sed -n 's/host: //p')"
+  for dir in . aflos-wa aflos-dc; do
+    (cd "$dir" && cargo fetch --locked --target "$target")
+  done
+}
+
+build() {
+  cd "$_src"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo build --frozen --release -p aflos
+  (cd aflos-wa && cargo build --frozen --release)
+  (cd aflos-dc && cargo build --frozen --release)
+}
+
+package() {
+  cd "$_src"
+  # Aflos finds its helpers next to its own binary, so they share a folder.
+  install -Dm755 target/release/aflos "$pkgdir/usr/lib/aflos/aflos"
+  install -Dm755 aflos-wa/target/release/aflos-wa "$pkgdir/usr/lib/aflos/aflos-wa"
+  install -Dm755 "$srcdir/aflos-$pkgver-linux-x86_64/mesh-node" "$pkgdir/usr/lib/aflos/mesh-node"
+  # Not beside aflos on purpose: with it there, Discord would connect from
+  # your own IP. aflos-chat.install says how to turn it on.
+  install -Dm755 aflos-dc/target/release/aflos-dc "$pkgdir/usr/lib/aflos/optional/aflos-dc"
+  install -dm755 "$pkgdir/usr/bin"
+  ln -s /usr/lib/aflos/aflos "$pkgdir/usr/bin/aflos"
+
+  local size
+  for size in 16 32 48 64 128 256 512; do
+    install -Dm644 "crates/aflos/assets/hicolor/${size}x${size}/apps/aflos.png" \
+      "$pkgdir/usr/share/icons/hicolor/${size}x${size}/apps/aflos.png"
+  done
+  install -Dm644 crates/aflos/assets/hicolor/scalable/apps/aflos.svg \
+    "$pkgdir/usr/share/icons/hicolor/scalable/apps/aflos.svg"
+
+  # The name, logo and icons aren't under the AGPL (README: Trademark).
+  install -Dm644 design/brand/aflos/LICENSE.txt "$pkgdir/usr/share/licenses/$pkgname/BRAND-LICENSE.txt"
+
+  install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/aflos.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Aflos
+GenericName=Chat client
+Comment=Encrypted. Decentralized. Yours.
+Exec=aflos
+Icon=aflos
+StartupWMClass=aflos
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+EOF
+}

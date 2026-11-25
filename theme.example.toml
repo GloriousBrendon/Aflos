@@ -1,10 +1,10 @@
-# Mesh theme — copy to your config dir and edit to match your rice:
-#   Linux:   ~/.config/mesh/theme.toml
-#   Windows: %APPDATA%\mesh\theme.toml
+# Aflos theme — copy to your config dir and edit to match your rice:
+#   Linux:   ~/.config/aflos/theme.toml
+#   Windows: %APPDATA%\aflos\theme.toml
 #
 # Used when the theme choice is "Custom (theme.toml)". All values are hex
 # colors. Only background, surface, surface_alt, accent and text are required;
-# leave the others out to have Mesh derive them (contrast-checked). Keys may
+# leave the others out to have Aflos derive them (contrast-checked). Keys may
 # also sit under a [colors] table. Missing or invalid file: the rice defaults.
 
 background  = "#1e1e2e"

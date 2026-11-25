@@ -72,6 +72,71 @@ dependencies = [
 ]
 
 [[package]]
+name = "aflos"
+version = "0.4.0"
+dependencies = [
+ "aflos-core",
+ "aflos-discord",
+ "anyhow",
+ "arboard",
+ "chrono",
+ "dirs",
+ "iced",
+ "image",
+ "notify-rust",
+ "once_cell",
+ "reqwest",
+ "rfd",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "symphonia",
+ "tokio",
+ "toml",
+ "tracing",
+ "tracing-subscriber",
+ "windows-sys 0.59.0",
+ "winresource",
+]
+
+[[package]]
+name = "aflos-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "cpal",
+ "dirs",
+ "futures-util",
+ "matrix-sdk",
+ "mime",
+ "opus",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+ "webrtc",
+]
+
+[[package]]
+name = "aflos-discord"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "futures-util",
+ "image",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-tungstenite",
+ "tracing",
+]
+
+[[package]]
 name = "ahash"
 version = "0.8.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4079,71 +4144,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "mesh-app"
-version = "0.3.1"
-dependencies = [
- "anyhow",
- "arboard",
- "chrono",
- "dirs",
- "iced",
- "image",
- "mesh-core",
- "mesh-discord",
- "notify-rust",
- "once_cell",
- "reqwest",
- "rfd",
- "rustls",
- "serde",
- "serde_json",
- "sha2",
- "symphonia",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
- "windows-sys 0.59.0",
- "winresource",
-]
-
-[[package]]
-name = "mesh-core"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "cpal",
- "dirs",
- "futures-util",
- "matrix-sdk",
- "mime",
- "opus",
- "serde",
- "serde_json",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "url",
- "webrtc",
-]
-
-[[package]]
-name = "mesh-discord"
-version = "0.1.0"
-dependencies = [
- "base64",
- "futures-util",
- "image",
- "serde",
- "serde_json",
- "tokio",
- "tokio-tungstenite",
- "tracing",
 ]
 
 [[package]]

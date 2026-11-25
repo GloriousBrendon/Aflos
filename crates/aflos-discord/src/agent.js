@@ -1,0 +1,539 @@
+// Runs inside the hidden Discord web client. Reads Discord's own stores and
+// calls its own actions, so Aflos can show and drive voice without the window.
+// Talks back through the `meshEmit` DevTools binding (and meshQr while
+// logged out, meshVideo during video calls).
+(() => {
+  // Bump when the API below changes, so a running page takes the new agent.
+  const version = 12;
+  if (window.__mesh && window.__mesh.version >= version) return "already";
+
+  // Discord loads several webpack runtimes into one chunk global; the live
+  // app is the one with the most instantiated modules.
+  const runtime = () => {
+    const chunks = window.webpackChunkdiscord_app;
+    if (!chunks) return null;
+    const runtimes = [];
+    chunks.push([[Symbol()], {}, (r) => { runtimes.push(r); }]);
+    chunks.pop();
+    const size = (r) => Object.keys(r.c || {}).length;
+    return runtimes.reduce((a, b) => (size(b) > size(a) ? b : a), runtimes[0]);
+  };
+
+  // i18n proxies answer every property; skip them.
+  const real = (c) => {
+    try { return c[`__mesh_${Math.random()}`] === undefined; } catch { return false; }
+  };
+  const candidates = function* (req) {
+    for (const id in req.c) {
+      const e = req.c[id].exports;
+      if (!e) continue;
+      for (const c of [e, ...Object.values(e)]) {
+        if (c && (typeof c === "object" || typeof c === "function") && real(c)) yield c;
+      }
+    }
+  };
+
+  let found = null;
+  const find = () => {
+    const req = runtime();
+    if (!req || Object.keys(req.c || {}).length < 1000) return null;
+    const stores = {};
+    const wanted = ["UserStore", "GuildStore", "GuildChannelStore", "GuildMemberStore", "ChannelStore",
+      "VoiceStateStore", "SpeakingStore", "MediaEngineStore", "SelectedChannelStore", "RTCConnectionStore"];
+    // Optional: voice keeps working if Discord renames these.
+    const extra = ["MessageStore", "ReadStateStore", "ApplicationStreamingStore", "TypingStore", "PresenceStore", "UserGuildSettingsStore"];
+    let channel, audio, call, invite, messages, uploads;
+    for (const c of candidates(req)) {
+      try {
+        if (typeof c.getName === "function") {
+          const name = c.getName();
+          if (wanted.includes(name) || extra.includes(name)) stores[name] = c;
+        }
+        if (!channel && typeof c.selectVoiceChannel === "function" && typeof c.disconnect === "function") channel = c;
+        if (!audio && typeof c.toggleSelfMute === "function" && typeof c.toggleSelfDeaf === "function") audio = c;
+        if (!call && typeof c.call === "function" && typeof c.ring === "function") call = c;
+        if (!invite && typeof c.acceptInvite === "function" && typeof c.resolveInvite === "function") invite = c;
+        if (!messages && typeof c.sendMessage === "function" && typeof c.fetchMessages === "function") messages = c;
+        if (!uploads && typeof c.addFiles === "function" && typeof c.clearAll === "function") uploads = c;
+      } catch {}
+    }
+    const missing = wanted.filter((n) => !stores[n]);
+    if (missing.length || !channel || !audio || !call) return null;
+    return { s: stores, channel, audio, call, invite, messages, uploads, dispatcher: stores.VoiceStateStore._dispatcher };
+  };
+
+  const user = (id) => {
+    const u = found.s.UserStore.getUser(id);
+    return {
+      id,
+      name: (u && (u.globalName || u.username)) || id,
+      avatar: u && u.avatar ? `https://cdn.discordapp.com/avatars/${id}/${u.avatar}.png?size=64` : null,
+    };
+  };
+
+  const members = (channelId, guildId) =>
+    Object.values(found.s.VoiceStateStore.getVoiceStatesForChannel(channelId) || {}).map((vs) => {
+      const u = user(vs.userId);
+      const nick = guildId ? found.s.GuildMemberStore.getNick(guildId, vs.userId) : null;
+      return {
+        ...u,
+        name: nick || u.name,
+        speaking: !!found.s.SpeakingStore.isSpeaking(vs.userId),
+        mute: !!(vs.selfMute || vs.mute),
+        deaf: !!(vs.selfDeaf || vs.deaf),
+      };
+    });
+
+  // Screen shares in a voice channel: other people's (and whether we're
+  // watching each), and whether we're sharing ours.
+  const shares = (channelId) => {
+    const ss = found.s.ApplicationStreamingStore, me = found.s.UserStore.getCurrentUser();
+    if (!ss || !channelId || !me) return { streams: [], self_stream: false };
+    const watching = (ss.getAllActiveStreams() || []).map((a) => a.ownerId);
+    return {
+      streams: (ss.getAllApplicationStreamsForChannel(channelId) || [])
+        .filter((st) => st.ownerId !== me.id)
+        .map((st) => ({ owner_id: st.ownerId, name: user(st.ownerId).name, watching: watching.includes(st.ownerId) })),
+      self_stream: !!ss.getCurrentUserActiveStream(),
+    };
+  };
+  // Discord's own stream actions, found once by what they dispatch (their
+  // export names are minified and change between builds).
+  let streamActions = null;
+  const streamAction = (type) => {
+    if (!streamActions) {
+      streamActions = {};
+      const req = runtime();
+      for (const id in (req && req.c) || {}) {
+        const e = req.c[id].exports;
+        if (!e || typeof e !== "object") continue;
+        let props;
+        try { props = Object.getOwnPropertyDescriptors(e); } catch { continue; }
+        for (const d of Object.values(props)) {
+          let f = d.value;
+          if (!f && d.get) try { f = d.get(); } catch { continue; }
+          if (typeof f !== "function") continue;
+          let src;
+          try { src = Function.prototype.toString.call(f); } catch { continue; }
+          const m = src.length < 3000 && src.match(/type:"(STREAM_WATCH|STREAM_START|STREAM_STOP|STREAM_CLOSE)"/);
+          if (m && !streamActions[m[1]]) streamActions[m[1]] = f;
+        }
+      }
+    }
+    const action = streamActions[type];
+    if (!action) throw new Error(`Discord's ${type} action wasn't found`);
+    return action;
+  };
+  // "guild:<guild>:<channel>:<owner>" or "call:<channel>:<owner>".
+  const streamKey = (st) => st.streamKey
+    || [st.streamType, st.guildId, st.channelId, st.ownerId].filter((p) => p != null).join(":");
+
+  // Who's typing in a channel (not us), by name.
+  const typing = (channelId, guildId) => {
+    const ts = found.s.TypingStore, me = found.s.UserStore.getCurrentUser();
+    if (!ts) return [];
+    return Object.keys(ts.getTypingUsers(channelId) || {})
+      .filter((id) => !me || id !== me.id)
+      .map((id) => (guildId && found.s.GuildMemberStore.getNick(guildId, id)) || user(id).name);
+  };
+
+  const snapshot = () => {
+    const s = found.s;
+    const reads = s.ReadStateStore;
+    const current = s.SelectedChannelStore.getVoiceChannelId() || null;
+    const currentChannel = current ? s.ChannelStore.getChannel(current) : null;
+    const guilds = Object.values(s.GuildStore.getGuilds()).map((g) => {
+      const channels = s.GuildChannelStore.getChannels(g.id) || {};
+      const category = (channel) => {
+        const parent = channel.parent_id && s.ChannelStore.getChannel(channel.parent_id);
+        return (parent && parent.name) || null;
+      };
+      return {
+        id: g.id,
+        name: g.name,
+        icon: g.icon ? `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.png?size=64` : null,
+        // SELECTABLE: the text-like channels you can see, in Discord's order.
+        text_channels: (channels.SELECTABLE || []).map(({ channel }) => ({
+          id: channel.id,
+          name: channel.name,
+          category: category(channel),
+          unread: !!(reads && reads.hasUnread(channel.id)),
+          // @you, @role and (unless the server's muted for it) @everyone.
+          mentions: (reads && reads.getMentionCount(channel.id)) || 0,
+          typing: typing(channel.id, g.id),
+        })),
+        voice_channels: (channels.VOCAL || []).map(({ channel }) => ({
+          id: channel.id,
+          name: channel.name,
+          category: category(channel),
+          members: members(channel.id, g.id),
+        })),
+      };
+    });
+    const dms = s.ChannelStore.getSortedPrivateChannels().map((ch) => {
+      const recipients = (ch.recipients || []).map(user);
+      return {
+        id: ch.id,
+        name: ch.name || recipients.map((r) => r.name).join(", ") || "Direct message",
+        recipient_id: recipients.length === 1 ? recipients[0].id : null,
+        avatar: ch.icon
+          ? `https://cdn.discordapp.com/channel-icons/${ch.id}/${ch.icon}.png?size=64`
+          : recipients.length === 1 ? recipients[0].avatar : null,
+        // A snowflake id carries its time: ms since Discord's 2015 epoch, << 22.
+        last_ms: ch.lastMessageId ? Number(BigInt(ch.lastMessageId) >> 22n) + 1420070400000 : 0,
+        unread: !!(reads && reads.hasUnread(ch.id)),
+        mentions: (reads && reads.getMentionCount(ch.id)) || 0,
+        // online, idle, dnd or offline, for a one-to-one DM.
+        status: recipients.length === 1 && s.PresenceStore ? s.PresenceStore.getStatus(recipients[0].id) : null,
+        typing: typing(ch.id, null),
+      };
+    });
+    const me = s.UserStore.getCurrentUser();
+    return {
+      me: me ? user(me.id) : null,
+      dms,
+      voice: {
+        channel_id: current,
+        guild_id: (currentChannel && currentChannel.guild_id) || null,
+        channel_name: currentChannel ? currentChannel.name || "call" : null,
+        connection: String((s.RTCConnectionStore.getState && s.RTCConnectionStore.getState()) || ""),
+        self_mute: !!s.MediaEngineStore.isSelfMute(),
+        self_deaf: !!s.MediaEngineStore.isSelfDeaf(),
+        self_video: !!(s.MediaEngineStore.isVideoEnabled && s.MediaEngineStore.isVideoEnabled()),
+        ...shares(current),
+        members: current ? members(current, currentChannel && currentChannel.guild_id) : [],
+      },
+      guilds,
+    };
+  };
+
+  let pending = null;
+  const emit = () => {
+    if (pending) return;
+    pending = setTimeout(() => {
+      pending = null;
+      try { window.meshEmit(JSON.stringify(snapshot())); } catch (e) { console.warn("mesh emit", e); }
+    }, 120);
+  };
+
+  // The channel Aflos shows, whose messages stream through `meshMessages`.
+  let open = null;
+  let pendingMessages = null;
+  const emitMessages = () => {
+    if (!open || pendingMessages) return;
+    pendingMessages = setTimeout(() => {
+      pendingMessages = null;
+      try {
+        const collection = found.s.MessageStore.getMessages(open);
+        const list = collection.toArray ? collection.toArray() : collection._array || [];
+        window.meshMessages(JSON.stringify({ channel_id: open, messages: list.map(message) }));
+      } catch (e) { console.warn("mesh messages", e); }
+    }, 80);
+  };
+  // Discord message types Aflos draws as a plain message; the rest are system lines.
+  const TEXT = [0, 19, 20, 21];
+  const SYSTEM = { 1: "added someone", 2: "removed someone", 3: "started a call", 6: "pinned a message", 7: "joined the server" };
+  const message = (m) => {
+    const author = user(m.author.id);
+    const text = TEXT.includes(m.type);
+    return {
+      id: m.id,
+      author_id: m.author.id,
+      author: m.nick || author.name,
+      content: text ? m.content : SYSTEM[m.type] || "did something Aflos can't show yet",
+      system: !text,
+      avatar: m.author.avatar ? `https://cdn.discordapp.com/avatars/${m.author.id}/${m.author.avatar}.png?size=64` : null,
+      timestamp_ms: m.timestamp ? m.timestamp.valueOf() : 0,
+      attachments: (m.attachments || []).map(attachment).concat((m.stickerItems || []).map(sticker).filter(Boolean)),
+    };
+  };
+  // Stickers as 160 px images: PNG/APNG (animated) from the CDN, GIF through
+  // the media proxy; Lottie ones (format 3) aren't images, so they're left out.
+  const sticker = (s) => {
+    const format = s.format_type || s.formatType;
+    if (format === 3) return null;
+    const url = format === 4 ? `https://media.discordapp.net/stickers/${s.id}.gif?size=160` : `https://cdn.discordapp.com/stickers/${s.id}.png?size=160`;
+    return { filename: s.name || "sticker", url, preview: url, width: 160, height: 160, size: null };
+  };
+  // Images get a preview URL from Discord's resizing proxy (at most 480 wide),
+  // so Aflos downloads a few KB instead of the full photo.
+  const attachment = (a) => {
+    const image = /^image\//.test(a.content_type || "") && a.width && a.height;
+    const scale = image ? Math.min(1, 480 / a.width) : 1;
+    const sized = image && `${a.proxy_url}${a.proxy_url.includes("?") ? "&" : "?"}width=${Math.round(a.width * scale)}&height=${Math.round(a.height * scale)}`;
+    return { filename: a.filename, url: a.url, preview: sized || null, width: a.width || null, height: a.height || null, size: a.size || null };
+  };
+
+  const events = ["VOICE_STATE_UPDATES", "SPEAKING", "VOICE_CHANNEL_SELECT", "AUDIO_TOGGLE_SELF_MUTE",
+    "AUDIO_TOGGLE_SELF_DEAF", "RTC_CONNECTION_STATE", "CONNECTION_OPEN", "LOGOUT", "MEDIA_ENGINE_SET_VIDEO_ENABLED", "GUILD_CREATE", "GUILD_DELETE",
+    "CHANNEL_CREATE", "CHANNEL_DELETE", "CALL_CREATE", "CALL_UPDATE", "CALL_DELETE",
+    // DM order and unread state.
+    "MESSAGE_CREATE", "MESSAGE_ACK",
+    // "… is typing".
+    "TYPING_START", "TYPING_STOP",
+    // Screen shares (Go Live) starting, stopping, being watched.
+    "STREAM_CREATE", "STREAM_UPDATE", "STREAM_DELETE", "STREAM_WATCH", "STREAM_CLOSE", "STREAM_START", "STREAM_STOP"];
+  const messageEvents = ["MESSAGE_CREATE", "MESSAGE_UPDATE", "MESSAGE_DELETE", "MESSAGE_DELETE_BULK",
+    "LOAD_MESSAGES_SUCCESS", "MESSAGE_SEND_FAILED"];
+
+  // Tells Aflos about new DMs and mentions of us (never our own messages), for
+  // a desktop notification.
+  const notify = ({ message: m }) => {
+    const me = found.s.UserStore.getCurrentUser();
+    if (!m || !m.author || !me || m.author.id === me.id) return;
+    const ch = found.s.ChannelStore.getChannel(m.channel_id);
+    if (!ch) return;
+    if (ch.guild_id) {
+      // @you, a role of ours, or @everyone / @here (unless we've muted that for the server).
+      const roles = ((found.s.GuildMemberStore.getMember(ch.guild_id, me.id) || {}).roles) || [];
+      const gs = found.s.UserGuildSettingsStore;
+      const everyone = m.mention_everyone && !(gs && gs.isSuppressEveryoneEnabled && gs.isSuppressEveryoneEnabled(ch.guild_id));
+      const us = (m.mentions || []).some((u) => u.id === me.id) || (m.mention_roles || []).some((r) => roles.includes(r));
+      if (!us && !everyone) return;
+    }
+    const where = ch.guild_id ? ` in #${ch.name}` : ch.name ? ` in ${ch.name}` : "";
+    const title = (m.author.global_name || m.author.username) + where;
+    window.meshNotify(JSON.stringify({ channel_id: m.channel_id, title, body: m.content || "sent an attachment" }));
+  };
+
+  // Video calls: catch every video track of the call (the other side's, as
+  // WebRTC receives them, and our camera, as Discord asks for it) and send
+  // Aflos a JPEG of each about 15 times a second. Hooked on the prototypes,
+  // so it works however Discord holds the constructors; once per page.
+  const videoFps = 15, videoWidth = 640;
+  const sendVideo = (payload) => window.meshVideo && window.meshVideo(JSON.stringify(payload));
+  const watchVideo = (track, local) => {
+    if (!track || track.kind !== "video" || track.readyState === "ended") return;
+    const seen = (window.__meshVideoTracks = window.__meshVideoTracks || new Set());
+    if (seen.has(track.id)) return;
+    seen.add(track.id);
+    // A clone, so stopping ours never touches Discord's own.
+    const copy = track.clone();
+    const reader = new MediaStreamTrackProcessor({ track: copy }).readable.getReader();
+    const canvas = new OffscreenCanvas(1, 1), ctx = canvas.getContext("2d");
+    let last = 0, sending = false;
+    const done = () => {
+      seen.delete(track.id);
+      copy.stop();
+      sendVideo({ id: track.id, ended: true });
+    };
+    (async () => {
+      for (;;) {
+        const { value: frame, done: over } = await reader.read();
+        if (over) break;
+        // stop() on Discord's track doesn't fire "ended", and our clone would
+        // keep the camera on: follow the original's state instead.
+        if (track.readyState === "ended") { frame.close(); break; }
+        const now = performance.now();
+        // Drop frames while one's still on its way, and past the frame rate
+        // (with slack, or a 15 fps camera loses every other frame).
+        if (sending || now - last < 1000 / videoFps - 10) { frame.close(); continue; }
+        last = now;
+        const scale = Math.min(1, videoWidth / frame.displayWidth);
+        canvas.width = Math.round(frame.displayWidth * scale);
+        canvas.height = Math.round(frame.displayHeight * scale);
+        ctx.drawImage(frame, 0, 0, canvas.width, canvas.height);
+        frame.close();
+        sending = true;
+        canvas.convertToBlob({ type: "image/jpeg", quality: 0.7 })
+          .then((blob) => new Promise((ok, fail) => {
+            const r = new FileReader();
+            r.onload = () => ok(String(r.result).split(",")[1]);
+            r.onerror = fail;
+            r.readAsDataURL(blob);
+          }))
+          .then((jpeg) => sendVideo({ id: track.id, local, jpeg }))
+          .catch(() => {})
+          .finally(() => { sending = false; });
+      }
+      done();
+    })().catch(done);
+  };
+  if (!window.__meshVideoHooked && window.RTCPeerConnection && window.MediaStreamTrackProcessor) {
+    window.__meshVideoHooked = true;
+    const pc = RTCPeerConnection.prototype, setRemote = pc.setRemoteDescription;
+    pc.setRemoteDescription = function (...args) {
+      const result = setRemote.apply(this, args);
+      Promise.resolve(result).then(() => {
+        for (const r of this.getReceivers()) watchVideo(r.track, false);
+      }).catch(() => {});
+      return result;
+    };
+    // Discord wraps getUserMedia on navigator.mediaDevices itself, from
+    // whatever the prototype had when it loaded: hook both, so it's caught
+    // whether we got here first (a reload) or not (a page already running).
+    const hookCamera = (owner) => {
+      const getUserMedia = owner.getUserMedia;
+      owner.getUserMedia = function (...args) {
+        return getUserMedia.apply(this, args).then((stream) => {
+          for (const t of stream.getVideoTracks()) watchVideo(t, true);
+          return stream;
+        });
+      };
+    };
+    hookCamera(MediaDevices.prototype);
+    if (Object.prototype.hasOwnProperty.call(navigator.mediaDevices, "getUserMedia")) hookCamera(navigator.mediaDevices);
+  }
+
+  // Our screen share, previewed like our camera (its own once-per-page
+  // guard: it came after the camera hook).
+  if (!window.__meshScreenHooked && MediaDevices.prototype.getDisplayMedia && window.MediaStreamTrackProcessor) {
+    window.__meshScreenHooked = true;
+    const getDisplayMedia = MediaDevices.prototype.getDisplayMedia;
+    MediaDevices.prototype.getDisplayMedia = function (...args) {
+      return getDisplayMedia.apply(this, args).then((stream) => {
+        for (const t of stream.getVideoTracks()) watchVideo(t, true);
+        return stream;
+      });
+    };
+  }
+
+  // Logged out, the login page shows a QR code (an SVG) for the Discord app
+  // to scan; pass each new one to Aflos for its Accounts page.
+  let lastQr = null;
+  const reportQr = () => {
+    const svg = document.querySelector('[class*="qrCode"] svg');
+    if (!svg) return;
+    const markup = svg.outerHTML;
+    if (markup === lastQr) return;
+    lastQr = markup;
+    window.meshQr(JSON.stringify({ svg: markup }));
+  };
+
+  window.__mesh = {
+    version,
+    ready: () => !!found,
+    // Logs this session out, as Discord's own "Log Out" does; the client
+    // goes back to its login page.
+    signOut: () => {
+      const req = runtime();
+      for (const c of req ? candidates(req) : []) {
+        try {
+          if (typeof c.logout === "function" && typeof c.loginToken === "function") return c.logout();
+        } catch {}
+      }
+    },
+    snapshot: () => (found ? JSON.stringify(snapshot()) : null),
+    // Guild voice channels: join. DM / group DM: start or join the call (rings).
+    join: (channelId) => {
+      const ch = found.s.ChannelStore.getChannel(channelId);
+      if (ch && !ch.guild_id) {
+        const recipient = (ch.recipients || [])[0];
+        found.call.call(channelId, false, true, recipient);
+      } else {
+        found.channel.selectVoiceChannel(channelId);
+      }
+    },
+    leave: () => found.channel.disconnect(),
+    toggleMute: () => found.audio.toggleSelfMute(),
+    toggleDeaf: () => found.audio.toggleSelfDeaf(),
+    // Camera on or off ("true" / "false"), as Discord's own camera button.
+    setVideo: (on) => found.audio.setVideoEnabled(on === "true"),
+    // Screen shares in our voice channel: watch someone's, stop watching it,
+    // or share ours (Discord's media engine asks the browser for the screen;
+    // the engine's --use-fake-ui-for-media-stream picks the primary one).
+    watchStream: (ownerId) => {
+      const ss = found.s.ApplicationStreamingStore;
+      const here = ss.getAllApplicationStreamsForChannel(found.s.SelectedChannelStore.getVoiceChannelId()) || [];
+      const st = here.find((x) => x.ownerId === ownerId);
+      if (st) streamAction("STREAM_WATCH")(st);
+    },
+    stopWatching: (ownerId) => {
+      const st = (found.s.ApplicationStreamingStore.getAllActiveStreams() || []).find((x) => x.ownerId === ownerId);
+      if (st) streamAction("STREAM_CLOSE")(streamKey(st));
+    },
+    shareScreen: (on) => {
+      if (on === "true") {
+        const ch = found.s.ChannelStore.getChannel(found.s.SelectedChannelStore.getVoiceChannelId());
+        if (ch) streamAction("STREAM_START")(ch.guild_id || null, ch.id, { pid: null, sourceId: null, sourceName: null, sound: true });
+      } else {
+        const own = found.s.ApplicationStreamingStore.getCurrentUserActiveStream();
+        if (own) streamAction("STREAM_STOP")(streamKey(own));
+      }
+    },
+    // Shows a text channel or DM in Aflos: loads its latest messages and
+    // streams them (and every change) back; `null` stops.
+    open: (channelId) => {
+      open = channelId;
+      if (!channelId || !found.messages) return;
+      found.messages.fetchMessages({ channelId, limit: 50 });
+      emitMessages();
+    },
+    send: (channelId, content) =>
+      found.messages.sendMessage(channelId, { content, tts: false, invalidEmojis: [], validNonShortcutEmojis: [] }, true, {}),
+    // Sends a file (base64) to a channel through Discord's own upload drawer:
+    // addFiles uploads it, then it sends with the optional caption as content.
+    sendFile: async (channelId, filename, mimetype, base64, caption) => {
+      const report = (ok, error) => window.meshSent(JSON.stringify({ channel_id: channelId, ok, error: error || null }));
+      try {
+        if (!found.uploads) throw new Error("Discord isn't ready for uploads");
+        const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+        const file = new File([bytes], filename, { type: mimetype });
+        found.uploads.addFiles({ channelId, draftType: 0, files: [{ file, platform: 1, isThumbnail: false, origin: 0 }], showLargeMessageDialog: false });
+        if (caption) found.messages.sendMessage(channelId, { content: caption, tts: false, invalidEmojis: [], validNonShortcutEmojis: [] }, true, {});
+        report(true);
+      } catch (e) {
+        report(false, String((e && e.message) || e));
+      }
+    },
+    // Downloads a Discord picture through the page (so through its network,
+    // the VPN on Linux) and hands the bytes to Aflos as base64.
+    fetchMedia: async (url) => {
+      const report = (r) => window.meshMedia(JSON.stringify({ url, ...r }));
+      try {
+        const res = await fetch(url);
+        if (!res.ok) return report({ error: `HTTP ${res.status}` });
+        const bytes = new Uint8Array(await res.arrayBuffer());
+        let binary = "";
+        for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+        report({ data: btoa(binary) });
+      } catch (e) {
+        report({ error: String(e) });
+      }
+    },
+    // Joins a server from a discord.gg / discord.com/invite link or a bare
+    // code. Discord's own client asks for a captcha in its window if it wants
+    // one; "waiting" tells Aflos to bring that window up.
+    acceptInvite: (link) => {
+      const code = String(link).trim()
+        .replace(/^(https?:\/\/)?(www\.)?(discord\.gg|discord(app)?\.com\/invite)\//i, "")
+        .split(/[/?#\s]/)[0];
+      const report = (r) => window.meshInvite(JSON.stringify(r));
+      if (!found || !found.invite) return report({ state: "failed", error: "Discord isn't ready yet" });
+      if (!code) return report({ state: "failed", error: "That isn't an invite link" });
+      let settled = false;
+      setTimeout(() => settled || report({ state: "waiting" }), 2500);
+      found.invite
+        .acceptInvite({ inviteKey: code, context: { location: "Join Guild Modal" }, skipOnboarding: true })
+        .then(
+          (r) => { settled = true; report({ state: "joined", guild: (r && r.guild && r.guild.name) || null }); },
+          (e) => {
+            settled = true;
+            const error = (e && ((e.body && e.body.message) || e.message)) || "Discord refused the invite";
+            report({ state: "failed", error });
+          },
+        );
+    },
+  };
+
+  // Stores fill in after login/startup; keep looking until they're there.
+  const boot = () => {
+    found = find();
+    if (!found) return setTimeout(boot, 1000);
+    for (const e of events) found.dispatcher.subscribe(e, emit);
+    for (const e of messageEvents) found.dispatcher.subscribe(e, emitMessages);
+    found.dispatcher.subscribe("MESSAGE_CREATE", notify);
+    // A DM friend coming online or going away (other presences are too many to follow).
+    found.dispatcher.subscribe("PRESENCE_UPDATES", (a) => {
+      const dmUsers = new Set(found.s.ChannelStore.getSortedPrivateChannels().flatMap((ch) => ch.recipients || []).map((r) => (r && r.id) || r));
+      if ((a.updates || []).some((u) => u.user && dmUsers.has(u.user.id))) emit();
+    });
+    emit();
+  };
+  boot();
+  // Discord's stores load on the login page too, just with nobody in them.
+  setInterval(() => {
+    try { if (!(found && found.s.UserStore.getCurrentUser())) reportQr(); } catch {}
+  }, 1000);
+  return "installed";
+})();

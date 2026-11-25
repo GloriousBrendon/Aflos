@@ -1,4 +1,4 @@
-# Spec: native Discord video and screen share (`mesh-dc`)
+# Spec: native Discord video and screen share (`aflos-dc`)
 
 Status: **APPROVED 2026-11-23** ("continue": the recommended answers, Q1 to Q4). Building V0, the spike.
 handing calls to the hidden web client (2026-11-23). Spec only: no plan or
@@ -7,29 +7,29 @@ stop it cheaply.
 
 ## Objective
 
-In a Discord voice channel or DM call, from Mesh:
+In a Discord voice channel or DM call, from Aflos:
 
 - **See** other people's cameras and screen shares (Go Live).
 - **Send** your camera, and **share** your screen or a window.
 - The existing buttons (camera, screen share, watch a stream) do what they
-  say. Today `mesh-dc` takes those commands and ignores them, so they look
+  say. Today `aflos-dc` takes those commands and ignores them, so they look
   like they work and don't.
 
 ## What exists
 
 | Piece | Today |
 |---|---|
-| Voice | `mesh-dc` drives **songbird 0.6.1**: voice gateway v8, UDP, transport encryption (AES-GCM), Opus, and DAVE for audio through **davey**. Audio only: no video SSRCs, no video RTP, no way in from outside the crate. |
+| Voice | `aflos-dc` drives **songbird 0.6.1**: voice gateway v8, UDP, transport encryption (AES-GCM), Opus, and DAVE for audio through **davey**. Audio only: no video SSRCs, no video RTP, no way in from outside the crate. |
 | DAVE for video | **davey 0.1.5** already encrypts and decrypts video frames (`MediaType::VIDEO`), with codec-aware unencrypted header ranges for **H264, VP8 and AV1**. This was the biggest unknown, and it's covered. |
-| Video codec, capture, display | Mesh-Voice's `mesh-media`: camera and screen capture, **H.264 in and out (openh264)**. The app already draws video tiles (WhatsApp calls and the old web-client path). |
-| Main gateway | `mesh-dc` sends op 4 with `self_video`; Go Live needs ops 18 to 20 (stream create, delete, watch) and their `STREAM_*` events. |
+| Video codec, capture, display | Mesh-Voice's `aflos-media`: camera and screen capture, **H.264 in and out (openh264)**. The app already draws video tiles (WhatsApp calls and the old web-client path). |
+| Main gateway | `aflos-dc` sends op 4 with `self_video`; Go Live needs ops 18 to 20 (stream create, delete, watch) and their `STREAM_*` events. |
 
 ## Decisions
 
 | # | Decision | Why |
 |---|---|---|
-| V1 | **Vendor songbird** into the repo (`mesh-dc/vendor/songbird`, `[patch]`) and add a video path beside its audio one, rather than writing a new voice client. | Its connection, transport encryption, DAVE session and reconnects already work for audio, and video rides the same UDP socket and DAVE session. A rewrite redoes all of that. The cost is carrying the fork. |
-| V2 | **H264 only** at first, through openh264, for both sending and receiving. | Mesh already builds and links it on Windows and Linux. Discord negotiates the codec per call, and every client offers H264. VP8 and AV1 later, if a call ends up without H264. |
+| V1 | **Vendor songbird** into the repo (`aflos-dc/vendor/songbird`, `[patch]`) and add a video path beside its audio one, rather than writing a new voice client. | Its connection, transport encryption, DAVE session and reconnects already work for audio, and video rides the same UDP socket and DAVE session. A rewrite redoes all of that. The cost is carrying the fork. |
+| V2 | **H264 only** at first, through openh264, for both sending and receiving. | Aflos already builds and links it on Windows and Linux. Discord negotiates the codec per call, and every client offers H264. VP8 and AV1 later, if a call ends up without H264. |
 | V3 | **Receiving first, then sending, then Go Live.** | Seeing others is most of the value and touches the least: op 12 (video SSRCs), RTP depacketizing, DAVE decrypt, decode, draw. Sending adds encoding, packetizing, pacing and simulcast. Go Live is a second voice connection of its own. |
 | V4 | **Go Live is its own connection.** A stream gets its own voice server, token and DAVE session (ops 18 to 20 on the main gateway, then a voice connection with stream keys). The vendored songbird runs a second driver for it. | That's how Discord does it: a stream is a separate RTC session. |
 | V5 | **No simulcast on sending at first**: one layer, 720p30 for a camera, the screen at its size capped at 1080p, 15 fps. | Less to get right. Discord's clients accept one layer. |
@@ -47,33 +47,33 @@ In a Discord voice channel or DM call, from Mesh:
   12 announcing our video SSRC and `self_video` on op 4.
 - **V3, watching a Go Live:** ops 20 and 19, the stream's own connection,
   and its frames in a tile.
-- **V4, sharing your screen:** op 18, capture through `mesh-media` (a
-  screen or window picker in Mesh), encode and send.
+- **V4, sharing your screen:** op 18, capture through `aflos-media` (a
+  screen or window picker in Aflos), encode and send.
 
 ## Progress
 
 **V0 built, 2026-11-23, waiting on your test call.** songbird 0.6.1 and
-serenity-voice-model 0.3.0 are vendored in `mesh-dc/vendor` (changes marked
-`mesh-dc:`). With `MESH_DC_VIDEO_SPIKE=<folder>` set, and only then:
+serenity-voice-model 0.3.0 are vendored in `aflos-dc/vendor` (changes marked
+`aflos-dc:`). With `AFLOS_DC_VIDEO_SPIKE=<folder>` set, and only then:
 - Identify says `"video": true` with a `video` stream, and Select Protocol
   lists Opus (120) and H264 (101, retransmissions 102), as user clients do;
 - op 12 maps each video SSRC to its user;
 - H264 packets skip the audio path, are put back into whole frames (single
   NAL, STAP-A, FU-A; a frame with a packet missing is dropped), DAVE-decrypted
-  as video with davey, decoded with `mesh-media`'s openh264, and the first ten
+  as video with davey, decoded with `aflos-media`'s openh264, and the first ten
   pictures saved as JPEGs.
 Unit tests cover the reassembly. Nothing here has met Discord yet.
 
 **Then, before the test (V1's first part):** decoded frames also go to
-Mesh as `meshVideo` (JPEGs, at most 10 a second a camera), so cameras show
-in the Discord call bar's existing tiles. `MESH_DC_VIDEO=1` turns receiving
+Aflos as `meshVideo` (JPEGs, at most 10 a second a camera), so cameras show
+in the Discord call bar's existing tiles. `AFLOS_DC_VIDEO=1` turns receiving
 on without saving JPEGs; it stays off by default until a call has shown it
 doesn't disturb voice.
 
 **V1 to V4 built, 2026-11-23, untested** (you'll test it all at once).
-With `MESH_DC_VIDEO=1`:
+With `AFLOS_DC_VIDEO=1`:
 - **V2, your camera:** the camera button captures your first camera
-  (`mesh-media`), encodes H264 at 720p30, DAVE-encrypts each frame as
+  (`aflos-media`), encodes H264 at 720p30, DAVE-encrypts each frame as
   video and sends it as RTP (single NAL units, FU-A above 1,100 bytes) on
   the voice connection through a new `VideoTx` in the vendored songbird,
   with its own SSRC from READY's `streams` and op 12 saying it's on or
@@ -89,15 +89,15 @@ With `MESH_DC_VIDEO=1`:
   up to 1080p15, and op 22 sets it live; the button again sends op 19.
 
 **The test (by you), once everything's in:** the steps below cover V0; for
-the rest, start Mesh with `MESH_DC_VIDEO=1` too and try each button. The
+the rest, start Aflos with `AFLOS_DC_VIDEO=1` too and try each button. The
 log lines named below, plus `video:` and `stream:` ones, say where it
 stops.
 
-**The test (by you):** quit Mesh, then run
-`MESH_DC_VIDEO_SPIKE=/tmp/dcvideo RUST_LOG=warn,mesh_dc=info,songbird=info ~/.local/bin/mesh-launch`,
+**The test (by you):** quit Aflos, then run
+`AFLOS_DC_VIDEO_SPIKE=/tmp/dcvideo RUST_LOG=warn,aflos_dc=info,songbird=info ~/.local/bin/mesh-launch`,
 join a voice channel where someone has their camera on, wait a minute, and
 look in `/tmp/dcvideo` and `~/.local/state/mesh/mesh.log` (lines with
-`mesh-dc:` and `video spike`). What the log says decides the next step:
+`aflos-dc:` and `video spike`). What the log says decides the next step:
 - no `voice op 12` line: Discord didn't treat us as taking video (the
   Identify or Select Protocol fields need changing);
 - op 12 but no `first video packet`: it knows, but sends us nothing (we may
