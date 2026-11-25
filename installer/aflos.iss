@@ -36,7 +36,7 @@ PrivilegesRequired=lowest
 DefaultDirName={localappdata}\Programs\Aflos
 DisableProgramGroupPage=yes
 DisableDirPage=yes
-SetupIconFile={#Root}\crates\aflos\assets\mesh.ico
+SetupIconFile={#Root}\crates\aflos\assets\aflos.ico
 UninstallDisplayIcon={app}\Aflos.exe
 UninstallDisplayName=Aflos
 OutputDir={#Root}\dist
@@ -59,7 +59,7 @@ Source: "{#AppExe}"; DestDir: "{app}"; DestName: "Aflos.exe"; Flags: ignoreversi
 Source: "{#Root}\aflos-wa{#Bin}aflos-wa.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\aflos-dc{#Bin}aflos-dc.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Node}{#Bin}mesh-node.exe"; DestDir: "{app}"; Flags: ignoreversion
-Source: "{#Root}\crates\aflos\assets\mesh.png"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Root}\crates\aflos\assets\aflos.png"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{userprograms}\Aflos"; Filename: "{app}\Aflos.exe"; Comment: "Matrix, Discord and WhatsApp in one place"
@@ -68,7 +68,7 @@ Name: "{userdesktop}\Aflos"; Filename: "{app}\Aflos.exe"; Tasks: desktopicon
 [Registry]
 ; Aflos's name and icon on its notifications (see `notify` in main.rs), instead of PowerShell's.
 Root: HKCU; Subkey: "Software\Classes\AppUserModelId\Aflos.Aflos"; ValueType: string; ValueName: "DisplayName"; ValueData: "Aflos"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\AppUserModelId\Aflos.Aflos"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\mesh.png"
+Root: HKCU; Subkey: "Software\Classes\AppUserModelId\Aflos.Aflos"; ValueType: string; ValueName: "IconUri"; ValueData: "{app}\aflos.png"
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "Aflos"; ValueData: """{app}\Aflos.exe"""; Tasks: autostart; Flags: uninsdeletevalue
 
 [Run]

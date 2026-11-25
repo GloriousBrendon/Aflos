@@ -21,14 +21,14 @@ icons="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor/256x256/apps"
 config="${XDG_CONFIG_HOME:-$HOME/.config}/mesh/config.toml"
 
 if [[ "${1:-}" == --uninstall ]]; then
-  rm -fv "$bin/mesh" "$bin/aflos-wa" "$bin/aflos-dc" "$bin/mesh-node" "$apps/mesh.desktop" "$icons/mesh.png"
+  rm -fv "$bin/mesh" "$bin/aflos-wa" "$bin/aflos-dc" "$bin/mesh-node" "$apps/mesh.desktop" "$icons/aflos.png"
   exit 0
 fi
 
 here=$(cd "$(dirname "$0")" && pwd)
 if [[ -x "$here/mesh" ]]; then
   # An unpacked release download: the binaries sit beside this script.
-  app="$here/mesh" wa="$here/aflos-wa" dc="$here/aflos-dc" engine="$here/mesh-node" icon="$here/mesh.png"
+  app="$here/mesh" wa="$here/aflos-wa" dc="$here/aflos-dc" engine="$here/mesh-node" icon="$here/aflos.png"
 else
   (cd "$root" && cargo build --release -p aflos)
   (cd "$root/aflos-wa" && cargo build --release)
@@ -39,7 +39,7 @@ else
     (cd "$node" && cargo build --release -p mesh-node)
   fi
   app="$root/target/release/aflos" wa="$root/aflos-wa/target/release/aflos-wa"
-  dc="$root/aflos-dc/target/release/aflos-dc" icon="$root/crates/aflos/assets/mesh.png"
+  dc="$root/aflos-dc/target/release/aflos-dc" icon="$root/crates/aflos/assets/aflos.png"
 fi
 
 mkdir -p "$bin" "$apps" "$icons"
@@ -55,7 +55,7 @@ if [[ -x "$engine" ]]; then
 else
   echo "mesh-node not installed: no Mesh-Node checkout (set MESH_NODE)" >&2
 fi
-install -m644 "$icon" "$icons/mesh.png"
+install -m644 "$icon" "$icons/aflos.png"
 cat > "$apps/mesh.desktop" <<EOF
 [Desktop Entry]
 Type=Application

@@ -1599,7 +1599,7 @@ fn open_window() -> Task<Message> {
 
 fn window_settings() -> iced::window::Settings {
     iced::window::Settings {
-        icon: iced::window::icon::from_file_data(include_bytes!("../assets/mesh.png"), None).ok(),
+        icon: iced::window::icon::from_file_data(include_bytes!("../assets/aflos.png"), None).ok(),
         // Closing quits (helpers and calls included): see `CloseRequested`.
         exit_on_close_request: false,
         // Wayland takes the icon from the .desktop file named after this.

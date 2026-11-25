@@ -126,7 +126,7 @@ or personal data on the user.
 
 - A Linux backend for `aflos-media`: PipeWire screencast portal for screens,
   v4l2 for the camera.
-- A `.desktop` file with `crates/aflos/assets/mesh.png` as the icon.
+- A `.desktop` file with `crates/aflos/assets/aflos.png` as the icon.
 
 ## Report back to the user
 

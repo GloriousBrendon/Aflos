@@ -66,7 +66,7 @@ jobs:
           cp Mesh-Voice/target/release/aflos $d/mesh
           cp Mesh-Voice/aflos-wa/target/release/aflos-wa Mesh-Voice/aflos-dc/target/release/aflos-dc \
              Mesh-Node/target/release/mesh-node Mesh-Voice/installer/install-linux.sh \
-             Mesh-Voice/crates/aflos/assets/mesh.png $d/
+             Mesh-Voice/crates/aflos/assets/aflos.png $d/
           tar czf $d.tar.gz $d
       - uses: actions/upload-artifact@v4
         with:
