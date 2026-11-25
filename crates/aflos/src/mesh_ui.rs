@@ -516,6 +516,7 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             }
             f.error = None;
             match (onboarding, f.restoring, &f.backup) {
+                (false, ..) if f.username.trim().is_empty() || f.password.is_empty() => return Task::none(),
                 (false, ..) => node.unlock(&f.username, &f.password),
                 (true, ..) if f.joining && f.received.is_some() => {
                     if !can_continue(f) {
@@ -847,10 +848,17 @@ fn hint<'a>(verdict: &Option<(bool, String)>, password: &str, confirm: &str, p: 
     }
 }
 
+/// A labelled field. Its label is its ID (labels are unique on any one
+/// screen), so `first_field` can put the focus in it.
 fn field<'a>(label: &'static str, value: &str, on: fn(String) -> Msg, secure: bool, submit: Msg, p: &theme::Palette) -> Element<'a, Message> {
     column![
         ui::mono(label, 11.0, p.text_muted()),
-        text_input("", value).on_input(move |v| Message::MeshForm(on(v))).on_submit(Message::MeshForm(submit)).secure(secure).padding(10),
+        text_input("", value)
+            .id(iced::widget::Id::new(label))
+            .on_input(move |v| Message::MeshForm(on(v)))
+            .on_submit(Message::MeshForm(submit))
+            .secure(secure)
+            .padding(10),
     ]
     .spacing(6)
     .into()
@@ -858,6 +866,60 @@ fn field<'a>(label: &'static str, value: &str, on: fn(String) -> Msg, secure: bo
 
 fn link_button<'a>(label: &'static str, msg: Msg, p: &theme::Palette) -> Element<'a, Message> {
     button(ui::sans(label, 13.0, Weight::Normal, p.accent())).on_press(Message::MeshForm(msg)).padding(0).style(iced::widget::button::text).into()
+}
+
+/// Friends → Add friend's field (its label).
+pub(crate) const CHECK_FIELD: &str = "THEIR CODE OR ID";
+
+/// The identity screen in front, by name, and its first field (the
+/// password, at unlock, once the username is there).
+pub(crate) fn first_field(state: &App) -> Option<(&'static str, &'static str)> {
+    if open(state) {
+        return None;
+    }
+    let f = &state.mesh.form;
+    match state.mesh.identity.as_ref()?.state {
+        State::Unlocked => None,
+        State::Locked => Some(("unlock", if f.username.trim().is_empty() { "USERNAME" } else { "PASSWORD" })),
+        State::None if f.restoring => Some(("restore", "ITS USERNAME")),
+        State::None if f.joining && f.received.is_some() => Some(("link-password", "PASSWORD FOR THIS DEVICE")),
+        State::None if f.joining => Some(("link", "LINK CODE")),
+        State::None if !f.warned => Some(("create", "USERNAME")),
+        State::None => None,
+    }
+}
+
+/// Escape on an identity screen: back from restoring, linking or the
+/// warning, as their Back buttons.
+pub(crate) fn on_escape(state: &App) -> Option<Message> {
+    if open(state) || state.mesh.form.busy {
+        return None;
+    }
+    let f = &state.mesh.form;
+    let back = match state.mesh.identity.as_ref()?.state {
+        State::None if f.restoring => Msg::Restore(false),
+        State::None if f.joining => Msg::Join(false),
+        State::None if f.warned => Msg::Warned(false),
+        _ => return None,
+    };
+    Some(Message::MeshForm(back))
+}
+
+/// Escape on the Friends page: closes New group; false if it wasn't open.
+pub(crate) fn close_dialog(m: &mut Mesh) -> bool {
+    m.new_group.take().is_some()
+}
+
+/// Enter on the identity's 2 of 2, which has no field to take it.
+pub(crate) fn on_enter(state: &App) -> Option<Message> {
+    let f = &state.mesh.form;
+    let warning = state.mesh.identity.as_ref().is_some_and(|i| i.state == State::None)
+        && !open(state)
+        && f.warned
+        && !f.restoring
+        && !f.joining
+        && !f.busy;
+    warning.then_some(Message::MeshForm(Msg::Submit))
 }
 
 pub(crate) fn view(state: &App) -> Element<'_, Message> {

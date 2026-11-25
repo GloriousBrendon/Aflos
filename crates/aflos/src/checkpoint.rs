@@ -251,12 +251,8 @@ fn send(copy: &mut Copy, text: &str) {
 /// The paperclip with a file picked, then Enter.
 fn send_file(copy: &mut Copy, path: &Path) {
     let filename = path.file_name().unwrap().to_string_lossy().into_owned();
-    let attachment = Attachment {
-        mime: mime_guess_from(&filename),
-        filename,
-        data: std::fs::read(path).unwrap(),
-        path: Some(path.to_owned()),
-    };
+    let mime = mime_guess_from(&filename);
+    let attachment = Attachment::new(filename, mime, std::fs::read(path).unwrap(), Some(path.to_owned()));
     let _ = update(&mut copy.app, Message::AttachmentPicked(Some(attachment)));
     let _ = update(&mut copy.app, Message::SendMessage);
 }

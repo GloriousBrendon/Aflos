@@ -171,6 +171,13 @@ struct App {
     screen: Screen,
     /// Elapsed seconds driving the animated background.
     rain_time: f32,
+    /// The window reports a zero size: minimised. The background stops.
+    minimized: bool,
+    /// The window is being dragged (`WINDOW_MOVED_MS` is recent). The
+    /// background stops until it's been still for `MOVE_SETTLE_MS`.
+    moving: bool,
+    /// Files are being dragged over the window: the drop overlay shows.
+    drop_hover: bool,
 }
 
 enum Screen {
@@ -314,6 +321,8 @@ struct Session {
     emoji_open: bool,
     /// A file chosen in the composer, waiting to send (with the draft as caption).
     pending_attachment: Option<Attachment>,
+    /// More files dropped at once, sent after it (without a caption).
+    queued_attachments: Vec<Attachment>,
     /// A file send is in flight (so the send button waits).
     sending_attachment: bool,
     /// The message under the mouse (its web id), for the action bar.
@@ -497,6 +506,7 @@ impl Session {
             home_filter: None,
             emoji_open: false,
             pending_attachment: None,
+            queued_attachments: Vec::new(),
             sending_attachment: false,
             hovered: None,
             reacting: None,
@@ -536,6 +546,89 @@ struct Attachment {
     data: Vec<u8>,
     /// Where it was picked from; `None` for a pasted picture.
     path: Option<PathBuf>,
+    /// A picture's preview for the composer, made once.
+    preview: Option<iced::widget::image::Handle>,
+}
+
+/// The largest file Aflos sends, on any network (dm D12).
+const MAX_ATTACHMENT: u64 = 100 * 1024 * 1024;
+
+impl Attachment {
+    fn new(filename: String, mime: String, data: Vec<u8>, path: Option<PathBuf>) -> Self {
+        let preview = mime.starts_with("image/").then(|| iced::widget::image::Handle::from_bytes(data.clone()));
+        Self { filename, mime, data, path, preview }
+    }
+}
+
+/// Reads a picked or dropped file, refusing folders and anything over
+/// [`MAX_ATTACHMENT`] before reading it in.
+fn read_attachment(path: &std::path::Path) -> Result<Attachment, String> {
+    let filename = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let meta = std::fs::metadata(path).map_err(|e| format!("Couldn't read {filename}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{filename} is a folder; drop files instead."));
+    }
+    if meta.len() > MAX_ATTACHMENT {
+        return Err(format!("{filename} is {}, over the 100 MB Aflos sends.", human_size(meta.len())));
+    }
+    let data = std::fs::read(path).map_err(|e| format!("Couldn't read {filename}: {e}"))?;
+    let mime = mime_guess_from(&filename);
+    Ok(Attachment::new(filename, mime, data, Some(path.to_owned())))
+}
+
+/// Where files dropped on the window would go.
+#[derive(Debug, PartialEq)]
+enum DropTarget {
+    /// The open chat, by name.
+    Chat(String),
+    /// The open chat is on a network Aflos can't send files to yet.
+    NoFiles(&'static str),
+    /// No chat is open.
+    Nowhere,
+}
+
+fn drop_target(session: &Session) -> DropTarget {
+    match &session.web_chat {
+        Some(chat) if chat.network == Network::Discord => DropTarget::NoFiles("Discord"),
+        Some(chat) => DropTarget::Chat(chat.name.clone()),
+        None => match &session.selected_room {
+            Some(id) => DropTarget::Chat(
+                session.rooms.iter().find(|r| &r.id == id).map(|r| r.name.clone()).unwrap_or_else(|| "this chat".into()),
+            ),
+            None => DropTarget::Nowhere,
+        },
+    }
+}
+
+/// Adds a picked, pasted or dropped file to the composer: the first waits
+/// with the draft as its caption, more queue behind it. A chat that can't
+/// take files says so instead.
+fn attach(session: &mut Session, attachment: Attachment) {
+    if let DropTarget::NoFiles(network) = drop_target(session) {
+        session.status = Some(format!("{network} chats can't take files in Aflos yet, so nothing was attached."));
+        return;
+    }
+    if session.pending_attachment.is_none() {
+        session.pending_attachment = Some(attachment);
+    } else {
+        session.queued_attachments.push(attachment);
+    }
+}
+
+/// When the window last moved, in ms since the Unix epoch: kept by the
+/// event listener (which can't hold state), read by `MoveSettle`.
+static WINDOW_MOVED_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+/// How long the window must be still before the background goes on.
+const MOVE_SETTLE_MS: u64 = 300;
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
+/// Whether the background animates: on, and the window open, in front and
+/// not being dragged. It's drawn (still) either way.
+fn rain_running(state: &App) -> bool {
+    state.extras.digital_rain && state.window_focused && !state.minimized && !state.moving
 }
 
 /// The clipboard's image (a screenshot, say) as a PNG attachment.
@@ -546,7 +639,7 @@ fn clipboard_image() -> Option<Attachment> {
     pixels.write_to(&mut std::io::Cursor::new(&mut data), image::ImageFormat::Png).ok()?;
     let filename = format!("screenshot-{}.png", Local::now().format("%Y%m%d-%H%M%S"));
     let mime = "image/png".to_string();
-    Some(Attachment { filename, mime, data, path: None })
+    Some(Attachment::new(filename, mime, data, None))
 }
 
 /// A best-effort MIME type from a filename's extension (images and the common
@@ -1342,6 +1435,24 @@ enum Message {
     /// Show a Discord text channel or DM in the chat pane.
     WebChatSelected(WebChat),
     WindowFocused(bool),
+    /// The window started moving (dragged): the background stops.
+    WindowMoved,
+    /// While it's moving: has it been still long enough to go on?
+    MoveSettle,
+    /// Its size changed; zero means minimised.
+    WindowResized(iced::Size),
+    /// Enter that no field took: submits a form that has no field.
+    EnterKey,
+    /// Tab (true) and Shift+Tab (false): the next or previous field.
+    FocusMove(bool),
+    /// Files are being dragged over the window.
+    FileHovered,
+    /// One file was dropped (one message per file).
+    FileDropped(PathBuf),
+    /// The files left the window without being dropped.
+    FilesLeft,
+    /// A dropped or picked file, read in (or why it couldn't be).
+    AttachmentRead(Result<Attachment, String>),
     /// Look for a newer Aflos on GitHub (true: asked for, so say if there's none).
     CheckUpdate(bool),
     UpdateChecked(bool, Result<Option<update::Release>, String>),
@@ -1514,6 +1625,9 @@ fn boot() -> (App, Task<Message>) {
         matrix_login: LoginForm::default(),
         screen,
         rain_time: 0.0,
+        minimized: false,
+        moving: false,
+        drop_hover: false,
     };
     (app.mesh.muted_spaces, app.mesh.ptt) = (config.muted_spaces.clone(), config.push_to_talk);
     // With mesh-node, everything else waits until the Aflos identity is open.
@@ -1715,7 +1829,26 @@ fn load_timeline(client: Option<Arc<AflosClient>>, room_id: OwnedRoomId) -> Task
     )
 }
 
+/// Runs one message. When it brings a different form to the front (an
+/// identity screen, a Space's name box), that form's first field gets the
+/// focus, so typing can start at once.
 fn update(state: &mut App, message: Message) -> Task<Message> {
+    let before = front_form(state).map(|(form, _)| form);
+    let task = step(state, message);
+    match front_form(state) {
+        Some((form, field)) if Some(form) != before => {
+            Task::batch([task, iced::widget::operation::focus(iced::widget::Id::new(field))])
+        }
+        _ => task,
+    }
+}
+
+/// The form in front, by name, and the ID of its first field.
+fn front_form(state: &App) -> Option<(&'static str, &'static str)> {
+    mesh_ui::first_field(state).or_else(|| mesh_spaces::first_field(&state.mesh))
+}
+
+fn step(state: &mut App, message: Message) -> Task<Message> {
     let task = handle(state, message);
     sync_ringer(state);
     task
@@ -2085,6 +2218,54 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 }
             }
         }
+        Message::WindowMoved => {
+            state.moving = true;
+            Task::none()
+        }
+        Message::MoveSettle => {
+            if now_ms().saturating_sub(WINDOW_MOVED_MS.load(std::sync::atomic::Ordering::Relaxed)) >= MOVE_SETTLE_MS {
+                state.moving = false;
+            }
+            Task::none()
+        }
+        Message::WindowResized(size) => {
+            state.minimized = size.width < 1.0 || size.height < 1.0;
+            Task::none()
+        }
+        Message::EnterKey => match mesh_ui::on_enter(state) {
+            Some(submit) => update(state, submit),
+            None => Task::none(),
+        },
+        Message::FocusMove(forward) => {
+            if forward {
+                iced::widget::operation::focus_next()
+            } else {
+                iced::widget::operation::focus_previous()
+            }
+        }
+        Message::FileHovered => {
+            state.drop_hover = true;
+            Task::none()
+        }
+        Message::FilesLeft => {
+            state.drop_hover = false;
+            Task::none()
+        }
+        Message::FileDropped(path) => {
+            state.drop_hover = false;
+            let Screen::LoggedIn(session) = &mut state.screen else { return Task::none() };
+            match drop_target(session) {
+                DropTarget::Chat(_) => Task::perform(async move { read_attachment(&path) }, Message::AttachmentRead),
+                DropTarget::NoFiles(network) => {
+                    session.status = Some(format!("{network} chats can't take files in Aflos yet, so nothing was sent."));
+                    Task::none()
+                }
+                DropTarget::Nowhere => {
+                    session.status = Some("Open a chat first, then drop files on it.".to_string());
+                    Task::none()
+                }
+            }
+        }
         Message::WindowFocused(focused) => {
             state.window_focused = focused;
             // Away from Aflos, WhatsApp sees us offline and new messages stay unread
@@ -2146,14 +2327,17 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         Message::PickAttachment => Task::perform(
             async {
                 let file = rfd::AsyncFileDialog::new().pick_file().await?;
-                let data = file.read().await;
-                let filename = file.file_name();
-                let mime = mime_guess_from(&filename);
-                let path = Some(file.path().to_owned());
-                Some(Attachment { filename, mime, data, path })
+                Some(read_attachment(file.path()))
             },
-            Message::AttachmentPicked,
+            |read| read.map_or(Message::Noop, Message::AttachmentRead),
         ),
+        Message::AttachmentRead(Ok(attachment)) => update(state, Message::AttachmentPicked(Some(attachment))),
+        Message::AttachmentRead(Err(why)) => {
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                session.status = Some(why);
+            }
+            Task::none()
+        }
         Message::PasteImage => match &state.screen {
             Screen::LoggedIn(session) if session.selected_room.is_some() || session.web_chat.is_some() => {
                 Task::perform(async { clipboard_image() }, |image| match image {
@@ -2164,16 +2348,17 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             _ => Task::none(),
         },
         Message::AttachmentPicked(attachment) => {
-            if let Screen::LoggedIn(session) = &mut state.screen {
-                session.pending_attachment = attachment;
+            if let (Screen::LoggedIn(session), Some(attachment)) = (&mut state.screen, attachment) {
+                attach(session, attachment);
             }
-            Task::none()
+            focus_composer()
         }
         Message::ClearAttachment => {
             if let Screen::LoggedIn(session) = &mut state.screen {
-                session.pending_attachment = None;
+                session.pending_attachment =
+                    (!session.queued_attachments.is_empty()).then(|| session.queued_attachments.remove(0));
             }
-            Task::none()
+            focus_composer()
         }
         Message::AttachmentSent(result) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
@@ -2182,11 +2367,15 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     Ok(()) => {
                         session.pending_attachment = None;
                         session.message_draft = text_editor::Content::new();
+                        if !session.queued_attachments.is_empty() {
+                            session.pending_attachment = Some(session.queued_attachments.remove(0));
+                            return update(state, Message::SendMessage);
+                        }
                     }
                     Err(err) => session.status = Some(format!("Couldn't send the file: {err}")),
                 }
             }
-            Task::none()
+            focus_composer()
         }
         Message::InsertEmoji(emoji) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
@@ -2196,104 +2385,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             // Keep the picker open for several in a row; back to typing.
             iced::widget::operation::focus(iced::widget::Id::new(COMPOSER_INPUT))
         }
-        Message::SendMessage => {
-            let Screen::LoggedIn(session) = &mut state.screen else {
-                return Task::none();
-            };
-            // A chosen file sends with the draft as its caption (caption may
-            // be empty). Routed to the chat's own backend.
-            if let Some(attachment) = session.pending_attachment.clone() {
-                if session.sending_attachment {
-                    return Task::none();
-                }
-                let caption = draft(session);
-                match &session.web_chat {
-                    Some(chat) if chat.network == Network::WhatsApp => match &state.whatsapp {
-                        Some(engine) => {
-                            engine.send_file(&chat.id, &attachment.filename, &attachment.mime, &attachment.data, &caption);
-                            session.sending_attachment = true;
-                        }
-                        None => session.status = Some("WhatsApp isn't running, so this can't be sent.".to_string()),
-                    },
-                    Some(chat) if chat.network == Network::Discord => {
-                        session.status = Some("Sending files to Discord isn't ready yet — only WhatsApp and Matrix.".to_string());
-                        let _ = chat;
-                    }
-                    Some(chat) if chat.network == Network::Mesh => match (&state.mesh.node, mesh_dm::staged(&attachment)) {
-                        (Some(node), Ok((path, preview))) => {
-                            mesh_spaces::send_file(node, &chat.id, &path.to_string_lossy(), preview.as_deref().map(|p| p.to_string_lossy()).as_deref());
-                            if !caption.is_empty() {
-                                mesh_spaces::send(node, &state.mesh.spaces, &chat.id, &caption, None);
-                            }
-                            session.pending_attachment = None;
-                            session.message_draft = text_editor::Content::new();
-                        }
-                        (None, _) => session.status = Some("Aflos isn't running, so this can't be sent.".to_string()),
-                        (_, Err(err)) => session.status = Some(format!("Couldn't send the file: {err}")),
-                    },
-                    _ => {
-                        let Some(room_id) = session.selected_room.clone() else {
-                            session.status = Some("Pick a chat first.".to_string());
-                            return Task::none();
-                        };
-                        let Some(client) = session.client.clone() else { return Task::none() };
-                        session.sending_attachment = true;
-                        return Task::perform(
-                            async move {
-                                client
-                                    .send_attachment(
-                                        &room_id,
-                                        &attachment.filename,
-                                        &attachment.mime,
-                                        attachment.data,
-                                        Some(&caption),
-                                    )
-                                    .await
-                                    .map_err(|e| e.to_string())
-                            },
-                            Message::AttachmentSent,
-                        );
-                    }
-                }
-                return Task::none();
-            }
-            let body = draft(session);
-            if body.trim().is_empty() {
-                return Task::none();
-            }
-            // A web chat sends through its hidden client; the echo comes back
-            // with its messages.
-            if let (Some(id), Some(node)) = (&session.editing, &state.mesh.node) {
-                mesh_spaces::edit(
-                    node,
-                    session.web_chat.as_ref().map(|c| c.id.as_str()),
-                    id,
-                    &body,
-                );
-                session.message_draft = text_editor::Content::new();
-                session.editing = None;
-                return Task::none();
-            }
-            if let Some(chat) = &session.web_chat {
-                let reply_to = session.replying.as_ref().map(|(id, _)| id.as_str());
-                if clients!(state).send(chat, &body, reply_to) {
-                    session.message_draft = text_editor::Content::new();
-                    session.replying = None;
-                } else {
-                    session.status = Some("That chat's client isn't running, so this can't be sent.".to_string());
-                }
-                return Task::none();
-            }
-            let Some(room_id) = session.selected_room.clone() else {
-                return Task::none();
-            };
-            let Some(client) = session.client.clone() else { return Task::none() };
-            session.message_draft = text_editor::Content::new();
-            Task::perform(
-                async move { client.send_message(&room_id, &body).await.map_err(|e| e.to_string()) },
-                Message::MessageSent,
-            )
-        }
+        Message::SendMessage => Task::batch([send_message(state), focus_composer()]),
         Message::MessageSent(result) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
                 session.status = match result {
@@ -2550,7 +2642,10 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     let f = &mut state.dc_sign_in;
                     f.busy = false;
                     match result {
-                        aflos_discord::SignIn::Code => f.asking_code = true,
+                        aflos_discord::SignIn::Code => {
+                            f.asking_code = true;
+                            return iced::widget::operation::focus(iced::widget::Id::new(accounts::DC_CODE));
+                        }
                         aflos_discord::SignIn::Failed { error } => f.error = Some(error),
                     }
                 }
@@ -3387,8 +3482,12 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Escape => {
+            if let Some(back) = mesh_ui::on_escape(state) {
+                return update(state, back);
+            }
             if let Screen::LoggedIn(session) = &mut state.screen {
-                if session.lightbox.is_some() {
+                if mesh_spaces::close_form(&mut state.mesh) || mesh_ui::close_dialog(&mut state.mesh) {
+                } else if session.lightbox.is_some() {
                     session.lightbox = None;
                 } else if session.new_chat.is_some() {
                     session.new_chat = None;
@@ -3408,9 +3507,11 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     session.reacting = None;
                 } else if session.replying.is_some() {
                     session.replying = None;
+                    return focus_composer();
                 } else if session.editing.take().is_some() {
                     // As the edit bar's ✕: the draft was the message's text.
                     session.message_draft = text_editor::Content::new();
+                    return focus_composer();
                 } else if session.emoji_open {
                     session.emoji_open = false;
                 } else {
@@ -3570,7 +3671,10 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             {
                 return update(state, Message::AccountsReconnect(id));
             }
-            Task::none()
+            match accounts::first_field(state, id) {
+                Some(field) => iced::widget::operation::focus(iced::widget::Id::new(field)),
+                None => Task::none(),
+            }
         }
         Message::AccountsReconnect(id) => {
             state.accounts = accounts::Panel { selected: Some(id), linking: true, ..accounts::Panel::default() };
@@ -3845,7 +3949,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 }
                 session.replying = None;
             }
-            Task::none()
+            focus_composer()
         }
         Message::MeshEdit(id, text) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
@@ -4132,6 +4236,9 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             ) = (None, None, None);
             session.active_wa_groups = false;
             session.focused = Pane::Chat;
+            if tab == mesh_ui::Tab::Add {
+                return iced::widget::operation::focus(iced::widget::Id::new(mesh_ui::CHECK_FIELD));
+            }
             Task::none()
         }
         Message::OpenAddFriendDialog => {
@@ -4372,9 +4479,17 @@ fn subscription(state: &App) -> Subscription<Message> {
             (None, Some(socket)) => Subscription::run_with(socket.clone(), whatsapp_events),
             (None, None) => Subscription::none(),
         },
-        // Drive the animated background at ~15 fps (only while it's on).
-        if state.extras.digital_rain {
+        // Drive the animated background at ~15 fps, on every screen alike:
+        // only while it's on and the window is in front, shown and not
+        // being dragged (`rain_running`). Well under any display's rate.
+        if rain_running(state) {
             iced::time::every(std::time::Duration::from_millis(66)).map(|_| Message::Tick)
+        } else {
+            Subscription::none()
+        },
+        // While the window is being dragged, look for it to stop.
+        if state.moving {
+            iced::time::every(std::time::Duration::from_millis(200)).map(|_| Message::MoveSettle)
         } else {
             Subscription::none()
         },
@@ -4400,7 +4515,7 @@ fn subscription(state: &App) -> Subscription<Message> {
         // Hot-reload the rice: an mtime poll is cheap and works everywhere.
         iced::time::every(std::time::Duration::from_secs(1)).map(|_| Message::ThemeCheck),
         // Global shortcuts work even while an input has focus.
-        iced::event::listen_with(|event, _status, _window| match event {
+        iced::event::listen_with(|event, status, _window| match event {
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key, location, .. })
                 if mesh_calls::ptt_key(&key, location) =>
             {
@@ -4411,15 +4526,150 @@ fn subscription(state: &App) -> Subscription<Message> {
             {
                 Some(Message::MeshCall(mesh_calls::Msg::Ptt(false)))
             }
+            // Tab and Shift+Tab move between fields, unless something
+            // (a multi-line editor) took the key itself.
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Tab),
+                modifiers,
+                ..
+            }) if status == iced::event::Status::Ignored => Some(Message::FocusMove(!modifiers.shift())),
+            // Enter that no field took (a field's own Enter submits it).
+            iced::Event::Keyboard(keyboard::Event::KeyPressed {
+                key: keyboard::Key::Named(keyboard::key::Named::Enter),
+                ..
+            }) if status == iced::event::Status::Ignored => Some(Message::EnterKey),
             iced::Event::Keyboard(keyboard::Event::KeyPressed { key, modifiers, .. }) => {
                 shortcut(key, modifiers)
             }
             iced::Event::Window(iced::window::Event::Focused) => Some(Message::WindowFocused(true)),
             iced::Event::Window(iced::window::Event::Unfocused) => Some(Message::WindowFocused(false)),
+            // Only a drag's first move becomes a message; the rest just note
+            // the time, so dragging doesn't redraw the window on every move.
+            iced::Event::Window(iced::window::Event::Moved(_)) => {
+                let last = WINDOW_MOVED_MS.swap(now_ms(), std::sync::atomic::Ordering::Relaxed);
+                (now_ms().saturating_sub(last) >= MOVE_SETTLE_MS).then_some(Message::WindowMoved)
+            }
+            iced::Event::Window(iced::window::Event::Resized(size)) => Some(Message::WindowResized(size)),
+            iced::Event::Window(iced::window::Event::FileHovered(_)) => Some(Message::FileHovered),
+            iced::Event::Window(iced::window::Event::FileDropped(path)) => Some(Message::FileDropped(path)),
+            iced::Event::Window(iced::window::Event::FilesHoveredLeft) => Some(Message::FilesLeft),
             _ => None,
         }),
     ])
 }
+
+/// Sends the composer's draft or file to the open chat. The composer keeps
+/// focus afterwards (`SendMessage`), so the next message needs no click.
+fn send_message(state: &mut App) -> Task<Message> {
+        let Screen::LoggedIn(session) = &mut state.screen else {
+            return Task::none();
+        };
+        // A chosen file sends with the draft as its caption (caption may
+        // be empty). Routed to the chat's own backend.
+        if let Some(attachment) = session.pending_attachment.clone() {
+            if session.sending_attachment {
+                return Task::none();
+            }
+            let caption = draft(session);
+            match &session.web_chat {
+                Some(chat) if chat.network == Network::WhatsApp => match &state.whatsapp {
+                    Some(engine) => {
+                        engine.send_file(&chat.id, &attachment.filename, &attachment.mime, &attachment.data, &caption);
+                        session.sending_attachment = true;
+                    }
+                    None => session.status = Some("WhatsApp isn't running, so this can't be sent.".to_string()),
+                },
+                Some(chat) if chat.network == Network::Discord => {
+                    session.status = Some("Sending files to Discord isn't ready yet — only WhatsApp and Matrix.".to_string());
+                    let _ = chat;
+                }
+                Some(chat) if chat.network == Network::Mesh => match (&state.mesh.node, mesh_dm::staged(&attachment)) {
+                    (Some(node), Ok((path, preview))) => {
+                        mesh_spaces::send_file(node, &chat.id, &path.to_string_lossy(), preview.as_deref().map(|p| p.to_string_lossy()).as_deref());
+                        if !caption.is_empty() {
+                            mesh_spaces::send(node, &state.mesh.spaces, &chat.id, &caption, None);
+                        }
+                        for more in std::mem::take(&mut session.queued_attachments) {
+                            match mesh_dm::staged(&more) {
+                                Ok((path, preview)) => mesh_spaces::send_file(
+                                    node,
+                                    &chat.id,
+                                    &path.to_string_lossy(),
+                                    preview.as_deref().map(|p| p.to_string_lossy()).as_deref(),
+                                ),
+                                Err(err) => session.status = Some(format!("Couldn't send {}: {err}", more.filename)),
+                            }
+                        }
+                        session.pending_attachment = None;
+                        session.message_draft = text_editor::Content::new();
+                    }
+                    (None, _) => session.status = Some("Aflos isn't running, so this can't be sent.".to_string()),
+                    (_, Err(err)) => session.status = Some(format!("Couldn't send the file: {err}")),
+                },
+                _ => {
+                    let Some(room_id) = session.selected_room.clone() else {
+                        session.status = Some("Pick a chat first.".to_string());
+                        return Task::none();
+                    };
+                    let Some(client) = session.client.clone() else { return Task::none() };
+                    session.sending_attachment = true;
+                    return Task::perform(
+                        async move {
+                            client
+                                .send_attachment(
+                                    &room_id,
+                                    &attachment.filename,
+                                    &attachment.mime,
+                                    attachment.data,
+                                    Some(&caption),
+                                )
+                                .await
+                                .map_err(|e| e.to_string())
+                        },
+                        Message::AttachmentSent,
+                    );
+                }
+            }
+            return Task::none();
+        }
+        let body = draft(session);
+        if body.trim().is_empty() {
+            return Task::none();
+        }
+        // A web chat sends through its hidden client; the echo comes back
+        // with its messages.
+        if let (Some(id), Some(node)) = (&session.editing, &state.mesh.node) {
+            mesh_spaces::edit(
+                node,
+                session.web_chat.as_ref().map(|c| c.id.as_str()),
+                id,
+                &body,
+            );
+            session.message_draft = text_editor::Content::new();
+            session.editing = None;
+            return Task::none();
+        }
+        if let Some(chat) = &session.web_chat {
+            let reply_to = session.replying.as_ref().map(|(id, _)| id.as_str());
+            if clients!(state).send(chat, &body, reply_to) {
+                session.message_draft = text_editor::Content::new();
+                session.replying = None;
+            } else {
+                session.status = Some("That chat's client isn't running, so this can't be sent.".to_string());
+            }
+            return Task::none();
+        }
+        let Some(room_id) = session.selected_room.clone() else {
+            return Task::none();
+        };
+        let Some(client) = session.client.clone() else { return Task::none() };
+        session.message_draft = text_editor::Content::new();
+        Task::perform(
+            async move { client.send_message(&room_id, &body).await.map_err(|e| e.to_string()) },
+            Message::MessageSent,
+        )
+}
+
 
 /// Whether something on screen animates: a loaded GIF in the chat or the
 /// full-screen view, or a voice note playing.
@@ -4636,7 +4886,37 @@ fn view(state: &App, _: iced::window::Id) -> Element<'_, Message> {
     if state.extras.digital_rain {
         layers = layers.push(rain::background(&state.palette, state.rain_time, state.extras.animation));
     }
-    layers.push(content).into()
+    layers = layers.push(content);
+    if state.drop_hover {
+        layers = layers.push(drop_overlay(state));
+    }
+    layers.into()
+}
+
+/// What files dragged over the window would do: "Drop to send to <chat>",
+/// or why they can't go.
+fn drop_overlay(state: &App) -> Element<'_, Message> {
+    let p = &state.palette;
+    let (line, ok) = match &state.screen {
+        Screen::LoggedIn(session) => match drop_target(session) {
+            DropTarget::Chat(name) => (format!("Drop to send to {name}"), true),
+            DropTarget::NoFiles(network) => (format!("{network} chats can't take files in Aflos yet"), false),
+            DropTarget::Nowhere => ("Open a chat to send files to it".to_string(), false),
+        },
+        Screen::Booting => ("Open Aflos first".to_string(), false),
+    };
+    let (dim, edge) = (theme::alpha(p.background(), 0.82), if ok { p.accent() } else { p.warning() });
+    container(
+        container(ui::sans(line, 20.0, Weight::Semibold, if ok { p.text_bright() } else { p.warning() }))
+            .padding([24, 32])
+            .style(move |_| container::Style {
+                border: iced::border::rounded(12).color(edge).width(2),
+                ..container::Style::default()
+            }),
+    )
+    .center(Length::Fill)
+    .style(move |_| container::Style { background: Some(dim.into()), ..container::Style::default() })
+    .into()
 }
 
 fn center_text(label: &str) -> Element<'_, Message> {
@@ -6479,19 +6759,30 @@ fn composer<'a>(
     .align_y(iced::Alignment::Center);
 
     let (fill, edge, radius) = (p.background(), p.border_ctrl(), l.control_radius() + 2.0);
-    let mut outer = column![];
+    // Everything shown above the input goes in this one column, so the
+    // input's place in the tree never changes when a bar comes or goes:
+    // iced would make it a new input, and the focus would be lost.
+    let mut outer = column![].spacing(6);
     if session.emoji_open {
         outer = outer.push(emoji_picker(p, l));
     }
     if let Some(att) = &session.pending_attachment {
-        let label = if session.sending_attachment {
-            format!("sending {} …", att.filename)
-        } else {
-            format!("📎 {} · {}", att.filename, human_size(att.data.len() as u64))
+        let more = match session.queued_attachments.len() {
+            0 => String::new(),
+            n => format!(" · and {n} more"),
         };
-        let mut chip = row![ui::mono(label, 12.0, p.text_bright())]
-            .spacing(8)
-            .align_y(iced::Alignment::Center);
+        let label = if session.sending_attachment {
+            format!("sending {} …{more}", att.filename)
+        } else {
+            format!("📎 {} · {}{more}", att.filename, human_size(att.data.len() as u64))
+        };
+        let mut chip = row![].spacing(8).align_y(iced::Alignment::Center);
+        if let Some(preview) = &att.preview {
+            chip = chip.push(
+                iced::widget::image(preview.clone()).width(64).height(64).content_fit(iced::ContentFit::Cover),
+            );
+        }
+        chip = chip.push(ui::mono(label, 12.0, p.text_bright()));
         if !session.sending_attachment {
             chip = chip.push(ui::icon_button(ui::Icon::Close, Some(Message::ClearAttachment), false, p, l));
         }
@@ -6542,7 +6833,7 @@ fn composer<'a>(
             }),
         );
     }
-    outer.push(
+    column![outer].push(
         container(field)
             .padding([6, 8])
             .style(move |_| container::Style {
@@ -9794,5 +10085,67 @@ mod tests {
         assert_eq!(initials("tiling club"), "TC");
         assert_eq!(initials("Nagbreek"), "NA");
         assert_eq!(initials("strange.lab"), "ST");
+    }
+
+    fn chat(network: Network, name: &str) -> WebChat {
+        WebChat { network, id: "c1".into(), name: name.into(), dm: true }
+    }
+
+    fn file(name: &str) -> Attachment {
+        Attachment::new(name.into(), mime_guess_from(name), vec![1, 2, 3], None)
+    }
+
+    #[test]
+    fn drops_go_to_the_open_chat_and_never_to_discord() {
+        let mut session = Session::new(None);
+        assert_eq!(drop_target(&session), DropTarget::Nowhere);
+        session.web_chat = Some(chat(Network::WhatsApp, "Mom"));
+        assert_eq!(drop_target(&session), DropTarget::Chat("Mom".into()));
+        session.web_chat = Some(chat(Network::Mesh, "Strange"));
+        assert_eq!(drop_target(&session), DropTarget::Chat("Strange".into()));
+        session.web_chat = Some(chat(Network::Discord, "nix"));
+        assert_eq!(drop_target(&session), DropTarget::NoFiles("Discord"));
+    }
+
+    #[test]
+    fn several_files_queue_behind_the_first() {
+        let mut session = Session::new(None);
+        session.web_chat = Some(chat(Network::Mesh, "Strange"));
+        for name in ["a.png", "b.txt", "c.pdf"] {
+            attach(&mut session, file(name));
+        }
+        assert_eq!(session.pending_attachment.as_ref().map(|a| a.filename.as_str()), Some("a.png"));
+        let queued: Vec<_> = session.queued_attachments.iter().map(|a| a.filename.as_str()).collect();
+        assert_eq!(queued, ["b.txt", "c.pdf"]);
+    }
+
+    #[test]
+    fn discord_says_it_cant_take_files() {
+        let mut session = Session::new(None);
+        session.web_chat = Some(chat(Network::Discord, "nix"));
+        attach(&mut session, file("a.png"));
+        assert!(session.pending_attachment.is_none());
+        assert!(session.status.as_deref().is_some_and(|s| s.contains("Discord")), "{:?}", session.status);
+    }
+
+    #[test]
+    fn pictures_get_a_preview_and_other_files_dont() {
+        assert!(file("shot.png").preview.is_some());
+        assert!(file("notes.txt").preview.is_none());
+    }
+
+    #[test]
+    fn reading_a_file_checks_folders_and_the_size_limit() {
+        let dir = std::env::temp_dir().join(format!("aflos-attach-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let small = dir.join("hi.txt");
+        std::fs::write(&small, b"hello").unwrap();
+        let read = read_attachment(&small).unwrap();
+        assert_eq!((read.filename.as_str(), read.data.as_slice(), read.path.as_deref()), ("hi.txt", &b"hello"[..], Some(small.as_path())));
+        assert!(read_attachment(&dir).unwrap_err().contains("folder"));
+        let big = dir.join("big.bin");
+        std::fs::File::create(&big).unwrap().set_len(MAX_ATTACHMENT + 1).unwrap();
+        assert!(read_attachment(&big).unwrap_err().contains("100 MB"));
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

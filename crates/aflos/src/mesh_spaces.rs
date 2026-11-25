@@ -276,6 +276,7 @@ fn quick_channel<'a>(
     };
     let space = space.to_owned();
     let typed = text_input("channel name", name)
+        .id(iced::widget::Id::new(QUICK_FIELD))
         .on_input(move |v| Message::MeshSpace(Msg::Quick(Some((space.clone(), v)))))
         .on_submit(Message::MeshSpace(Msg::QuickCreate))
         .padding(6)
@@ -424,6 +425,31 @@ fn over(may: &May, role: &str) -> bool {
         "admin" => may.owner,
         _ => may.admin,
     }
+}
+
+const QUICK_FIELD: &str = "quick-channel";
+const NEW_SPACE_FIELD: &str = "new-space-name";
+const RENAME_FIELD: &str = "rename-name";
+
+/// A Space name box that's open, and its field: focused when it opens.
+pub(crate) fn first_field(m: &crate::mesh_ui::Mesh) -> Option<(&'static str, &'static str)> {
+    let f = &m.space_form;
+    if f.quick.is_some() {
+        Some(("quick-channel", QUICK_FIELD))
+    } else if f.new_space.is_some() {
+        Some(("new-space", NEW_SPACE_FIELD))
+    } else if f.renaming.is_some() {
+        Some(("rename", RENAME_FIELD))
+    } else {
+        None
+    }
+}
+
+/// Escape: closes an open name box (new channel, new Space, renaming);
+/// false if none was open.
+pub(crate) fn close_form(m: &mut crate::mesh_ui::Mesh) -> bool {
+    let f = &mut m.space_form;
+    f.quick.take().is_some() | f.new_space.take().is_some() | f.renaming.take().is_some()
 }
 
 pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
@@ -614,12 +640,14 @@ fn act<'a>(
 }
 
 fn input<'a>(
+    id: &'static str,
     placeholder: &str,
     value: &str,
     on: fn(String) -> Msg,
     submit: Msg,
 ) -> Element<'a, Message> {
     text_input(placeholder, value)
+        .id(iced::widget::Id::new(id))
         .on_input(move |v| Message::MeshSpace(on(v)))
         .on_submit(Message::MeshSpace(submit))
         .padding(8)
@@ -643,7 +671,7 @@ pub(crate) fn new_space(state: &App) -> Element<'_, Message> {
             let ready = !name.trim().is_empty();
             column![
                 ui::mono("NEW SPACE: ITS NAME", 11.0, p.text_muted()),
-                input("", name, Msg::NewSpaceName, Msg::NewSpaceCreate),
+                input(NEW_SPACE_FIELD, "", name, Msg::NewSpaceName, Msg::NewSpaceCreate),
                 row![
                     act(
                         "Create",
@@ -729,7 +757,7 @@ fn renaming<'a>(f: &Form, id: &str, p: &'a theme::Palette) -> Option<Element<'a,
     let (_, name) = f.renaming.as_ref().filter(|(r, _)| r == id)?;
     let save = act("Save", p.accent(), Some(Msg::RenameDone), p);
     Some(
-        row![input("", name, Msg::RenameText, Msg::RenameDone), save]
+        row![input(RENAME_FIELD, "", name, Msg::RenameText, Msg::RenameDone), save]
             .spacing(6)
             .into(),
     )
@@ -783,7 +811,7 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
             .push(ui::section("name", p))
             .push(
                 row![
-                    input("", &f.name, Msg::Name, Msg::Rename),
+                    input("space-name", "", &f.name, Msg::Name, Msg::Rename),
                     add("Rename", Msg::Rename)
                 ]
                 .spacing(6),
@@ -812,6 +840,7 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
             });
         }
         let new = input(
+            "category-name",
             "New category",
             &f.category,
             Msg::CategoryName,
@@ -857,6 +886,7 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
         col = col.push(
             row![
                 input(
+                    "channel-name",
                     "New channel",
                     &f.channel,
                     Msg::ChannelName,
@@ -981,6 +1011,20 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_open_name_box_takes_the_focus_and_escape_closes_it() {
+        let mut m = crate::mesh_ui::Mesh::default();
+        assert_eq!(first_field(&m), None);
+        assert!(!close_form(&mut m));
+        m.space_form.quick = Some(("space1".into(), String::new()));
+        assert_eq!(first_field(&m), Some(("quick-channel", QUICK_FIELD)));
+        assert!(close_form(&mut m));
+        assert_eq!(first_field(&m), None);
+        m.space_form.new_space = Some(String::new());
+        assert_eq!(first_field(&m).map(|(form, _)| form), Some("new-space"));
+        assert!(close_form(&mut m) && m.space_form.new_space.is_none());
+    }
 
     fn space(json: &str) -> mesh::Space {
         serde_json::from_str(json).unwrap()
