@@ -65,6 +65,17 @@ yet.
 **Planned:** video and screen share on Aflos calls, echo cancellation, and a
 relay and seed that people outside the home network can reach.
 
+**Known limits:**
+
+- **Drag and drop on Wayland.** Dropping files on the window works on Windows
+  and X11, but not under Wayland (Hyprland, KDE, GNOME) yet: it waits for
+  winit's new drag-and-drop API
+  ([rust-windowing/winit#4571](https://github.com/rust-windowing/winit/pull/4571),
+  merged for winit 0.31, still in beta) and for iced, on winit 0.30 today, to
+  pick it up ([#11](https://github.com/GloriousBrendon/Aflos/issues/11)).
+  Instead, copy the files in your file manager (or with `wl-copy`) and press
+  Ctrl+V in the message box.
+
 ## Layout
 
 ```
