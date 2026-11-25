@@ -568,7 +568,13 @@ fn sign_in<'a>(state: &'a App, spec: &'static NetworkSpec, link: Option<&Link>) 
             let input = |label: &'static str, placeholder: &'static str, value: &str, on: fn(String) -> Message, secure: bool| {
                 column![
                     ui::mono(label, 11.0, p.text_muted()),
-                    text_input(placeholder, value).on_input(on).on_submit(Message::LoginSubmitted).secure(secure).padding([10, 12]).size(13),
+                    text_input(placeholder, value)
+                        .id(iced::widget::Id::new(label))
+                        .on_input(on)
+                        .on_submit(Message::LoginSubmitted)
+                        .secure(secure)
+                        .padding([10, 12])
+                        .size(13),
                 ]
                 .spacing(6)
             };
@@ -602,6 +608,22 @@ fn sign_in<'a>(state: &'a App, spec: &'static NetworkSpec, link: Option<&Link>) 
     }
 }
 
+/// Native Discord's sign-in fields, by ID (for the focus).
+pub(crate) const DC_LOGIN: &str = "dc-login";
+pub(crate) const DC_CODE: &str = "dc-code";
+
+/// The first field of a network's sign-in form, if it has one: Matrix's
+/// homeserver, native Discord's email (or its 2FA code).
+pub(crate) fn first_field(state: &App, id: &str) -> Option<&'static str> {
+    match Network::from_id(id)? {
+        Network::Matrix => Some("HOMESERVER"),
+        Network::Discord if state.discord_native.is_some() => {
+            Some(if state.dc_sign_in.asking_code { DC_CODE } else { DC_LOGIN })
+        }
+        _ => None,
+    }
+}
+
 /// Native Discord: email + password, then a 2FA code if it's on. No phone.
 fn discord_password(state: &App) -> Element<'_, Message> {
     let p = &state.palette;
@@ -612,6 +634,7 @@ fn discord_password(state: &App) -> Element<'_, Message> {
         column![
             label("2FA CODE"),
             text_input("123456", &f.code)
+                .id(iced::widget::Id::new(DC_CODE))
                 .on_input(Message::DcSignInCode)
                 .on_submit_maybe(ready.then_some(Message::DcSignInSubmit))
                 .padding([10, 12])
@@ -621,7 +644,12 @@ fn discord_password(state: &App) -> Element<'_, Message> {
     } else {
         column![
             label("EMAIL OR PHONE"),
-            text_input("you@example.com", &f.login).on_input(Message::DcSignInLogin).padding([10, 12]).size(13),
+            text_input("you@example.com", &f.login)
+                .id(iced::widget::Id::new(DC_LOGIN))
+                .on_input(Message::DcSignInLogin)
+                .on_submit_maybe(ready.then_some(Message::DcSignInSubmit))
+                .padding([10, 12])
+                .size(13),
             label("PASSWORD"),
             text_input("", &f.password)
                 .on_input(Message::DcSignInPassword)

@@ -3,9 +3,14 @@
 //! [`theme::Palette`] so they match the user's rice; only the motion is fixed.
 //!
 //! Each is a pure function of elapsed `time`, so there's no per-frame state to
-//! keep — the app just advances `time` on a tick and redraws.
+//! keep — the app just advances `time` on a tick and redraws. Each keeps its
+//! last drawing ([`Drawn`]), so a redraw for anything else (a window being
+//! dragged, typing) reuses it instead of drawing every glyph again.
 
-use iced::widget::canvas::{Canvas, Frame, Geometry, Path, Program, Stroke, Text};
+use std::cell::Cell;
+
+use iced::widget::canvas::{Cache, Canvas, Path, Program, Stroke, Text};
+use iced::widget::canvas::Geometry;
 use iced::{Color, Element, Length, Pixels, Point, Rectangle, Renderer, Theme, mouse};
 
 use crate::Message;
@@ -31,6 +36,30 @@ pub fn background<'a>(palette: &theme::Palette, time: f32, animation: theme::Ani
     canvas
 }
 
+/// The last drawing, and the time it was drawn for: drawn again only when
+/// the time (or the size, which the cache checks) changes.
+pub struct Drawn {
+    cache: Cache,
+    time: Cell<f32>,
+}
+
+impl Default for Drawn {
+    fn default() -> Self {
+        Self { cache: Cache::new(), time: Cell::new(f32::NAN) }
+    }
+}
+
+impl Drawn {
+    /// Clears the drawing if `time` moved on since it was made.
+    fn at(&self, time: f32) -> &Cache {
+        if self.time.get() != time {
+            self.cache.clear();
+            self.time.set(time);
+        }
+        &self.cache
+    }
+}
+
 /// Distance at which mesh nodes stop being linked.
 const LINK: f32 = 150.0;
 
@@ -43,10 +72,10 @@ struct Mesh {
 }
 
 impl Program<Message> for Mesh {
-    type State = ();
+    type State = Drawn;
 
-    fn draw(&self, _state: &(), renderer: &Renderer, _theme: &Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+    fn draw(&self, state: &Drawn, renderer: &Renderer, _theme: &Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<Geometry> {
+        let geometry = state.at(self.time).draw(renderer, bounds.size(), |frame| {
         let (w, h) = (bounds.width.max(1.0), bounds.height.max(1.0));
         // About one node per 160x160 px, capped: links are checked pairwise.
         let count = ((w * h) / 26_000.0).clamp(12.0, 110.0) as u32;
@@ -74,7 +103,8 @@ impl Program<Message> for Mesh {
             let pulse = 0.55 + 0.35 * (self.time * 1.3 + i as f32).sin();
             frame.fill(&Path::circle(*p, 2.2), Color { a: pulse, ..self.node });
         }
-        vec![frame.into_geometry()]
+        });
+        vec![geometry]
     }
 }
 
@@ -86,10 +116,10 @@ struct Stars {
 }
 
 impl Program<Message> for Stars {
-    type State = ();
+    type State = Drawn;
 
-    fn draw(&self, _state: &(), renderer: &Renderer, _theme: &Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+    fn draw(&self, state: &Drawn, renderer: &Renderer, _theme: &Theme, bounds: Rectangle, _cursor: mouse::Cursor) -> Vec<Geometry> {
+        let geometry = state.at(self.time).draw(renderer, bounds.size(), |frame| {
         let (w, h) = (bounds.width.max(1.0), bounds.height.max(1.0));
         let per_layer = ((w * h) / 9_000.0).clamp(30.0, 400.0) as u32;
         for (layer, (speed, size)) in [(3.0, 0.8), (7.0, 1.2), (14.0, 1.8)].into_iter().enumerate() {
@@ -104,7 +134,8 @@ impl Program<Message> for Stars {
                 frame.fill(&Path::circle(Point::new(x, y), size), Color { a: twinkle * (0.5 + layer as f32 * 0.2), ..color });
             }
         }
-        vec![frame.into_geometry()]
+        });
+        vec![geometry]
     }
 }
 
@@ -115,17 +146,17 @@ struct Rain {
 }
 
 impl Program<Message> for Rain {
-    type State = ();
+    type State = Drawn;
 
     fn draw(
         &self,
-        _state: &(),
+        state: &Drawn,
         renderer: &Renderer,
         _theme: &Theme,
         bounds: Rectangle,
         _cursor: mouse::Cursor,
     ) -> Vec<Geometry> {
-        let mut frame = Frame::new(renderer, bounds.size());
+        let geometry = state.at(self.time).draw(renderer, bounds.size(), |frame| {
 
         let cols = (bounds.width / COL_WIDTH).ceil() as usize + 1;
         let rows = (bounds.height / CELL_HEIGHT).ceil() as usize + 1;
@@ -167,7 +198,8 @@ impl Program<Message> for Rain {
             }
         }
 
-        vec![frame.into_geometry()]
+        });
+        vec![geometry]
     }
 }
 

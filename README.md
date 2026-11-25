@@ -65,6 +65,17 @@ yet.
 **Planned:** video and screen share on Aflos calls, echo cancellation, and a
 relay and seed that people outside the home network can reach.
 
+**Known limits:**
+
+- **Drag and drop on Wayland.** Dropping files on the window works on Windows
+  and X11, but not under Wayland (Hyprland, KDE, GNOME) yet: it waits for
+  winit's new drag-and-drop API
+  ([rust-windowing/winit#4571](https://github.com/rust-windowing/winit/pull/4571),
+  merged for winit 0.31, still in beta) and for iced, on winit 0.30 today, to
+  pick it up ([#11](https://github.com/GloriousBrendon/Aflos/issues/11)).
+  Instead, copy the files in your file manager (or with `wl-copy`) and press
+  Ctrl+V in the message box.
+
 ## Layout
 
 ```
@@ -255,11 +266,12 @@ joining or creating spaces, and Discord friend requests through the bridge.
 
 Copyright (C) 2026 GloriousBrendon
 
-Aflos is free software: you can redistribute it and/or modify it under the
-terms of the GNU Affero General Public License as published by the Free
-Software Foundation, either version 3 of the License, or (at your option) any
-later version. See [LICENSE](LICENSE). Contributions: see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Aflos and `mesh-node`, its network engine (from the Mesh-Node repo, shipped
+in every release), are both free software: you can redistribute them and/or
+modify them under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the License,
+or (at your option) any later version (AGPL-3.0-or-later). See
+[LICENSE](LICENSE). Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 The vendored `songbird` and `serenity-voice-model` in `aflos-dc/vendor/` keep
 their ISC license, and the Michroma font keeps the SIL Open Font License.
