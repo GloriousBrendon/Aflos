@@ -1,5 +1,9 @@
 # Prompt for continuing Aflos
 
+> **History.** Written when this project was **Mesh**, a Matrix-only client (it
+> is now **Aflos**). Names and paths are updated; the state it describes is not
+> current. See [README.md](README.md) for what Aflos does today.
+
 Copy everything below the line into your AI model, run from the repo root.
 
 ---
@@ -11,7 +15,7 @@ You are working on **Aflos**, a lightweight Matrix chat client in Rust, located 
 - Cargo workspace with two crates:
   - `crates/aflos-core` — all Matrix logic, zero UI dependencies. Wraps `matrix-sdk` 0.18 (features: `e2e-encryption`, `sqlite`, `markdown`). Provides `AflosClient` with: `login_with_password()`, `restore()` (from a persisted `session.json` + sqlite store), `run_sync()` (long-running sync loop), `rooms()` → `Vec<RoomSummary>`, `send_message()`, `logout_locally()`. Session persistence is in `src/session.rs` (`SessionStore`, plain JSON).
   - `crates/aflos` — the GUI, built on `iced` 0.14 (features: `tokio`, `image`) using the function-based API: `iced::application(boot, update, view).theme(..).subscription(..).run()`. Screens: `Booting` (session restore), `LoggedOut`/`LoggingIn` (login form), `LoggedIn` (sidebar room list + message composer). The room list currently refreshes via a crude 3-second `iced::time::every` poll.
-  - `crates/aflos/src/theme.rs` — `Palette`: 10 named hex colors loaded from TOML (`~/.config/mesh/theme.toml` on Linux, `%APPDATA%\mesh\theme.toml` on Windows), with Catppuccin Mocha default, Nord and Gruvbox presets, and `to_iced_theme()` which builds an `iced::Theme::custom(..)`.
+  - `crates/aflos/src/theme.rs` — `Palette`: 10 named hex colors loaded from TOML (`~/.config/aflos/theme.toml` on Linux, `%APPDATA%\aflos\theme.toml` on Windows), with Catppuccin Mocha default, Nord and Gruvbox presets, and `to_iced_theme()` which builds an `iced::Theme::custom(..)`.
 
 ## Design constraints (non-negotiable)
 

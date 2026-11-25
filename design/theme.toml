@@ -1,5 +1,5 @@
 # Aflos theme — "rice" defaults (matches ~/.config/themes/active/colors.conf defaults)
-# Linux: ~/.config/mesh/theme.toml   Windows: %APPDATA%\mesh\theme.toml
+# Linux: ~/.config/aflos/theme.toml   Windows: %APPDATA%\aflos\theme.toml
 source = "rice"      # "rice" = follow colors.conf · "preset" · "toml" = use [colors] below
 watch  = true        # hot-reload when the source file changes
 

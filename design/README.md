@@ -1,5 +1,8 @@
 # Aflos design handoff
 
+> **History.** How this folder was first handed over, when the product was
+> called **Mesh** (now **Aflos**).
+
     design/
       DESIGN.md           spec: tokens, screens, code mapping, bridge rules
       HANDOFF-PROMPT.md   prompt for Claude Code

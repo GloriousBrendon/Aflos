@@ -94,7 +94,7 @@ log lines named below, plus `video:` and `stream:` ones, say where it
 stops.
 
 **The test (by you):** quit Aflos, then run
-`AFLOS_DC_VIDEO_SPIKE=/tmp/dcvideo RUST_LOG=warn,mesh_dc=info,songbird=info ~/.local/bin/mesh-launch`,
+`AFLOS_DC_VIDEO_SPIKE=/tmp/dcvideo RUST_LOG=warn,aflos_dc=info,songbird=info ~/.local/bin/mesh-launch`,
 join a voice channel where someone has their camera on, wait a minute, and
 look in `/tmp/dcvideo` and `~/.local/state/mesh/mesh.log` (lines with
 `aflos-dc:` and `video spike`). What the log says decides the next step:

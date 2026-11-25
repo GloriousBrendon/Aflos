@@ -1,5 +1,9 @@
 # Claude Code prompt: implement the Aflos "rice" redesign
 
+> **History.** The prompt for the "rice" redesign, written when the product was
+> called **Mesh** (now **Aflos**). The redesign is built; names and paths are
+> updated, the rest is as it was.
+
 Run from the Mesh-Voice repo root with this `design/` folder in place:
 
     claude "$(cat design/HANDOFF-PROMPT.md)"

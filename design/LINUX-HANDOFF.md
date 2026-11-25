@@ -74,7 +74,7 @@ in the `discord-voice` network namespace (see design/DISCORD-NATIVE.md).
 
 1. Work out how the existing `discord-voice` launcher enters the namespace:
    `ip netns exec`, `nsenter`, a firejail profile or similar.
-2. Put the equivalent command prefix in `~/.config/mesh/config.toml`. Aflos
+2. Put the equivalent command prefix in `~/.config/aflos/config.toml`. Aflos
    appends `<aflos-dc path> --data <dir>` to it. For example:
    ```toml
    discord_native_wrapper = ["sudo", "-n", "ip", "netns", "exec", "vpn", "sudo", "-n", "-u", "<user>"]
@@ -103,9 +103,9 @@ and speaks the protocol on stdout.
 - Each machine is its own WhatsApp linked device. The Linux Aflos needs its own
   QR link from Accounts → WhatsApp (phone: Linked devices → Link a device).
   That doesn't affect the Windows link.
-- The helper keeps its data in `~/.local/share/mesh/whatsapp/`
+- The helper keeps its data in `~/.local/share/aflos/whatsapp/`
   (`whatsapp.db`, `chats.json`). Discord's goes in
-  `~/.local/share/mesh/discord/token`.
+  `~/.local/share/aflos/discord/token`.
 - Camera and screen share in WhatsApp calls won't work on Linux until
   `aflos-media` gets a Linux backend. Audio calls should work: cpal over ALSA,
   which PipeWire and Pulse provide.
