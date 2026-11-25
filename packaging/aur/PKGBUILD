@@ -1,8 +1,8 @@
 # Maintainer: TODO <TODO>
 #
-# Aflos: builds aflos, aflos-wa and aflos-dc from the public Aflos
-# release tag. mesh-node (Aflos's own network) lives in the private Mesh-Node
-# repo, so it is taken prebuilt from the same release's Linux download.
+# Aflos: builds aflos, aflos-wa and aflos-dc from the Aflos release tag, and
+# mesh-node (Aflos's own network) from the Mesh-Node tag of the same version,
+# which every Aflos release is built against.
 # Not published to the AUR yet: run `updpkgsums` once v$pkgver is released.
 
 pkgname=aflos-chat
@@ -13,12 +13,13 @@ arch=('x86_64')
 url="https://github.com/GloriousBrendon/Aflos"
 license=('AGPL-3.0-or-later')
 depends=('alsa-lib' 'fontconfig' 'gcc-libs' 'glibc' 'libpipewire' 'libxkbcommon' 'opus')
-makedepends=('cargo' 'clang' 'cmake' 'pkgconf')
+makedepends=('cargo' 'clang' 'cmake' 'git' 'pkgconf')
 optdepends=('xdg-desktop-portal: pick a screen or window to share in WhatsApp calls')
 install=aflos-chat.install
 source=("Aflos-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz"
-        "aflos-$pkgver-linux-x86_64.tar.gz::$url/releases/download/v$pkgver/aflos-$pkgver-linux-x86_64.tar.gz")
-# TODO: SKIP until v$pkgver exists, then `updpkgsums`.
+        "Mesh-Node::git+https://github.com/GloriousBrendon/Mesh-Node.git#tag=v$pkgver")
+# TODO: `updpkgsums` for the tarball. The git source stays SKIP (makepkg
+# can't checksum a git checkout).
 sha256sums=('SKIP'
             'SKIP')
 
@@ -28,7 +29,7 @@ prepare() {
   cd "$_src"
   export RUSTUP_TOOLCHAIN=stable
   local target="$(rustc -vV | sed -n 's/host: //p')"
-  for dir in . aflos-wa aflos-dc; do
+  for dir in . aflos-wa aflos-dc ../Mesh-Node; do
     (cd "$dir" && cargo fetch --locked --target "$target")
   done
 }
@@ -39,6 +40,7 @@ build() {
   cargo build --frozen --release -p aflos
   (cd aflos-wa && cargo build --frozen --release)
   (cd aflos-dc && cargo build --frozen --release)
+  (cd ../Mesh-Node && cargo build --frozen --release -p mesh-node)
 }
 
 package() {
@@ -46,7 +48,7 @@ package() {
   # Aflos finds its helpers next to its own binary, so they share a folder.
   install -Dm755 target/release/aflos "$pkgdir/usr/lib/aflos/aflos"
   install -Dm755 aflos-wa/target/release/aflos-wa "$pkgdir/usr/lib/aflos/aflos-wa"
-  install -Dm755 "$srcdir/aflos-$pkgver-linux-x86_64/mesh-node" "$pkgdir/usr/lib/aflos/mesh-node"
+  install -Dm755 ../Mesh-Node/target/release/mesh-node "$pkgdir/usr/lib/aflos/mesh-node"
   # Not beside aflos on purpose: with it there, Discord would connect from
   # your own IP. aflos-chat.install says how to turn it on.
   install -Dm755 aflos-dc/target/release/aflos-dc "$pkgdir/usr/lib/aflos/optional/aflos-dc"

@@ -3,7 +3,8 @@
 # Run workflow, or `gh workflow run release.yml --ref <branch>`) for a dry run:
 # it builds everything and checks the release's files and SHA256SUMS, keeps
 # them as the run's "release" artifact, and publishes nothing. mesh-node comes
-# from the public Mesh-Node repo's origin main; no local checkout is involved.
+# from the public Mesh-Node repo, at the tag matching Aflos's version (v0.4.1
+# for Aflos 0.4.1): tag Mesh-Node first. No local checkout is involved.
 #
 # Every file is also published under Mesh's old name (Mesh-Setup-*.exe,
 # mesh-*-linux-x86_64.tar.gz): Mesh 0.3.1's updater only looks for those.
@@ -25,10 +26,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { path: Aflos }
+      - id: ver
+        shell: bash
+        run: echo "v=$(grep -m1 '^version' Aflos/crates/aflos/Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: GloriousBrendon/Mesh-Node
-          ref: main
+          ref: v${{ steps.ver.outputs.v }}
           path: Mesh-Node
       - uses: dtolnay/rust-toolchain@stable
       - run: choco install innosetup -y --no-progress
@@ -55,10 +59,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { path: Aflos }
+      - id: ver
+        shell: bash
+        run: echo "v=$(grep -m1 '^version' Aflos/crates/aflos/Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: GloriousBrendon/Mesh-Node
-          ref: main
+          ref: v${{ steps.ver.outputs.v }}
           path: Mesh-Node
       - uses: dtolnay/rust-toolchain@stable
       - run: >
