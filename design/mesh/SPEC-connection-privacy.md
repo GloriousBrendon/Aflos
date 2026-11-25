@@ -1,10 +1,11 @@
 # Spec: `connection-privacy` (Aflos)
 
-Status: **DRAFT 2026-11-25**, for review. No code yet. Depends on
+Status: **APPROVED 2026-11-25**, with your changes of the same day (P3, P4,
+P7, P12, P14, open question 6). Plan: PLAN-connection-privacy (to write). No code yet. Depends on
 [`transport`](SPEC-transport.md), [`routing`](SPEC-routing.md),
 [`social`](SPEC-social.md), [`spaces`](SPEC-spaces.md) and
 [`seed`](SPEC-seed.md) as built in Mesh-Node v0.4.1. Decisions marked
-*(your choice)* are yours from the brief; the rest are proposals.
+*(your choice)* are yours; *(approved)* marks proposals you accepted.
 
 ## Objective
 
@@ -81,16 +82,17 @@ not by refusing them after they connect.
 |---|---|---|
 | P1 | **Friends get direct paths, with the relay as fallback.** Friends are mutual, accepted contacts (social D8). *(your choice)* | Friends already know a lot about each other; direct paths are what make calls good. |
 | P2 | **Everyone else is relay-only, never direct:** members of a Space you share who aren't your friends, and anyone else. It covers chat, DMs, voice and files alike. *(your choice)* | A Space can hold strangers; their knowing your home address is the harm this spec exists to prevent. |
-| P3 | **Two endpoints per device.** Because of points 1 to 3 above, the per-peer rule is made with two keys. (a) **The device key runs a relay-only endpoint** (`Config::relay_only`). It's the key every Space member already sees (Space events carry its `DeviceCert`, spaces S5), so whatever a member does with it, they get a relayed path and no candidates. (b) **A second "direct key" runs a normal endpoint**, with IP transports and hole punching. Only friends are told it: it travels only in the encrypted address records for friends (routing D3, D9) and is certified by the device key, so a friend's device checks it belongs to you. Each endpoint only dials its own kind: your direct endpoint dials friends' direct keys, your relay endpoint dials everyone else's device keys. The direct endpoint admits only current friends (`Allow`, plus an `after_handshake` hook, as defence in depth). *Proposed.* | It's the smallest design that holds: per-peer relay-only isn't possible inside one iroh endpoint (Background 1 to 3). A peer can only dial a key they know, so keeping the direct key away from non-friends keeps your IP from them. **Costs:** two relay connections per device (two keep-alives, roughly twice the idle relay traffic, still small); a second key to manage; a format addition to address records; and a friend reached the old way (an older Aflos dialling your device key) gets relayed instead of direct until they update. |
-| P4 | **The direct key rotates when someone stops being a friend** (removed, or blocked). The new key goes out at once in fresh address records to the remaining friends; the old endpoint closes. *Proposed.* | A former friend knows the old key. Rotating means it reaches nothing. |
+| P3 | **Two endpoints per device.** Because of points 1 to 3 above, the per-peer rule is made with two keys. (a) **The device key runs a relay-only endpoint** (`Config::relay_only`). It's the key every Space member already sees (Space events carry its `DeviceCert`, spaces S5), so whatever a member does with it, they get a relayed path and no candidates. (b) **A second "direct key" runs a normal endpoint**, with IP transports and hole punching. Only friends and your own devices are told it: it travels only in the encrypted address records for friends (routing D3, D9) and in your own account sync, and is certified by the device key, so a friend's device checks it belongs to you. Each endpoint only dials its own kind: your direct endpoint dials friends' direct keys, your relay endpoint dials everyone else's device keys. **The direct endpoint accepts only current friends and your own devices**, and refuses everyone else in the handshake, even someone who has the key (`Allow`, plus an `after_handshake` hook). *(approved; accept rule your change)* | It's the smallest design that holds: per-peer relay-only isn't possible inside one iroh endpoint (Background 1 to 3). A peer can only dial a key they know, so keeping the direct key away from non-friends keeps your IP from them; the accept rule covers a key that leaked anyway (though a refused peer may still get candidates, Background 3, which is why P4 rotates). **Costs:** two relay connections per device (two keep-alives, roughly twice the idle relay traffic, still small on a desktop; open question 6 for mobile); a second key to manage; a format addition to address records; and a friend on an older Aflos dials your device key and gets relayed until they update. |
+| P4 | **The direct key rotates** when someone stops being a friend (removed, or blocked), **and every 7 days** regardless. Friends connected at the time are told the new key over their current connection, which then closes; everyone else gets it from fresh encrypted address records, put at once (routing D4). The old endpoint closes. A friend offline for longer than a rotation finds your current record when they come back (routing's normal lookup) and reconnects with the new key. *(approved; 7 days your change)* | A former friend knows the old key, and a leaked copy shouldn't last: with the weekly rotation it dies on its own. Address records already carry what a returning friend needs, so nothing new is needed to find you again. |
 | P5 | **Blocking ends any direct path at once, and they're never dialled directly again.** `block` closes their connections on both endpoints (social D10 already closes them), rotates the direct key (P4), and from then on a blocked ID is neither admitted nor dialled. *(your choice)* | A block should be immediate and permanent, and P4 makes "never again" true even if they kept the old key. |
 | P6 | **"Hide my IP": relay only for everyone, friends included.** Off by default. With it on, the direct endpoint isn't started and no direct key is published, so friends reach your device key through the relay, like anyone else. Turning it on or off restarts networking (a few seconds). The settings line reads: *"Hide my IP: everyone reaches you through a relay, friends too. Calls get slower (about a third of a second more delay in South Africa)."* *(your choice; wording proposed)* | Some people want their address hidden from everyone, for some calls or for good. One switch, and the cost stated in one line. |
-| P7 | **Per Space: "Allow direct connections with members."** Off by default. Only the owner can turn it on, as a signed Space change (spaces S7). While it's on, members of that Space get your direct key in their address records, as friends do; turning it off, or leaving or being removed from the Space, rotates the key (P4). The add-to-Space screen and the Space's header show it: *"Direct connections are on: members can see each other's IP addresses."* Your own "Hide my IP" still wins. *(your choice; mechanism proposed)* | A private Space of real-life friends wants fast calls; a mixed Space doesn't. Joining is add-by-ID by a member (spaces S6), so the notice goes on the add, which the new member accepts. |
+| P7 | **Per Space: "Allow direct connections with members."** Off by default. Only the owner can turn it on, as a signed Space change (spaces S7). **What it allows:** Space traffic between two members who are also friends may go over their direct path. It never opens the direct endpoint to a non-friend (P3): members who aren't your friends stay relayed, and go direct only by becoming friends (SPEC-social, *Add friend* in a Space). **Without it,** Space traffic with a friend is relayed too, over the relay endpoint, even though you have a direct path for DMs and calls (P14). The add-to-Space screen and the Space's header show it: *"Direct connections are on: members who are friends connect directly in this Space."* Your own Hide my IP still wins. *(your choice; mechanism revised with your changes)* | A private Space of real-life friends wants fast voice; a mixed Space doesn't. With direct limited to friends (P3), this is the only form P7 can take without a third endpoint, and it keeps the promise that a non-friend never gets your IP. |
 | P8 | **The status line shows each connection's path: direct or relayed.** For a call or an open chat it names the other person's path (`Direct`, `Relayed`, `Relayed: Hide my IP is on`); the network status shows how many of each. No addresses are shown. *(your choice)* | People should be able to see what the app is doing, and transport `Status` already says direct or relay, with no IPs. |
-| P9 | **The throwaway node for seeds and linking is relay-only** (`throwaway_node` in `helper.rs`, seed D7b). *Proposed; could ship in Mesh-Node #2 before v0.4.1, see Q1.* | Background 2: today a caller's candidate addresses reach the seed inside the connection, even though the seed is relay-only. The seed is reached through the relay anyway, so this costs nothing for seed traffic. Linking your own devices then needs the relay to be reachable, which it already does from outside a LAN. |
+| P9 | **The throwaway node for seeds and linking is relay-only** (`throwaway_node` in `helper.rs`, seed D7b). *(approved; ships in Mesh-Node #2, v0.4.1)* | Background 2: today a caller's candidate addresses reach the seed inside the connection, even though the seed is relay-only. The seed is reached through the relay anyway, so this costs nothing for seed traffic. Linking your own devices then needs the relay to be reachable, which it already does from outside a LAN. |
 | P10 | **Spaces are invite-only, with no listing or search.** It's already so (spaces S6: add-by-ID by a member). This spec makes it a rule: no future invite link or code may be searchable or listed. *(your choice)* | No discovering strangers. |
 | P11 | **Block and report, per member and per Space.** Block a member from their profile or a message (social D10). Report a member *in a Space* to that Space's owner: a signed, encrypted report event to the owner's devices only, carrying the reason and, if the reporter ticks a box, the reported messages. The owner sees it in the Space's settings and can kick, ban or delete (spaces S8). Reports never go to Aflos. A Space whose owner is the problem: leave it, block the owner. *(your choice; mechanism proposed)* | There's no moderation team and no server that could hold reports. The owner is the person who can act. |
-| P12 | **Aflos is for people 18 and over.** The terms say so; the installer's welcome page and the AUR `pkgdesc` say "for adults (18+)". *Proposed (you asked for 16+ or 18+).* | (1) South Africa's POPIA counts anyone under 18 as a child and needs a guardian's consent to process a child's personal information; Aflos holds none centrally, but the line keeps us clear of it. (2) Spaces mix strangers in voice and video with no moderation team, the setting where minors most need one. (3) 16+ would follow GDPR Art. 8's default, but the beta is in South Africa. (4) There's no age check, only a self-declared line, so stricter wording costs nothing. Revisit 16+ if a moderation story exists later. |
+| P12 | **Aflos is for people 18 and over.** The terms (a new `TERMS.md`), the README, the installer's welcome page and the AUR `pkgdesc` all say so. *(approved)* | (1) South Africa's POPIA counts anyone under 18 as a child and needs a guardian's consent to process a child's personal information; Aflos holds none centrally, but the line keeps us clear of it. (2) Spaces mix strangers in voice and video with no moderation team, the setting where minors most need one. (3) 16+ would follow GDPR Art. 8's default, but the beta is in South Africa. (4) There's no age check, only a self-declared line, so stricter wording costs nothing. Revisit 16+ if a moderation story exists later. |
+| P14 | **A friend's direct key is only for direct connections.** DMs, calls and files with a friend use it; Space traffic with that same person follows the Space's setting (P7): relayed unless the Space allows direct. So a friend in a relay-only Space has two connections with you, one direct and one relayed. *(your choice)* | What a Space shows of you (online times in that Space, its traffic) stays the same whoever the member is; the Space's owner decides, not each friendship. The cost is a second connection per friend you share a relay-only Space with. |
 | P13 | **Nothing new is logged.** No path per peer, no direct keys, no IPs in logs; counts only (direct/relayed connections), as routing D10. | As every module before. |
 
 ## Behaviour
@@ -104,15 +106,20 @@ not by refusing them after they connect.
   unlock after the update, certified by the device key with a `DirectCert`
   (direct key, device key, issued time). It's replaced by P4.
 - **Address records** (routing D3) for a friend gain one field: the direct
-  key and its cert. Records for Space peers (spaces S2) never carry it,
-  unless P7 is on for a Space you share.
-- **Dialling:** to a friend whose record has a direct key: the direct
-  endpoint dials that key, with the relay as fallback. Otherwise the relay
-  endpoint dials their device key. An older friend with no direct key is
-  dialled relay-only.
-- **Accepting:** the direct endpoint admits only current friends (and
-  members of a P7 Space) and refuses everyone else in `after_handshake`. The
-  relay endpoint admits everyone `social` allows today.
+  key and its cert. Records for Space peers (spaces S2) never carry it.
+  Your own devices learn each other's direct keys through account sync.
+- **Rotation (P4):** a new direct key and cert every 7 days and on unfriend
+  or block. Connected friends get a `direct-moved` message with the new key
+  and cert over the current connection, then it closes; records for every
+  friend are put again at once.
+- **Dialling:** for DMs, calls and files with a friend whose record has a
+  direct key, the direct endpoint dials that key, with the relay as
+  fallback. Space traffic dials over the relay endpoint, unless the Space
+  allows direct and the member is a friend (P7, P14). Everyone else, and an
+  older friend with no direct key, is dialled on the relay endpoint.
+- **Accepting:** the direct endpoint admits only current friends and your
+  own devices, and refuses everyone else in `after_handshake`, key or not.
+  The relay endpoint admits everyone `social` allows today.
 - **Calls and files** follow the connection they run on; nothing in calls or
   dm changes.
 
@@ -133,9 +140,9 @@ address and your LAN addresses (both are hole-punch candidates).
 
 | Who | Default | Hide my IP on | Space with P7 on |
 |---|---|---|---|
-| **A friend** | Your IP, your device and direct keys, when you're online, and your messages and calls (they're in them). | Not your IP. The rest as default. | As default. |
-| **A non-friend Space member** | Your ID, display name, device key, when you're online in that Space, and what you post there. **Not your IP**, whatever client they run (they never learn the direct key). | As default. | **Your IP**, and your direct key, as a friend. That's what the notice says. |
-| **Anyone else** | Nothing: they can't reach your endpoints (no address records for them) and can only send a friend request through a seed. | As default. | As default. |
+| **A friend** | Your IP, your device key, this week's direct key, when you're online, and your messages and calls (they're in them). | Not your IP. The rest as default. | As default; in that Space, also over the direct path. |
+| **A non-friend Space member** | Your ID, display name, device key, when you're online in that Space, and what you post there. **Not your IP**, whatever client they run (they never learn the direct key, and the direct endpoint refuses them). | As default. | As default: P7 only lets friends go direct. |
+| **Anyone else** | Nothing: they can't reach your endpoints (no address records for them). | As default. | As default. |
 | **A Space owner** | As a member, plus the reports members send them (P11). | As default. | As default. |
 | **The relay operator** (n0 today; a Space's relay in SPEC-peer-relay) | **Your IP**, both your keys (they connect from the same address, so they're linked), when you're online, which keys you talk to, how much and when. Never content. | The same, for every conversation including friends'. | The same. |
 | **A seed operator** (the home seed: you) | Throwaway keys, sizes, timing (seed D10b). Today also callers' candidate IPs inside the connection, unless P9 ships. | As default. | As default. |
@@ -176,7 +183,8 @@ the relay operator for that Space is its owner instead of n0.
   different keys share one relay without evicting each other. The result
   settles P3; if (b) is false, a single endpoint with a reject hook may do.
 - **Unit:** `DirectCert` issue and check; address records with and without
-  the direct key; P4 rotation; P7 change in the Space log.
+  the direct key; P4 rotation (unfriend, block, 7 days); P7 change in the
+  Space log.
 - **Process tests**, on the local relay:
   - A friend pair goes direct; a non-friend Space pair is relayed and
     neither side's stderr or connection state holds the other's IP.
@@ -184,9 +192,17 @@ the relay operator for that Space is its owner instead of n0.
     path and no candidates.
   - Block: the direct path closes within a second; the blocked side dialling
     the old direct key fails.
+  - A non-friend who has somehow got the direct key dials it and is refused.
+  - Rotation: after a rotation, a connected friend moves to the new key; a
+    friend who was offline for longer than one rotation (clock moved past 7
+    days, as the mailbox tests do) comes back and reconnects direct with the
+    new key; the old key reaches nothing.
   - Hide my IP: a friend pair is relayed; the status says so.
-  - P7: members of the Space go direct; after the owner turns it off, they
-    don't, and the old direct key reaches nothing.
+  - P14: a friend pair in a Space without P7 sends Space events over a
+    relayed connection while their DM connection stays direct.
+  - P7: in a Space with it on, friend members' Space traffic goes direct; a
+    non-friend member's stays relayed; after the owner turns it off,
+    friends' Space traffic is relayed again.
   - Report: the owner's device gets the report; no other member's does.
 - **By hand:** two machines on different networks (one on mobile data):
   friends direct, Space strangers relayed, the status line right in both;
@@ -202,16 +218,22 @@ the relay operator for that Space is its owner instead of n0.
 
 ## Open questions
 
-1. **P9 now?** Making the throwaway node relay-only is one line in
-   `throwaway_node`, costs nothing for seed traffic, and stops callers'
-   candidate IPs from reaching the seed. Add it to Mesh-Node #2 before
-   tagging v0.4.1 (recommended), or ship it with this spec?
+1. *Resolved 2026-11-25:* P9 ships in Mesh-Node #2, before v0.4.1, with a
+   test that a seed gets no candidates from a relay-only caller.
 2. **The direct key or a fork?** P3 works with iroh as it is. The
    alternative is asking iroh upstream for a per-connection switch that
    turns off NAT-traversal candidates, then using one endpoint. Recommended:
    P3 now, and raise the upstream issue.
 3. **Reports in a Space you own:** should a report also go to admins, or the
    owner only (as the brief says)?
-4. **Age line:** 18+ as proposed, or 16+?
+4. *Resolved 2026-11-25:* 18+.
 5. **P7 and Hide my IP:** if one member has Hide my IP on in a P7 Space,
    should the Space show "direct, except for N members"?
+6. **Mobile (later):** two endpoints means two relay connections kept
+   alive: about twice the idle radio wake-ups and keep-alive traffic, which
+   costs battery on a phone, and a second endpoint to bring back after
+   every network change. Options for a mobile client: start the direct
+   endpoint only while the app is in the foreground or a call is open; run
+   relay-only (Hide my IP) on mobile data; or, if iroh gains a
+   per-connection candidate switch (question 2), go back to one endpoint.
+   Not decided until there's a mobile client.
