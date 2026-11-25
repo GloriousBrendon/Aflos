@@ -5041,10 +5041,11 @@ fn top_bar<'a>(
     translucent: bool,
 ) -> Element<'a, Message> {
     let wordmark = row![
-        ui::mono_bold(">_", 14.0, p.accent()),
-        ui::mono_bold("mesh", 14.0, p.text_bright()),
+        ui::logo(false, 18.0),
+        ui::mono_bold("aflos", 14.0, p.text_bright()),
     ]
-    .spacing(8);
+    .spacing(6)
+    .align_y(iced::Alignment::Center);
 
     let mut crumb = row![].spacing(6).align_y(iced::Alignment::Center);
     if let Some(index) = session.groups.iter().position(|g| g.id() == session.active_space.as_ref())

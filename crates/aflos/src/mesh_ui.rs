@@ -867,7 +867,7 @@ pub(crate) fn view(state: &App) -> Element<'_, Message> {
     let field = |label, value, on, secure| field(label, value, on, secure, Msg::Submit, p);
     let title = |sub: &'static str| {
         column![
-            row![ui::mono_bold(">_", 28.0, p.accent()), ui::mono_bold("mesh", 28.0, p.text_bright())].spacing(10),
+            ui::logo(true, 90.0),
             ui::mono(sub, 12.0, p.text_muted()),
         ]
         .spacing(4)

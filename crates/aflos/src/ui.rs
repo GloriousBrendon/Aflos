@@ -96,6 +96,17 @@ impl Icon {
     }
 }
 
+/// The Aflos logo, dark version (rose and grey-blue, made for the dark UI):
+/// the jack mark alone, or `stacked` with the wordmark under it.
+pub fn logo<'a>(stacked: bool, height: f32) -> Element<'a, Message> {
+    let (bytes, w, h): (&'static [u8], f32, f32) = if stacked {
+        (include_bytes!("../assets/aflos-stacked.svg"), 686.0, 348.0)
+    } else {
+        (include_bytes!("../assets/aflos-mark.svg"), 408.0, 264.0)
+    };
+    svg(svg::Handle::from_memory(bytes)).width(height * w / h).height(height).into()
+}
+
 /// An icon at `size` px, tinted `color`.
 pub fn icon<'a>(which: Icon, size: f32, color: Color) -> Element<'a, Message> {
     svg(svg::Handle::from_memory(which.bytes()))
