@@ -1,0 +1,22 @@
+_dc_note() {
+  cat <<'EOF'
+==> Native Discord (aflos-dc) is installed but off. It connects from your own
+    IP unless it runs inside your VPN. Set discord_native_wrapper in
+    ~/.config/aflos/config.toml (see the README), then turn it on with:
+      sudo ln -s /usr/lib/aflos/optional/aflos-dc /usr/lib/aflos/aflos-dc
+EOF
+}
+
+post_install() {
+  _dc_note
+}
+
+post_upgrade() {
+  [ -e /usr/lib/aflos/aflos-dc ] || _dc_note
+}
+
+pre_remove() {
+  # The link post_install suggested, if it was made.
+  [ -L /usr/lib/aflos/aflos-dc ] && rm -f /usr/lib/aflos/aflos-dc
+  return 0
+}
