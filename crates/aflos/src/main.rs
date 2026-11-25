@@ -10,6 +10,7 @@ mod mesh_calls;
 mod mesh_dm;
 mod mesh_spaces;
 mod mesh_ui;
+mod migrate;
 mod rain;
 mod sounds;
 mod theme;
@@ -43,9 +44,7 @@ fn data_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("AFLOS_DATA").or_else(|| std::env::var_os("MESH_DATA")) {
         return dir.into();
     }
-    dirs::data_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("mesh")
+    migrate::pick(&dirs::data_dir().unwrap_or_else(|| PathBuf::from(".")))
 }
 
 fn theme_path() -> PathBuf {
@@ -62,9 +61,7 @@ fn config_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("AFLOS_DATA").or_else(|| std::env::var_os("MESH_DATA")) {
         return dir.into();
     }
-    dirs::config_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("mesh")
+    migrate::pick(&dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")))
 }
 
 /// Spawns the never-ending sync loop in the background and hands back a
@@ -9677,6 +9674,10 @@ fn main() -> iced::Result {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     tracing_subscriber::fmt::init();
+    // Before anything opens a store: Mesh's folders become Aflos's (copied).
+    if std::env::var_os("AFLOS_DATA").or_else(|| std::env::var_os("MESH_DATA")).is_none() {
+        migrate::from_mesh([dirs::data_dir(), dirs::config_dir()].into_iter().flatten());
+    }
     std::thread::spawn(cache::prune);
 
     let app = ui::FONTS
