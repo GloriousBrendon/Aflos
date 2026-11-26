@@ -2,7 +2,7 @@
 
 Status: **APPROVED 2026-11-26** ("approved, start the spike"). Built from
 [SPEC-voice-quality.md](SPEC-voice-quality.md) (approved 2026-11-26).
-Ships as **0.5.3** (compatible: nothing on the wire changes that 0.5.1 or
+Ships as **0.5.4** (compatible: nothing on the wire changes that 0.5.1 or
 0.5.2 can't decode). 0.5.2 ships first, as built.
 
 ## The spike (done 2026-11-26, Mesh-Node PR #8)
@@ -45,6 +45,13 @@ need; Task 5 adds it for plugins that do.
   Rescan); `CLAP_PATH` is honoured; `MESH_FX` overrides where `mesh-fx`
   is found. Accept was checked with stand-in scanners (answering,
   crashing, hanging) and by hand on LSP; the test plugins arrive in Task 7.
+- **Task 4:** plugins start with the frame after `mesh-fx` reports them
+  loaded; the waiting step uses `block_in_place` so a slow plugin doesn't
+  hold up other tasks on that runtime thread. Removing every plugin (or
+  switching them all off) stops `mesh-fx` (`meshFx` `off`). Checked by
+  hand in the mic test: LSP's compressor took a loud tone from −3.9 to
+  −10.0 dBFS and back once removed (automatic gain off; with it on, AGC
+  settling hides the change).
 
 ## Decisions taken while planning
 
@@ -113,7 +120,7 @@ need; Task 5 adds it for plugins that do.
   `meshFxPlugins` event. **Accept:** both test plugins listed; a file
   that isn't a plugin and one that crashes on load listed as broken; a
   second scan with nothing changed starts no processes.
-- [ ] **Task 4: the chain in `Chain::step`.** After noise, before gain
+- [x] **Task 4: the chain in `Chain::step`.** After noise, before gain
   (F3); mono to stereo and back (F7); the 20 ms deadline, dry frames,
   bypass after 3 late frames or a crash; `fxChain <json>`,
   `fxRestart`, `meshFx {state, plugin, latency}` events. **Accept:**
@@ -157,7 +164,7 @@ need; Task 5 adds it for plugins that do.
   `mesh-node`. **Accept:** a release dry run (workflow on a branch, no
   publish) has `mesh-fx` in every asset.
 - [ ] **Task 12: checkpoint step** (plugins and quality) in
-  `checkpoint.rs`; version 0.5.3 and CHANGELOG; CAPABILITY-MAP by-hand
+  `checkpoint.rs`; version 0.5.4 and CHANGELOG; CAPABILITY-MAP by-hand
   items. **Accept:** the checkpoint test passes; Aflos's rule check (no
   new clippy findings or rustfmt hunks against `main`).
 

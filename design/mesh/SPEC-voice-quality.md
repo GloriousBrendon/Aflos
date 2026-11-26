@@ -1,7 +1,7 @@
 # Spec: `voice-quality` (Aflos)
 
 Status: **APPROVED 2026-11-26** ("go with recommendations": Q1 to Q5 as
-recommended). 0.5.2 ships as built; this is **0.5.3**. Plan:
+recommended). 0.5.2 ships as built; this is **0.5.4** (0.5.3 went out first with Log out). Plan:
 [PLAN-voice-quality.md](PLAN-voice-quality.md). Depends on [`audio`](SPEC-audio.md) as built
 for 0.5.2 (Mesh-Node PR #7, Aflos PR #20).
 
