@@ -169,7 +169,13 @@ hook may be enough, and I stop to ask you.
   stay relayed; turned off, relayed again); a report reaches the owner's
   devices and no other member's.
 
-**Checkpoint B (short report).** All Mesh-Node tests and clippy are green, and
+**Checkpoint B: passed 2026-11-26.** 460 Mesh-Node tests and clippy
+green. Idle, one unlocked helper on a local relay, release builds, two runs
+each: 0.4.1 used 0.03% CPU and 37 to 39 MiB; with two endpoints, 0.02 to
+0.03% and 37 to 40 MiB (noise), and 2 more sockets. Relay traffic wasn't
+measured (a local relay); keep-alives double, as P3 said.
+
+**Checkpoint B (as planned).** All Mesh-Node tests and clippy are green, and
 idle CPU and relay traffic are measured with two endpoints (P3's cost),
 against 0.4.1. Mesh-Node is tagged `v0.5.0` only when Aflos 0.5.0 ships.
 
