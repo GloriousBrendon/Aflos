@@ -105,6 +105,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          path: Aflos
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with: { merge-multiple: true }
       - name: Check the files and write SHA256SUMS
@@ -125,12 +130,20 @@ jobs:
             *.exe
             *.tar.gz
             SHA256SUMS
+      # This version's CHANGELOG.md section heads the notes; a dry run checks
+      # that it's there.
+      - name: Write the release notes
+        run: |
+          v=$(compgen -G 'aflos-*-linux-x86_64.tar.gz' | sed 's/^aflos-//; s/-linux-x86_64\.tar\.gz$//')
+          awk -v h="## $v" '$0 == h { f = 1; next } /^## / { f = 0 } f' Aflos/CHANGELOG.md > notes.md
+          grep -q . notes.md || { echo "::error::CHANGELOG.md has no ## $v section"; exit 1; }
+          cat notes.md
       - if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease \
-            --title "Aflos $GITHUB_REF_NAME" --notes-file - Aflos-Setup-*.exe aflos-*.tar.gz Mesh-Setup-*.exe mesh-*.tar.gz SHA256SUMS <<'EOF'
+          cat >> notes.md <<'EOF'
+
           A beta for friends.
 
           **Windows:** run `Aflos-Setup-*.exe`. It isn't signed, so Windows shows
@@ -145,3 +158,6 @@ jobs:
 
           Check your download against `SHA256SUMS`.
           EOF
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease \
+            --title "Aflos $GITHUB_REF_NAME" --notes-file notes.md \
+            Aflos-Setup-*.exe aflos-*.tar.gz Mesh-Setup-*.exe mesh-*.tar.gz SHA256SUMS
