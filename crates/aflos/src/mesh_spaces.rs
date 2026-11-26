@@ -341,6 +341,9 @@ pub(crate) struct Form {
     new_space: Option<String>,
     /// "+ New channel" under a Space's channels: the Space, and the name typed.
     quick: Option<(String, String)>,
+    /// A report being written: who about, the reason typed, and whether to
+    /// include their recent messages (P11).
+    report: Option<(String, String, bool)>,
 }
 
 #[derive(Debug, Clone)]
@@ -375,6 +378,14 @@ pub(crate) enum Msg {
     /// A member, made admin (true) or member.
     Role(String, bool),
     Kick(String),
+    /// Reporting a member to the owner (P11).
+    ReportStart(String),
+    ReportReason(String),
+    ReportInclude(bool),
+    ReportSend,
+    ReportCancel,
+    /// The owner is done with a report: who sent it, and when.
+    ReportDismiss(String, u64),
     Ban(String),
     Unban(String),
     /// Asks before `end`, `leave` or `transfer:<id>`, and does it on the
@@ -472,6 +483,9 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             let name = (open.as_ref())
                 .and_then(|id| m.spaces.iter().find(|x| x.id == *id))
                 .map(|x| x.name.clone());
+            if let Some(id) = &open {
+                node.space_change("spaceReports", &[id]);
+            }
             *f = Form {
                 settings: open,
                 name: name.unwrap_or_default(),
@@ -588,6 +602,40 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             node.space_change("spaceRole", &[s, &who, role]);
         }
         Msg::Kick(who) => node.space_change("spaceKick", &[s, &who]),
+        Msg::ReportStart(who) => f.report = Some((who, String::new(), false)),
+        Msg::ReportReason(reason) => {
+            if let Some(r) = &mut f.report {
+                r.1 = reason;
+            }
+        }
+        Msg::ReportInclude(on) => {
+            if let Some(r) = &mut f.report {
+                r.2 = on;
+            }
+        }
+        Msg::ReportCancel => f.report = None,
+        Msg::ReportSend => {
+            if let Some((who, reason, include)) = f.report.take() {
+                // Their latest few lines here, oldest first.
+                let quoted: Vec<&str> = match include {
+                    true => {
+                        let lines = m.space_lines.get(s).into_iter().flatten();
+                        let theirs: Vec<&str> = lines
+                            .filter(|(from, _)| *from == who)
+                            .map(|(_, t)| t.as_str())
+                            .collect();
+                        theirs[theirs.len().saturating_sub(5)..].to_vec()
+                    }
+                    false => Vec::new(),
+                };
+                let mut args = vec![s, who.as_str(), reason.trim()];
+                args.extend(quoted);
+                node.space_change("spaceReport", &args);
+            }
+        }
+        Msg::ReportDismiss(from, at) => {
+            node.space_change("spaceReportDismiss", &[s, &from, &at.to_string()])
+        }
         Msg::Ban(who) => node.space_change("spaceBan", &[s, &who]),
         Msg::Unban(who) => node.space_change("spaceUnban", &[s, &who]),
         Msg::Confirm(Some(what)) if f.confirm.as_deref() == Some(what.as_str()) => {
@@ -996,8 +1044,64 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
                     .push(act("Kick", p.text(), Some(Msg::Kick(m.id.clone())), p))
                     .push(act("Ban", p.danger(), Some(Msg::Ban(m.id.clone())), p));
             }
+            // A report goes to the owner, so not about them, nor by them.
+            if !may.owner && m.role != "owner" && space.role.is_some() {
+                row = row.push(act(
+                    "Report",
+                    p.text(),
+                    Some(Msg::ReportStart(m.id.clone())),
+                    p,
+                ));
+            }
         }
         col = col.push(row);
+        if let Some((who, reason, include)) = &f.report
+            && *who == m.id
+        {
+            let mark = if *include { "☑" } else { "☐" };
+            col = col
+                .push(input("space-report", "Why? Only the owner sees this.", reason, Msg::ReportReason, Msg::ReportSend))
+                .push(
+                    row![
+                        act(format!("{mark} Include their recent messages"), p.text(), Some(Msg::ReportInclude(!include)), p),
+                        act("Send to the owner", p.accent(), Some(Msg::ReportSend), p),
+                        act("Cancel", p.text_bright(), Some(Msg::ReportCancel), p),
+                    ]
+                    .spacing(6),
+                )
+                .push(
+                    text("Reports go to this Space's owner only, never to Aflos. You can block them too.")
+                        .size(12)
+                        .color(p.text_muted()),
+                );
+        }
+    }
+    let reports = mesh
+        .reports
+        .get(&space.id)
+        .filter(|r| may.owner && !r.is_empty());
+    if let Some(reports) = reports {
+        col = col.push(ui::section("reports", p));
+        for r in reports {
+            let who = |id: &str| name_in(mesh, Some(space), id);
+            let head = format!("{} reported {}: {}", who(&r.from), who(&r.about), r.reason);
+            let dismiss = act(
+                "Dismiss",
+                p.text(),
+                Some(Msg::ReportDismiss(r.from.clone(), r.at)),
+                p,
+            );
+            col = col.push(
+                row![
+                    text(head).size(13).color(p.text()).width(Length::Fill),
+                    dismiss
+                ]
+                .spacing(6),
+            );
+            for q in &r.quoted {
+                col = col.push(text(format!("“{q}”")).size(12).color(p.text_muted()));
+            }
+        }
     }
     if may.admin && !space.bans.is_empty() {
         col = col.push(ui::section("banned", p));

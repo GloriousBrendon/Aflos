@@ -35,6 +35,11 @@ pub(crate) fn node_args() -> Vec<String> {
 #[derive(Default)]
 pub(crate) struct Mesh {
     pub node: Option<mesh::Node>,
+    /// Reports members sent us, by Space, for the Spaces we own (P11).
+    pub reports: HashMap<String, Vec<mesh::SpaceReport>>,
+    /// The latest lines seen in each Space (author, text), so a report can
+    /// quote what someone said.
+    pub space_lines: HashMap<String, Vec<(String, String)>>,
     /// The latest report; `None` until the helper's first.
     pub identity: Option<mesh::Identity>,
     /// The identity has been opened once this run, so the other networks
@@ -390,6 +395,7 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             s.note = Some((func, true, message.to_string()));
         }
         mesh::Event::Net(net) => m.net = Some(net),
+        mesh::Event::SpaceReports(r) => drop(m.reports.insert(r.space, r.reports)),
         mesh::Event::Ticket(ticket) => {
             m.settings.busy = None;
             m.settings.ticket_copied = true;

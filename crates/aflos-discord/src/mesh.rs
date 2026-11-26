@@ -65,6 +65,8 @@ pub enum Event {
     /// A page of an open channel, newest last (`Node::space_open`); comes
     /// again while it's open when it changes.
     SpaceMessages(SpacePage),
+    /// The reports this device holds for a Space it owns (P11).
+    SpaceReports(SpaceReports),
     /// A new post by someone else in a channel.
     SpaceNotify(SpaceNotify),
     /// Someone is typing in a channel: their IDs.
@@ -272,6 +274,26 @@ pub struct SpacePage {
     /// Older lines exist (`Node::space_open` with `before`).
     #[serde(default)]
     pub more: bool,
+}
+
+/// A `meshSpaceReports`: what members reported to us, as a Space's owner.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SpaceReports {
+    pub space: String,
+    pub reports: Vec<SpaceReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SpaceReport {
+    /// Who reported, and who about (`mesh1…` IDs).
+    pub from: String,
+    pub about: String,
+    pub reason: String,
+    /// The messages the reporter included.
+    #[serde(default)]
+    pub quoted: Vec<String>,
+    /// When, Unix seconds: with `from`, what dismissing one names.
+    pub at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -922,6 +944,7 @@ fn line_event(line: &str) -> Option<Event> {
             serde_json::from_str::<Spaces>(payload).ok().map(|s| Event::Spaces(s.spaces))
         }
         "meshSpaceMessages" => serde_json::from_str(payload).ok().map(Event::SpaceMessages),
+        "meshSpaceReports" => serde_json::from_str(payload).ok().map(Event::SpaceReports),
         "meshCall" => serde_json::from_str(payload).ok().map(Event::Call),
         "meshVoice" => {
             let v: serde_json::Value = serde_json::from_str(payload).ok()?;
@@ -1161,6 +1184,25 @@ mod tests {
             panic!("no spaces")
         };
         assert!(on[0].direct_allowed);
+        let reports = r#"{"space":"aa11","reports":[{"from":"mesh1b","about":"mesh1c","reason":"spam","quoted":["buy now"],"at":7}]}"#;
+        let Some(Event::SpaceReports(reports)) = line_event(&line("meshSpaceReports", reports))
+        else {
+            panic!("no reports")
+        };
+        let r = &reports.reports[0];
+        assert_eq!(
+            (
+                reports.space.as_str(),
+                r.from.as_str(),
+                r.about.as_str(),
+                r.at
+            ),
+            ("aa11", "mesh1b", "mesh1c", 7)
+        );
+        assert_eq!(
+            (r.reason.as_str(), r.quoted.as_slice()),
+            ("spam", &["buy now".to_string()][..])
+        );
 
         let page = r#"{"space":"aa11","channel":"c1","more":false,"events":[{"id":"57dd","from":"mesh1b","text":"hi","edited":false,"replyTo":null,"attachments":[],"reactions":[],"late":false,"time":5,"sent":false}]}"#;
         let Some(Event::SpaceMessages(page)) = line_event(&line("meshSpaceMessages", page)) else {
