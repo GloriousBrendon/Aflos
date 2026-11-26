@@ -658,6 +658,11 @@ impl Node {
     pub fn link_finish(&self, username: &str, password: &str) {
         self.call("linkFinish", &[username, password]);
     }
+    /// Deletes this device's copy of the identity, if `password` is right;
+    /// answers with `Identity` (`none`) and the helper restarts, or `Error`.
+    pub fn remove_identity(&self, password: &str) {
+        self.call("idRemove", &[password]);
+    }
     /// Removes one of our other linked devices by its key; answers with `Identity`.
     pub fn remove_device(&self, key: &str) {
         self.call("deviceRemove", &[key]);

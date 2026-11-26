@@ -208,6 +208,9 @@ struct Settings {
     confirm: String,
     verdict: Option<(bool, String)>,
     export_password: String,
+    /// Remove from this device: the password, and whether it's been pressed once.
+    remove_password: String,
+    remove_armed: bool,
     /// Check an ID: what's pasted, and the safety number for it (with its QR).
     check: String,
     safety: Option<(mesh::Safety, Option<qr_code::Data>)>,
@@ -279,6 +282,11 @@ pub(crate) enum Msg {
     ExportPassword(String),
     Export,
     ExportTo(Option<PathBuf>),
+    /// Locks the identity (and stops keeping it unlocked): Log out.
+    LogOut,
+    RemovePassword(String),
+    /// Remove from this device: the first press arms it, the second sends.
+    RemoveIdentity,
     CheckInput(String),
     Check,
     CopyTicket,
@@ -428,6 +436,9 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             }
             if error.func == "idChangePassword" {
                 s.old.clear();
+            }
+            if error.func == "idRemove" {
+                (s.remove_password, s.remove_armed) = (String::new(), false);
             }
             s.note = Some((error.func, false, error.message));
         }
@@ -645,6 +656,28 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             s.busy = Some("idKeepUnlocked");
             s.note = None;
             node.keep_unlocked(on);
+        }
+        Msg::LogOut => {
+            if s.busy.is_none() {
+                s.busy = Some("idLock");
+                // Logged out means the password next time, not opening by itself.
+                if identity.as_ref().is_some_and(|i| i.keep_unlocked) {
+                    node.keep_unlocked(false);
+                }
+                node.lock();
+            }
+        }
+        Msg::RemovePassword(value) => (s.remove_password, s.remove_armed) = (value, false),
+        Msg::RemoveIdentity => {
+            if s.busy.is_none() && !s.remove_password.is_empty() {
+                if s.remove_armed {
+                    s.busy = Some("idRemove");
+                    s.note = None;
+                    node.remove_identity(&s.remove_password);
+                } else {
+                    s.remove_armed = true;
+                }
+            }
         }
         Msg::Old(value) => s.old = value,
         Msg::New(value) => {
@@ -1292,13 +1325,60 @@ pub(crate) fn manage(state: &App) -> Element<'_, Message> {
     .spacing(8)
     .extend(note("idExport"));
 
+    let log_out = column![
+        heading("log out", p),
+        text("Locks Aflos on this device. Your username and password open it again.")
+            .size(12)
+            .color(p.text()),
+        action("Log out", "idLock", Some(Msg::LogOut)),
+    ]
+    .spacing(8)
+    .extend(note("idLock"));
+
+    let only_device = identity.devices.len() <= 1;
+    let remove_warning = if only_device {
+        "This is your only device. Unless you've exported a backup, your account, friends, Spaces and messages are gone for good."
+    } else {
+        "Your other devices keep your account. Afterwards, remove this device from the list on one of them."
+    };
+    let remove_label = match (s.busy == Some("idRemove"), s.remove_armed) {
+        (true, _) => "One moment…",
+        (false, true) => "Really remove it? Click again",
+        (false, false) => "Remove from this device",
+    };
+    let remove = column![
+        heading("remove from this device", p),
+        text(remove_warning)
+            .size(12)
+            .color(if only_device { p.danger() } else { p.text() }),
+        field(
+            "YOUR PASSWORD",
+            &s.remove_password,
+            Msg::RemovePassword,
+            true,
+            Msg::RemoveIdentity,
+            p
+        ),
+        button(ui::sans(remove_label, 13.0, Weight::Semibold, p.danger()))
+            .on_press_maybe(
+                (s.busy.is_none() && !s.remove_password.is_empty())
+                    .then_some(Message::MeshForm(Msg::RemoveIdentity))
+            )
+            .padding([6, 12])
+            .style(flat_button_style(p)),
+    ]
+    .spacing(8)
+    .extend(note("idRemove"));
+
     scrollable(
-        column![id, friends, network, devices, keep, password, backup]
-            .spacing(22)
-            .padding(iced::Padding {
-                right: 12.0,
-                ..iced::Padding::ZERO
-            }),
+        column![
+            id, friends, network, devices, keep, password, backup, log_out, remove
+        ]
+        .spacing(22)
+        .padding(iced::Padding {
+            right: 12.0,
+            ..iced::Padding::ZERO
+        }),
     )
     .height(Length::Fill)
     .into()
