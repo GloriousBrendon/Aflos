@@ -1,6 +1,8 @@
 # Spec: `audio` (Aflos)
 
-Status: **DRAFT 2026-11-26**, for your review. No plan or code yet. Depends
+Status: **APPROVED 2026-11-26** ("go with your recommendations": Q1 to Q4
+as recommended). The 0.5.1 hotfix (Q1) is built; PLAN-audio for the rest
+(0.6.0) to write. Depends
 on [`calls`](SPEC-calls.md) as built in Mesh-Node v0.5.0.
 
 ## Objective
@@ -62,7 +64,12 @@ and no way to change any of it.
 - **Never:** audio leaves the device anywhere but the call it's for (the
   mic test stays local).
 
-## Open questions
+## Open questions (answered 2026-11-26)
+
+All four as recommended: a 0.5.1 hotfix first (gate minimum RMS 500 → 60,
+input volume slider, `callGain`); RNNoise kept; per-person volume now;
+the mic test is a meter plus "hear yourself".
+
 
 1. **A 0.5.1 hotfix first?** Recommended: yes. The gate's fixed minimum
    lowered and a simple input volume slider, out this week, so quiet mics
