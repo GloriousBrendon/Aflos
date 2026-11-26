@@ -38,6 +38,13 @@ need; Task 5 adds it for plugins that do.
   Windows equivalent is in Task 11). In `mesh-node`, a writer thread
   behind a 4-message queue owns the pipe: a full queue is `Late`, like a
   missed deadline, so a stuck `mesh-fx` never blocks the call.
+- **Task 3:** the scan lists each file's plugins (id, name, vendor) from
+  its descriptors; latency, editor and parameters are read when a plugin
+  is added to the chain, since they need an instance and one file can
+  hold hundreds of plugins. `fxScan` takes JSON (`dirs`, `fresh` for
+  Rescan); `CLAP_PATH` is honoured; `MESH_FX` overrides where `mesh-fx`
+  is found. Accept was checked with stand-in scanners (answering,
+  crashing, hanging) and by hand on LSP; the test plugins arrive in Task 7.
 
 ## Decisions taken while planning
 
@@ -101,7 +108,7 @@ need; Task 5 adds it for plugins that do.
   `mesh-node`. **Accept:** unit tests: frames round-trip in order; a
   malformed message ends `mesh-fx` cleanly; the client sees a dead
   process within 100 ms.
-- [ ] **Task 3: scanning.** `--scan`, `fx/scan.json` with its cache, the
+- [x] **Task 3: scanning.** `--scan`, `fx/scan.json` with its cache, the
   standard folders (F8) plus added ones; `fxScan` command,
   `meshFxPlugins` event. **Accept:** both test plugins listed; a file
   that isn't a plugin and one that crashes on load listed as broken; a
