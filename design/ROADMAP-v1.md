@@ -1,6 +1,6 @@
 # Roadmap to Aflos 1.0
 
-Status: **DRAFT 2026-11-26**, for your review. Written from the capability
+Status: **DRAFT 2026-11-26**, R1, R3, R4 and R5 decided the same day (below); R2 open. Written from the capability
 map, the specs and what 0.5.0 does today. "1.0" here means: ready to
 market and sell to businesses. Each phase gets its spec and plan as usual;
 this file only orders the work. Versions follow the rule of 2026-11-26:
@@ -22,7 +22,25 @@ Not there yet: audio controls (gain, echo, meter); video and screen share
 in Aflos calls; macOS; mobile; a second seed; code signing; anything an
 organisation needs to run Aflos for its people.
 
-## Decisions to make before Phase 3 (yours)
+## Decided 2026-11-26
+
+- **R1: small teams of 5 to 50.** An organisation over 50 gets a
+  dedicated relay (and seed) when it needs one.
+- **R2: open.** Pricing and what's sold, you're planning it.
+- **R3: two apps, Personal and Business.** Business never has the Matrix,
+  Discord and WhatsApp clients (their terms). Personal may drop them too,
+  to stay out of trouble with those companies: **to decide in Phase 1**,
+  before Personal goes public.
+- **R4: no mobile.** Work happens on desktops; anyone on a phone is on an
+  outside network anyway. Phase 4 is macOS only.
+- **R5: admin powers are Business only.** Personal keeps today's promise:
+  nobody can recover a lost password or read anyone's messages. In
+  Business the organisation sets up its members' accounts (so it knows
+  their passwords), and an organisation device can keep every member's
+  backup key, for recovery and offboarding. Business's terms must say so
+  plainly: whoever holds those passwords and keys can open those accounts.
+
+## The questions as first asked
 
 | # | Question | Why it matters |
 |---|---|---|
@@ -52,6 +70,11 @@ What a stranger needs to install it, use it daily and not hit a wall.
 - **Reliability passes:** reconnects after sleep and network changes,
   mail after long offline spells, big files, many Spaces.
 - **A website and a privacy policy** that say plainly what's stored where.
+- **Whether Personal keeps the Matrix, Discord and WhatsApp clients**
+  (R3), decided before the public launch; if not, release builds leave
+  them out (they already build as separate helpers).
+- **Two editions from one codebase** (R3): a build switch for Personal and
+  Business, with their own name, installer and update channel.
 
 ## Phase 2: the foundation changes (0.6.0)
 
@@ -64,9 +87,9 @@ What a stranger needs to install it, use it daily and not hit a wall.
   remaining part; mesh-media's H.264 capture is there to reuse), 1:1 first,
   then small groups.
 
-## Phase 3: for organisations (0.7.0)
+## Phase 3: Aflos Business (0.7.0)
 
-Shaped by R1, R2 and R5. The likely set for small teams:
+For teams of 5 to 50 (R1); Business only (R3, R5):
 
 - **Organisations:** a set of Spaces and members under one owner and
   admins, with invite links (never listed or searchable) and offboarding
@@ -76,17 +99,20 @@ Shaped by R1, R2 and R5. The likely set for small teams:
   This is also the thing that can be sold hosted (R2 a).
 - **Within-organisation directory**, opt-in: members can find each other
   inside the organisation, still never outside it.
-- **Admin controls** chosen under R5: message expiry per Space (retention),
-  an owner's export of a Space's history, and, if you choose it, an opt-in
-  recovery key held by the organisation.
+- **Accounts the organisation sets up** (R5): an admin creates each
+  member's identity and password and hands the device over; an
+  organisation device (the "main PC") keeps every member's backup key, so
+  a lost password or a departed member is recoverable.
+- **Admin controls:** message expiry per Space (retention), an owner's
+  export of a Space's history, offboarding with the kept keys.
+- **A dedicated relay and seed for organisations over 50** (R1), hosted
+  by us.
 - **Granular roles and permissions** per channel.
 
-## Phase 4: platforms (0.8.0)
+## Phase 4: macOS (0.8.0)
 
 - **macOS** (the Rust stack builds there; needs signing and notarisation).
-- **Mobile** if R4 says before 1.0: a light client reached through seeds
-  and relays; push notifications need a design that keeps content off the
-  push service.
+  No mobile before 1.0 (R4).
 
 ## Phase 5: trust and scale (0.9.0)
 
@@ -112,5 +138,5 @@ Shaped by R1, R2 and R5. The likely set for small teams:
 ## What this file isn't
 
 Not dates: each phase is several specs, and their sizes come out of the
-plans. Not a commitment to every item: R1 to R5 will cut some of Phases 3
-and 4.
+plans. Not a commitment to every item: R2 (what's sold) may still reshape
+Phases 3 and 6.
