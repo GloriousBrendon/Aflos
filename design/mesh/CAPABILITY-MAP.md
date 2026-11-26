@@ -199,6 +199,11 @@ e2ee Checkpoint B's step 4 (a window restored from a backup shows the
 notes) was skipped by hand; the dm process test now checks that a device
 restored from a backup gets the whole history, so it isn't listed.
 
+- **Audio (PLAN-audio Checkpoint B):** a call on laptop speakers with
+  no echo heard back; a quiet mic (your friend's) heard at a normal
+  level; the meter, Test my mic and Test and hear myself; a person's
+  volume; on Linux and on Windows.
+
 ## Open questions
 
 - **Move to a new ID?** *Settled 2026-11-14 (your call, SPEC-spaces): not in this version; spaces lists what it leaves open under Known limits.* Was: settle before `spaces`. Every device holds the root

@@ -18,6 +18,57 @@ pub(crate) enum Tab {
     Add,
 }
 
+/// What the mic goes through in calls (SPEC-audio A3), as `callAudio`
+/// takes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct AudioPrefs {
+    pub gain: bool,
+    pub noise: bool,
+    pub echo: bool,
+    /// Manual sensitivity in dBFS; `None` is Automatic.
+    pub threshold: Option<f32>,
+    pub output: u32,
+}
+
+impl Default for AudioPrefs {
+    fn default() -> Self {
+        Self {
+            gain: true,
+            noise: true,
+            echo: true,
+            threshold: None,
+            output: 100,
+        }
+    }
+}
+
+impl AudioPrefs {
+    pub fn from_config(c: &crate::theme::Config) -> Self {
+        let d = Self::default();
+        Self {
+            gain: c.audio_gain.unwrap_or(d.gain),
+            noise: c.audio_noise.unwrap_or(d.noise),
+            echo: c.audio_echo.unwrap_or(d.echo),
+            threshold: c.audio_threshold.map(|t| t.clamp(-90.0, 0.0)),
+            output: c.output_volume.unwrap_or(d.output).min(200),
+        }
+    }
+
+    pub fn save(&self, c: &mut crate::theme::Config) {
+        (c.audio_gain, c.audio_noise, c.audio_echo) =
+            (Some(self.gain), Some(self.noise), Some(self.echo));
+        (c.audio_threshold, c.output_volume) = (self.threshold, Some(self.output));
+    }
+
+    pub fn json(&self) -> String {
+        serde_json::json!({
+            "gain": self.gain, "noise": self.noise, "echo": self.echo,
+            "threshold": self.threshold, "output": self.output,
+        })
+        .to_string()
+    }
+}
+
 /// Hide my IP as `mesh-node` should start with it: read at every start, so a
 /// restart after the switch changed keeps it.
 pub(crate) static HIDE_IP: std::sync::atomic::AtomicBool =
@@ -72,6 +123,14 @@ pub(crate) struct Mesh {
     pub hide_ip: bool,
     /// Calls' input volume in percent (config.toml's `input_volume`).
     pub input_volume: u32,
+    /// Calls' processing, as set in Voice & audio (SPEC-audio A3).
+    pub audio: AudioPrefs,
+    /// The mic's latest level and whether it went out (A5).
+    pub level: Option<(f32, bool)>,
+    /// The mic test while it runs: whether it plays back.
+    pub mic_test: Option<bool>,
+    /// Each person's volume in calls, by ID (A6).
+    pub person_volumes: std::collections::BTreeMap<String, u32>,
     /// Who's typing, by name, in which chat, and when it was heard.
     pub typing: Option<(String, Vec<String>, std::time::Instant)>,
     /// The last received file clicked, and what that did (`mesh_dm::on_click`).
@@ -397,6 +456,7 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             s.note = Some((func, true, message.to_string()));
         }
         mesh::Event::Net(net) => m.net = Some(net),
+        mesh::Event::AudioLevel { level, open } => m.level = Some((level, open)),
         mesh::Event::SpaceReports(r) => drop(m.reports.insert(r.space, r.reports)),
         mesh::Event::Ticket(ticket) => {
             m.settings.busy = None;
@@ -1656,6 +1716,37 @@ mod tests {
         assert!(describe(&c).ends_with(" · unlimited uses"));
         c.max_uses = Some(25);
         assert!(describe(&c).ends_with("up to 25 uses"));
+    }
+
+    #[test]
+    fn audio_settings_keep_and_send() {
+        let mut c = crate::theme::Config::default();
+        assert_eq!(
+            AudioPrefs::from_config(&c),
+            AudioPrefs::default(),
+            "all on, Automatic"
+        );
+        let set = AudioPrefs {
+            gain: false,
+            noise: true,
+            echo: false,
+            threshold: Some(-45.0),
+            output: 150,
+        };
+        set.save(&mut c);
+        assert_eq!(AudioPrefs::from_config(&c), set);
+        let v: serde_json::Value = serde_json::from_str(&set.json()).unwrap();
+        assert_eq!(
+            (
+                v["gain"].as_bool(),
+                v["echo"].as_bool(),
+                v["threshold"].as_f64(),
+                v["output"].as_u64()
+            ),
+            (Some(false), Some(false), Some(-45.0), Some(150))
+        );
+        let auto: serde_json::Value = serde_json::from_str(&AudioPrefs::default().json()).unwrap();
+        assert!(auto["threshold"].is_null(), "Automatic is null");
     }
 
     #[test]

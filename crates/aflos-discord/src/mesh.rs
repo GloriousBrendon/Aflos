@@ -77,6 +77,12 @@ pub enum Event {
     },
     /// Where our call stands (SPEC-calls): a DM call or a voice channel.
     Call(Call),
+    /// The mic's level after processing (dBFS), and whether it goes out:
+    /// about 15 a second in a call or the mic test (SPEC-audio A5).
+    AudioLevel {
+        level: f32,
+        open: bool,
+    },
     /// Who's in one voice channel now, by ID.
     Voice {
         space: String,
@@ -793,6 +799,22 @@ impl Node {
         self.call("callHangup", &[]);
     }
     /// Input volume for calls, 0 to 200 percent (SPEC-audio A3).
+    /// The switches, sensitivity and output volume, as `callAudio`'s JSON.
+    pub fn call_audio(&self, json: &str) {
+        self.call("callAudio", &[json]);
+    }
+    /// One person's volume for us, 0 to 200 percent.
+    pub fn call_volume(&self, id: &str, percent: u32) {
+        self.call("callVolume", &[id, &percent.to_string()]);
+    }
+    /// The mic test: on (and played back with `hear`), or off.
+    pub fn audio_test(&self, on: bool, hear: bool) {
+        match (on, hear) {
+            (true, true) => self.call("audioTest", &["on", "hear"]),
+            (true, false) => self.call("audioTest", &["on"]),
+            (false, _) => self.call("audioTest", &["off"]),
+        }
+    }
     pub fn call_gain(&self, percent: u32) {
         self.call("callGain", &[&percent.to_string()]);
     }
@@ -950,6 +972,13 @@ fn line_event(line: &str) -> Option<Event> {
         "meshSpaceMessages" => serde_json::from_str(payload).ok().map(Event::SpaceMessages),
         "meshSpaceReports" => serde_json::from_str(payload).ok().map(Event::SpaceReports),
         "meshCall" => serde_json::from_str(payload).ok().map(Event::Call),
+        "meshAudioLevel" => {
+            let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+            Some(Event::AudioLevel {
+                level: v["level"].as_f64()? as f32,
+                open: v["open"].as_bool().unwrap_or(false),
+            })
+        }
         "meshVoice" => {
             let v: serde_json::Value = serde_json::from_str(payload).ok()?;
             let people = v["people"]
@@ -1188,6 +1217,12 @@ mod tests {
             panic!("no spaces")
         };
         assert!(on[0].direct_allowed);
+        let Some(Event::AudioLevel { level, open }) =
+            line_event(&line("meshAudioLevel", r#"{"level":-31.5,"open":true}"#))
+        else {
+            panic!("no level")
+        };
+        assert_eq!((level, open), (-31.5, true));
         let reports = r#"{"space":"aa11","reports":[{"from":"mesh1b","about":"mesh1c","reason":"spam","quoted":["buy now"],"at":7}]}"#;
         let Some(Event::SpaceReports(reports)) = line_event(&line("meshSpaceReports", reports))
         else {

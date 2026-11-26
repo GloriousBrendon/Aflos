@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.5.2
+
+- Calls sound better: echo cancellation (no more hearing yourself through
+  someone's speakers), automatic gain (quiet mics brought up to a normal
+  level), and noise suppression, each with a switch in Settings, Voice &
+  audio.
+- Input sensitivity: Automatic, or set your own over a live level meter.
+- Test my mic, and Test and hear myself, before a call.
+- Output volume, and each person's own volume, in calls.
+- A call that falls behind (a busy or briefly frozen PC) catches up
+  instead of going quiet until the other person pauses.
+
 ## 0.5.1
 
 - A quiet microphone is heard in Aflos calls: 0.5.0's voice gate cut off

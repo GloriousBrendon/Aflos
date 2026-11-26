@@ -1705,6 +1705,8 @@ fn boot() -> (App, Task<Message>) {
     (app.mesh.muted_spaces, app.mesh.ptt) = (config.muted_spaces.clone(), config.push_to_talk);
     app.mesh.hide_ip = config.hide_ip;
     app.mesh.input_volume = config.input_volume.unwrap_or(100).min(200);
+    app.mesh.audio = mesh_ui::AudioPrefs::from_config(&config);
+    app.mesh.person_volumes = config.person_volumes.clone();
     mesh_ui::HIDE_IP.store(config.hide_ip, std::sync::atomic::Ordering::Relaxed);
     // With mesh-node, everything else waits until the Aflos identity is open.
     let task = if app.mesh_node.is_some() {
@@ -8698,7 +8700,7 @@ fn settings_page<'a>(session: &'a Session, state: &'a App, width: f32) -> Elemen
         ]
         .spacing(20)
         .into(),
-        SettingsPage::Voice => voice_page(session, state.mesh.ptt, state.mesh.input_volume, p),
+        SettingsPage::Voice => voice_page(session, &state.mesh, p),
         SettingsPage::Sounds => sounds_page(&state.sounds, p),
         SettingsPage::Keybinds => keybinds_page(p),
     };
@@ -9395,10 +9397,10 @@ fn rice_export<'a>(state: &'a App) -> Element<'a, Message> {
 
 fn voice_page<'a>(
     session: &'a Session,
-    ptt: bool,
-    gain: u32,
+    mesh: &mesh_ui::Mesh,
     p: &'a theme::Palette,
 ) -> Element<'a, Message> {
+    let (ptt, gain, prefs) = (mesh.ptt, mesh.input_volume, mesh.audio);
     let discord = match &session.discord_voice {
         Some(theme::DiscordVoice::Url(url)) => format!("The 🎧 button opens {url} for Discord voice."),
         Some(theme::DiscordVoice::Command(cmd)) => format!("The 🎧 button runs `{cmd}` for Discord voice."),
@@ -9416,6 +9418,7 @@ fn voice_page<'a>(
         ]
         .spacing(12)
         .align_y(iced::Alignment::Center),
+        audio_processing(mesh, prefs, p),
         button(text(format!("{} Push to talk in Aflos calls: hold Right Ctrl while Aflos is focused", if ptt { "☑" } else { "☐" })).size(13))
             .on_press(Message::MeshCall(mesh_calls::Msg::PttSetting(!ptt)))
             .padding([4, 0])
@@ -9426,6 +9429,136 @@ fn voice_page<'a>(
             .color(p.text_muted()),
     ]
     .spacing(20)
+    .into()
+}
+
+/// SPEC-audio A3 to A5: the switches, the sensitivity over the live meter,
+/// output volume and the mic test.
+fn audio_processing<'a>(
+    mesh: &mesh_ui::Mesh,
+    prefs: mesh_ui::AudioPrefs,
+    p: &'a theme::Palette,
+) -> Element<'a, Message> {
+    let call = |m: mesh_calls::Msg| Message::MeshCall(m);
+    let mark = |on: bool| if on { "☑" } else { "☐" };
+    let switch = |label: &str, on: bool, set: fn(&mut mesh_ui::AudioPrefs, bool)| {
+        let mut next = prefs;
+        set(&mut next, !on);
+        button(text(format!("{} {label}", mark(on))).size(13))
+            .on_press(call(mesh_calls::Msg::Audio(next, true)))
+            .padding([4, 0])
+            .style(flat_button_style(p))
+    };
+    // The meter: -70 to 0 dBFS, green while the mic goes out.
+    let (level, open) = mesh.level.unwrap_or((-90.0, false));
+    let fill = ((level + 70.0) / 70.0).clamp(0.0, 1.0);
+    let colour = if open { p.success() } else { p.text_muted() };
+    let filled = ((fill * 1000.0) as u16).clamp(1, 999);
+    let part = |portion: u16, colour: iced::Color| {
+        container(text(""))
+            .width(Length::FillPortion(portion))
+            .height(8)
+            .style(move |_| container::Style {
+                background: Some(colour.into()),
+                ..Default::default()
+            })
+    };
+    let bar = container(row![part(filled, colour), part(1000 - filled, p.surface())]).width(300);
+    let meter = row![
+        bar,
+        text(match mesh.level {
+            Some(_) => format!(
+                "{level:.0} dBFS · {}",
+                if open { "sending" } else { "not sending" }
+            ),
+            None => "test your mic to see your level".into(),
+        })
+        .size(12)
+        .color(p.text_muted()),
+    ]
+    .spacing(10)
+    .align_y(iced::Alignment::Center);
+    let auto = prefs.threshold.is_none();
+    let mut manual = prefs;
+    manual.threshold = Some(prefs.threshold.unwrap_or(-50.0));
+    let mut automatic = prefs;
+    automatic.threshold = None;
+    let mut sensitivity = row![
+        button(text(format!("{} Automatic input sensitivity", mark(auto))).size(13))
+            .on_press(call(mesh_calls::Msg::Audio(
+                if auto { manual } else { automatic },
+                true
+            )))
+            .padding([4, 0])
+            .style(flat_button_style(p))
+    ]
+    .spacing(12)
+    .align_y(iced::Alignment::Center);
+    if let Some(t) = prefs.threshold {
+        sensitivity = sensitivity.push(
+            slider(-70.0..=0.0, t, move |v| {
+                let mut next = prefs;
+                next.threshold = Some(v.round());
+                call(mesh_calls::Msg::Audio(next, false))
+            })
+            .on_release(call(mesh_calls::Msg::AudioSaved))
+            .width(220),
+        );
+        sensitivity = sensitivity.push(
+            text(format!("send above {t:.0} dBFS"))
+                .size(12)
+                .color(p.text_muted()),
+        );
+    }
+    let output = row![
+        text(format!("Output volume in Aflos calls: {}%", prefs.output))
+            .size(13)
+            .width(260),
+        slider(0.0..=200.0, prefs.output as f32, move |v| {
+            let mut next = prefs;
+            next.output = v.round() as u32;
+            call(mesh_calls::Msg::Audio(next, false))
+        })
+        .step(5.0_f32)
+        .on_release(call(mesh_calls::Msg::AudioSaved))
+        .width(220),
+    ]
+    .spacing(12)
+    .align_y(iced::Alignment::Center);
+    let test = match mesh.mic_test {
+        None => row![
+            button(text("Test my mic").size(13))
+                .on_press(call(mesh_calls::Msg::MicTest(Some(false))))
+                .padding([4, 10]),
+            button(text("Test and hear myself").size(13))
+                .on_press(call(mesh_calls::Msg::MicTest(Some(true))))
+                .padding([4, 10]),
+        ],
+        Some(_) => row![
+            button(text("Stop the test").size(13))
+                .on_press(call(mesh_calls::Msg::MicTest(None)))
+                .padding([4, 10])
+        ],
+    }
+    .spacing(8);
+    column![
+        switch(
+            "Automatic gain: quiet mics brought up to a normal level",
+            prefs.gain,
+            |a, on| a.gain = on
+        ),
+        switch("Noise suppression", prefs.noise, |a, on| a.noise = on),
+        switch(
+            "Echo cancellation: off is fine with headphones",
+            prefs.echo,
+            |a, on| a.echo = on
+        ),
+        sensitivity,
+        meter,
+        test,
+        output,
+    ]
+    .spacing(8)
     .into()
 }
 

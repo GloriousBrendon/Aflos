@@ -687,6 +687,36 @@ fn checkpoint_b_steps_1_to_6() {
     let _ = update(&mut a.app, Message::MeshHideIp(false));
     world.until(&mut a, "direct again", |app| path(app) == Some("Direct"));
 
+    // 11. PLAN-audio Task 9: the mic test's meter moves (A's tone goes out);
+    // a manual sensitivity above it reaches mesh-node (not sending); the
+    // test stops; a person's volume is kept.
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::MicTest(Some(false))),
+    );
+    world.until(&mut a, "the meter, sending", |app| {
+        app.mesh.level.is_some_and(|(_, open)| open)
+    });
+    let mut strict = a.app.mesh.audio;
+    strict.threshold = Some(0.0);
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::Audio(strict, true)),
+    );
+    world.until(&mut a, "not sending above 0 dBFS", |app| {
+        app.mesh.level.is_some_and(|(_, open)| !open)
+    });
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::MicTest(None)),
+    );
+    assert!(a.app.mesh.level.is_none(), "the meter stops with the test");
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::PersonVolume(id_b.clone(), 50)),
+    );
+    assert_eq!(a.app.mesh.person_volumes.get(&id_b), Some(&50));
+
     for copy in [a, b, c, d] {
         copy.helper.abort();
     }
