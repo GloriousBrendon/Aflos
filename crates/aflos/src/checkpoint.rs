@@ -85,7 +85,7 @@ impl World {
         ]);
         let helper = self.rt.spawn(mesh::run_with(
             self.exe.clone(),
-            args,
+            move || args.clone(),
             self.root.join(name),
             tx,
         ));
@@ -675,6 +675,17 @@ fn checkpoint_b_steps_1_to_6() {
     for copy in [&mut a, &mut b, &mut d] {
         world.until(copy, "all three in it", all_in);
     }
+
+    // 10. PLAN-connection-privacy Task 13: friends are direct; with Hide my
+    // IP on, A's path to B is relayed and says why; off, direct again.
+    let path = |app: &App| app.mesh.path_to(&id_b);
+    world.until(&mut a, "A direct with B", |app| path(app) == Some("Direct"));
+    let _ = update(&mut a.app, Message::MeshHideIp(true));
+    world.until(&mut a, "relayed with Hide my IP", |app| {
+        path(app) == Some("Relayed: Hide my IP is on")
+    });
+    let _ = update(&mut a.app, Message::MeshHideIp(false));
+    world.until(&mut a, "direct again", |app| path(app) == Some("Direct"));
 
     for copy in [a, b, c, d] {
         copy.helper.abort();

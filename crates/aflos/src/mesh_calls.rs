@@ -168,7 +168,15 @@ pub(crate) fn bar(state: &App) -> Option<Element<'_, Message>> {
     let status = match call.state.as_str() {
         "calling" => "Ringing…".to_string(),
         "ringing" => "is calling you".to_string(),
-        _ if call.speaking.is_empty() => "In call".to_string(),
+        // A DM call names its path (P8); a voice channel has many.
+        _ if call.speaking.is_empty() => match voice
+            .is_none()
+            .then(|| state.mesh.path_to(&call.with))
+            .flatten()
+        {
+            Some(path) => format!("In call · {path}"),
+            None => "In call".to_string(),
+        },
         _ => {
             let space = voice.and_then(|(s, _)| state.mesh.spaces.iter().find(|x| x.id == *s));
             let names: Vec<String> = call

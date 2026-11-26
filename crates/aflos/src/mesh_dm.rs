@@ -308,6 +308,14 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             }
         }
         mesh::Event::SpaceMessages(page) => {
+            let lines = state
+                .mesh
+                .space_lines
+                .entry(page.space.clone())
+                .or_default();
+            lines.extend(page.events.iter().map(|e| (e.from.clone(), e.text.clone())));
+            let extra = lines.len().saturating_sub(200);
+            lines.drain(..extra);
             let id = mesh_spaces::chat_id(&page.space, &page.channel);
             return self::event(
                 state,

@@ -18,10 +18,28 @@ pub(crate) enum Tab {
     Add,
 }
 
+/// Hide my IP as `mesh-node` should start with it: read at every start, so a
+/// restart after the switch changed keeps it.
+pub(crate) static HIDE_IP: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// `mesh-node`'s flags for its next start.
+pub(crate) fn node_args() -> Vec<String> {
+    match HIDE_IP.load(std::sync::atomic::Ordering::Relaxed) {
+        true => vec!["--hide-ip".into()],
+        false => Vec::new(),
+    }
+}
+
 /// The `mesh-node` side of the app.
 #[derive(Default)]
 pub(crate) struct Mesh {
     pub node: Option<mesh::Node>,
+    /// Reports members sent us, by Space, for the Spaces we own (P11).
+    pub reports: HashMap<String, Vec<mesh::SpaceReport>>,
+    /// The latest lines seen in each Space (author, text), so a report can
+    /// quote what someone said.
+    pub space_lines: HashMap<String, Vec<(String, String)>>,
     /// The latest report; `None` until the helper's first.
     pub identity: Option<mesh::Identity>,
     /// The identity has been opened once this run, so the other networks
@@ -50,6 +68,8 @@ pub(crate) struct Mesh {
     /// Push-to-talk is on (config.toml), and whether its key is held.
     pub ptt: bool,
     pub ptt_down: bool,
+    /// Hide my IP is on (config.toml's `hide_ip`).
+    pub hide_ip: bool,
     /// Who's typing, by name, in which chat, and when it was heard.
     pub typing: Option<(String, Vec<String>, std::time::Instant)>,
     /// The last received file clicked, and what that did (`mesh_dm::on_click`).
@@ -70,6 +90,17 @@ impl Mesh {
 
     /// A person's name: ours, our name for a friend, the name they gave
     /// themselves, else the start of their ID.
+    /// How we're connected with `id` now, for the call bar and the chat
+    /// header (SPEC-connection-privacy P8); `None` when we aren't.
+    pub fn path_to(&self, id: &str) -> Option<&'static str> {
+        let net = self.net.as_ref()?;
+        match net.paths.get(id)?.as_str() {
+            "direct" => Some("Direct"),
+            _ if net.hide_ip => Some("Relayed: Hide my IP is on"),
+            _ => Some("Relayed"),
+        }
+    }
+
     pub fn name_of(&self, id: &str) -> String {
         if self.my_id().as_deref() == Some(id) {
             return self.identity.as_ref().and_then(|i| i.username.clone()).unwrap_or_else(|| "you".to_string());
@@ -364,6 +395,7 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             s.note = Some((func, true, message.to_string()));
         }
         mesh::Event::Net(net) => m.net = Some(net),
+        mesh::Event::SpaceReports(r) => drop(m.reports.insert(r.space, r.reports)),
         mesh::Event::Ticket(ticket) => {
             m.settings.busy = None;
             m.settings.ticket_copied = true;
@@ -796,9 +828,15 @@ fn net_line(net: Option<&mesh::Net>) -> String {
         return "Connecting…".into();
     }
     let mut line = format!("Online · relay {}", net.relay.as_deref().map(relay_name).unwrap_or("?"));
-    if net.connections > 0 {
+    // People, by path (P8); an older mesh-node gives only the connections.
+    if net.direct_count + net.relayed_count > 0 {
+        line.push_str(&format!(" · {} direct, {} relayed", net.direct_count, net.relayed_count));
+    } else if net.connections > 0 {
         let s = if net.connections == 1 { "" } else { "s" };
         line.push_str(&format!(" · {} connection{s}{}", net.connections, if net.direct { ", direct" } else { "" }));
+    }
+    if net.hide_ip {
+        line.push_str(" · Hide my IP");
     }
     if net.published {
         line.push_str(" · findable by contacts");
@@ -1620,7 +1658,18 @@ mod tests {
 
     #[test]
     fn network_lines() {
-        let mut net = mesh::Net { state: mesh::NetState::Online, relay: Some("https://aps1-1.relay.n0.iroh.link./".into()), direct: false, connections: 0, published: false, keys: false };
+        let mut net = mesh::Net {
+            state: mesh::NetState::Online,
+            relay: Some("https://aps1-1.relay.n0.iroh.link./".into()),
+            direct: false,
+            connections: 0,
+            published: false,
+            keys: false,
+            paths: Default::default(),
+            direct_count: 0,
+            relayed_count: 0,
+            hide_ip: false,
+        };
         assert_eq!(net_line(Some(&net)), "Online · relay aps1");
         (net.connections, net.direct) = (2, true);
         assert_eq!(net_line(Some(&net)), "Online · relay aps1 · 2 connections, direct");
@@ -1628,6 +1677,14 @@ mod tests {
         assert!(net_line(Some(&net)).ends_with(" · findable by contacts"));
         net.relay = Some("https://relay.example.org:8443/".into());
         assert!(net_line(Some(&net)).starts_with("Online · relay relay.example.org ·"));
+        let mut people = net.clone();
+        (people.published, people.direct_count, people.relayed_count) = (false, 1, 2);
+        assert_eq!(
+            net_line(Some(&people)),
+            "Online · relay relay.example.org · 1 direct, 2 relayed"
+        );
+        people.hide_ip = true;
+        assert!(net_line(Some(&people)).ends_with(" · Hide my IP"));
         net.state = mesh::NetState::Connecting;
         assert_eq!(net_line(Some(&net)), "Connecting…");
         assert_eq!(net_line(None), "Offline");
