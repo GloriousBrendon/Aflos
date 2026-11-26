@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.5.3
+
+- Log out (Your ID): locks your account on this device; your username and
+  password open it again. If "Keep unlocked" was on, it's turned off.
+- Remove from this device (Your ID): deletes this device's copy of your
+  account, after your password and a second press. If it's your only
+  device, a warning says the account is gone for good without a backup.
+
 ## 0.5.2
 
 - Calls sound better: echo cancellation (no more hearing yourself through
