@@ -206,6 +206,10 @@ pub struct Space {
     /// Members may add their friends, not only admins.
     #[serde(default)]
     pub members_may_add: bool,
+    /// The owner lets members who are friends connect directly in this
+    /// Space (SPEC-connection-privacy P7); off by default.
+    #[serde(default)]
+    pub direct_allowed: bool,
     /// Banned IDs (shown to admins, to unban).
     #[serde(default)]
     pub bans: Vec<String>,
@@ -1151,6 +1155,12 @@ mod tests {
         assert_eq!((news.category.as_deref(), news.admins_post), (Some("k1"), true));
         assert_eq!((club.members[1].name.as_str(), club.members[1].role.as_str()), ("bea", "member"));
         assert_eq!((club.unread(), club.mentions()), (2, 1));
+        assert!(!club.direct_allowed, "off unless meshSpaces says so");
+        let on = r#"{"spaces":[{"id":"aa11","name":"club","role":"owner","channels":[],"members":[],"directAllowed":true}]}"#;
+        let Some(Event::Spaces(on)) = line_event(&line("meshSpaces", on)) else {
+            panic!("no spaces")
+        };
+        assert!(on[0].direct_allowed);
 
         let page = r#"{"space":"aa11","channel":"c1","more":false,"events":[{"id":"57dd","from":"mesh1b","text":"hi","edited":false,"replyTo":null,"attachments":[],"reactions":[],"late":false,"time":5,"sent":false}]}"#;
         let Some(Event::SpaceMessages(page)) = line_event(&line("meshSpaceMessages", page)) else {

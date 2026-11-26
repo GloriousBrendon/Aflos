@@ -200,9 +200,14 @@ pub(crate) fn pane<'a>(
         .align_y(iced::Alignment::Center),
         ui::mono(
             format!(
-                "{} channels · {} members",
+                "{} channels · {} members{}",
                 space.channels.len(),
-                space.members.len()
+                space.members.len(),
+                if space.direct_allowed {
+                    " · direct connections on"
+                } else {
+                    ""
+                }
             ),
             11.0,
             p.text_muted()
@@ -363,6 +368,8 @@ pub(crate) enum Msg {
     CategoryCreate,
     CategoryDelete(String),
     MembersMayAdd(bool),
+    /// The owner's "Allow direct connections with members" (P7).
+    Direct(bool),
     AddPick(Pick),
     Add,
     /// A member, made admin (true) or member.
@@ -567,6 +574,9 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             "spaceMembersMayAdd",
             &[s, if on { "true" } else { "false" }],
         ),
+        Msg::Direct(on) => {
+            node.space_change("spaceDirect", &[s, if on { "true" } else { "false" }])
+        }
         Msg::AddPick(pick) => f.add = pick.id,
         Msg::Add => {
             if let Some(who) = f.add.take() {
@@ -821,8 +831,23 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
                 p.text(),
                 Some(Msg::MembersMayAdd(!space.members_may_add)),
                 p,
-            ))
-            .push(ui::section("categories", p));
+            ));
+        if may.owner {
+            let mark = if space.direct_allowed { "☑" } else { "☐" };
+            col = col
+                .push(act(
+                    format!("{mark} Allow direct connections with members"),
+                    p.text(),
+                    Some(Msg::Direct(!space.direct_allowed)),
+                    p,
+                ))
+                .push(
+                    text("Members who are friends connect directly in this Space: faster voice, and they can learn each other's IP address. Members who aren't friends stay relayed.")
+                        .size(12)
+                        .color(p.text_muted()),
+                );
+        }
+        col = col.push(ui::section("categories", p));
         let mut cats: Vec<&mesh::SpaceCategory> = space.categories.iter().collect();
         cats.sort_by_key(|c| c.position);
         for c in cats {
@@ -935,6 +960,10 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
                 p,
             );
             col = col.push(row![pick, go].spacing(6).align_y(iced::Alignment::Center));
+            if space.direct_allowed {
+                let note = "Direct connections are on: members who are friends connect directly in this Space.";
+                col = col.push(text(note).size(12).color(p.text_muted()));
+            }
         }
     }
     let me = mesh.my_id();
