@@ -1,6 +1,6 @@
 # Plan: `connection-privacy` (Aflos)
 
-Status: **DRAFT 2026-11-26**, for your review. Built from
+Status: **APPROVED 2026-11-26** (with the recommended answers below). Built from
 [SPEC-connection-privacy.md](SPEC-connection-privacy.md) (approved
 2026-11-25). Target: **0.5.0**, with SPEC-social revision 2 (PR #9). Decision
 numbers (P1 to P14) are the spec's.
