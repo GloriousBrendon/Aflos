@@ -26,6 +26,19 @@ with LSP instead. Found while building: the VST3 host gives no
 `IMessage` (`createInstance` returns not-implemented), which LSP doesn't
 need; Task 5 adds it for plugins that do.
 
+## Changes while building
+
+- **Task 2:** audio messages are `[seq u32][960 × i16]`, not bare frames,
+  and control JSON carries an `id`: a frame that came back after its
+  deadline is skipped, never taken for the next one. The protocol is one
+  file (`mesh-fx/src/proto.rs`) that `mesh-node` includes by path, so
+  `mesh-node` doesn't depend on `mesh-fx` or build plugin libraries.
+  `mesh-fx serve` writes the protocol to a duplicate of stdout and points
+  stdout at stderr, so a plugin that prints can't corrupt it (Linux; the
+  Windows equivalent is in Task 11). In `mesh-node`, a writer thread
+  behind a 4-message queue owns the pipe: a full queue is `Late`, like a
+  missed deadline, so a stuck `mesh-fx` never blocks the call.
+
 ## Decisions taken while planning
 
 - **The plugin host is a new crate and binary in Mesh-Node, `mesh-fx`**,
@@ -84,7 +97,7 @@ need; Task 5 adds it for plugins that do.
   `cargo check` for Windows passes. **Checkpoint A: hard stop only if a
   format can't be hosted or its editor can't open**; otherwise a short
   report and on.
-- [ ] **Task 2: the pipe protocol** in `mesh-fx` and its client thread in
+- [x] **Task 2: the pipe protocol** in `mesh-fx` and its client thread in
   `mesh-node`. **Accept:** unit tests: frames round-trip in order; a
   malformed message ends `mesh-fx` cleanly; the client sees a dead
   process within 100 ms.
