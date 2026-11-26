@@ -362,6 +362,17 @@ pub struct Net {
     /// Those records carry this device's e2ee keys: secure messages ready.
     #[serde(default)]
     pub keys: bool,
+    /// Each connected person's path, `direct` or `relay`, by `mesh1…` ID
+    /// (SPEC-connection-privacy P8). Never an address.
+    #[serde(default)]
+    pub paths: std::collections::BTreeMap<String, String>,
+    #[serde(default, rename = "directCount")]
+    pub direct_count: usize,
+    #[serde(default, rename = "relayedCount")]
+    pub relayed_count: usize,
+    /// Hide my IP is on: everyone, friends too, is relayed (P6).
+    #[serde(default, rename = "hideIp")]
+    pub hide_ip: bool,
 }
 
 /// A `meshPing`: who answered, by which path, and how fast.
@@ -755,6 +766,10 @@ impl Node {
     pub fn call_hangup(&self) {
         self.call("callHangup", &[]);
     }
+    /// Hide my IP on or off (SPEC-connection-privacy P6).
+    pub fn net_privacy(&self, hide: bool) {
+        self.call("netPrivacy", &[if hide { "true" } else { "false" }]);
+    }
     pub fn call_mute(&self, on: bool) {
         self.call("callMute", &[if on { "true" } else { "false" }]);
     }
@@ -782,16 +797,23 @@ impl Node {
 
 /// Runs `mesh-node --data <data>` for as long as `events` is open, restarting
 /// it when it exits (the same backoff as `whatsapp::run_native`).
-pub async fn run(exe: PathBuf, data: PathBuf, events: mpsc::UnboundedSender<Event>) {
-    run_with(exe, Vec::new(), data, events).await;
+/// `args` gives its flags at each start, so a restart after a setting
+/// changed (Hide my IP) starts it as the setting now is.
+pub async fn run(
+    exe: PathBuf,
+    args: impl Fn() -> Vec<String>,
+    data: PathBuf,
+    events: mpsc::UnboundedSender<Event>,
+) {
+    run_with(exe, args, data, events).await;
 }
 
 /// `run`, with more flags for `mesh-node` (a test's relay and seed).
-pub async fn run_with(exe: PathBuf, args: Vec<String>, data: PathBuf, events: mpsc::UnboundedSender<Event>) {
+pub async fn run_with(exe: PathBuf, args: impl Fn() -> Vec<String>, data: PathBuf, events: mpsc::UnboundedSender<Event>) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     while !events.is_closed() {
         let mut cmd = tokio::process::Command::new(&exe);
-        cmd.args(&args).arg("--data").arg(&data).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true);
+        cmd.args(args()).arg("--data").arg(&data).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true);
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         let mut child = match cmd.spawn() {

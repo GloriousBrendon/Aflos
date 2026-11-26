@@ -1436,6 +1436,8 @@ enum Message {
     MeshForm(mesh_ui::Msg),
     MeshSpace(mesh_spaces::Msg),
     MeshCall(mesh_calls::Msg),
+    /// The Hide my IP switch (SPEC-connection-privacy P6).
+    MeshHideIp(bool),
     /// Join a Discord voice channel, or call a Discord DM.
     DiscordJoin(String),
     /// Stop ringing for this Discord call here.
@@ -1701,6 +1703,8 @@ fn boot() -> (App, Task<Message>) {
         drop_hover: false,
     };
     (app.mesh.muted_spaces, app.mesh.ptt) = (config.muted_spaces.clone(), config.push_to_talk);
+    app.mesh.hide_ip = config.hide_ip;
+    mesh_ui::HIDE_IP.store(config.hide_ip, std::sync::atomic::Ordering::Relaxed);
     // With mesh-node, everything else waits until the Aflos identity is open.
     let task = if app.mesh_node.is_some() {
         Task::none()
@@ -1980,6 +1984,15 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         Message::MeshForm(msg) => mesh_ui::update(state, msg),
         Message::MeshSpace(msg) => mesh_spaces::update(state, msg),
         Message::MeshCall(msg) => mesh_calls::update(state, msg),
+        Message::MeshHideIp(on) => {
+            state.mesh.hide_ip = on;
+            mesh_ui::HIDE_IP.store(on, std::sync::atomic::Ordering::Relaxed);
+            persist(|c| c.hide_ip = on);
+            if let Some(node) = &state.mesh.node {
+                node.net_privacy(on);
+            }
+            Task::none()
+        }
         Message::RestoreFinished(Err(err)) => {
             state.matrix_login.error = Some(format!("Your Matrix session expired; sign in again ({err})"));
             Task::none()
@@ -4860,7 +4873,7 @@ fn mesh_events(exe: &PathBuf) -> impl iced::futures::Stream<Item = Message> + us
     iced::stream::channel(64, async move |mut output: iced::futures::channel::mpsc::Sender<Message>| {
         use iced::futures::SinkExt;
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(mesh::run(exe, data_dir().join("node"), tx));
+        tokio::spawn(mesh::run(exe, mesh_ui::node_args, data_dir().join("node"), tx));
         while let Some(event) = rx.recv().await {
             if output.send(Message::Mesh(event)).await.is_err() {
                 break;
@@ -6637,6 +6650,13 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
                     .push(flat(if archived { "Unarchive" } else { "Archive" }, p.text(), Message::WaArchive(channel.id.clone(), !archived)))
                     .push(flat("Delete", p.text_muted(), Message::WaDeleteAsk(channel.id.clone())));
             }
+        }
+        // An Aflos DM: how we're connected with them now (P8).
+        if channel.dm
+            && channel.network == Network::Mesh
+            && let Some(path) = state.mesh.path_to(&channel.id)
+        {
+            header = header.push(ui::mono(path, 11.0, p.text_muted()));
         }
         // An Aflos DM with a friend (not a group): the call button.
         if channel.dm && channel.network == Network::Mesh && state.mesh.call.is_none() {
@@ -8660,6 +8680,19 @@ fn settings_page<'a>(session: &'a Session, state: &'a App, width: f32) -> Elemen
         SettingsPage::Accounts => accounts::page(state, if width > 1300.0 { 4 } else { 2 }),
         SettingsPage::Privacy => column![
             page_header("Privacy & E2EE", "Your message keys, backed up so they follow you.", p),
+            column![
+                button(text(format!("{} Hide my IP", if state.mesh.hide_ip { "☑" } else { "☐" })).size(13))
+                    .on_press(Message::MeshHideIp(!state.mesh.hide_ip))
+                    .padding([4, 0])
+                    .style(flat_button_style(p)),
+                text(
+                    "Everyone reaches you through a relay, friends too. Calls get slower (about a third of a second more delay in South Africa). \
+                     Off, only friends get a direct connection; nobody else can learn your IP address."
+                )
+                .size(13)
+                .color(p.text_muted()),
+            ]
+            .spacing(4),
             backup_view(&session.backup, p),
         ]
         .spacing(20)

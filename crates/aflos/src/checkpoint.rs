@@ -85,7 +85,7 @@ impl World {
         ]);
         let helper = self.rt.spawn(mesh::run_with(
             self.exe.clone(),
-            args,
+            move || args.clone(),
             self.root.join(name),
             tx,
         ));

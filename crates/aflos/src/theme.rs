@@ -376,6 +376,9 @@ pub struct Config {
     /// Aflos calls send while Right Ctrl is held, instead of on voice.
     #[serde(default)]
     pub push_to_talk: bool,
+    /// Hide my IP (Aflos network): everyone, friends too, is relayed.
+    #[serde(default)]
+    pub hide_ip: bool,
 }
 
 /// The animated backgrounds (see rain.rs).
