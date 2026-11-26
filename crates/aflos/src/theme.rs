@@ -382,6 +382,21 @@ pub struct Config {
     /// Aflos calls' input volume, in percent (100 when unset).
     #[serde(default)]
     pub input_volume: Option<u32>,
+    /// Aflos calls' processing (SPEC-audio A3); `None` is the default.
+    #[serde(default)]
+    pub audio_gain: Option<bool>,
+    #[serde(default)]
+    pub audio_noise: Option<bool>,
+    #[serde(default)]
+    pub audio_echo: Option<bool>,
+    /// A manual input sensitivity in dBFS; unset is Automatic.
+    #[serde(default)]
+    pub audio_threshold: Option<f32>,
+    #[serde(default)]
+    pub output_volume: Option<u32>,
+    /// Each person's volume in Aflos calls, by `mesh1…` ID, in percent.
+    #[serde(default)]
+    pub person_volumes: std::collections::BTreeMap<String, u32>,
 }
 
 /// The animated backgrounds (see rain.rs).
