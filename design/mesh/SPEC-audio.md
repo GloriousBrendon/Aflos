@@ -2,7 +2,7 @@
 
 Status: **APPROVED 2026-11-26** ("go with your recommendations": Q1 to Q4
 as recommended). The 0.5.1 hotfix (Q1) is built; PLAN-audio for the rest
-(0.6.0) to write. Depends
+(0.5.x) to write. Depends
 on [`calls`](SPEC-calls.md) as built in Mesh-Node v0.5.0.
 
 ## Objective
@@ -73,7 +73,7 @@ the mic test is a meter plus "hear yourself".
 
 1. **A 0.5.1 hotfix first?** Recommended: yes. The gate's fixed minimum
    lowered and a simple input volume slider, out this week, so quiet mics
-   work now; the full chain in 0.6.0.
+   work now; the full chain in later 0.5.x releases.
 2. **Noise suppression:** keep RNNoise (recommended: in, tested, strong on
    fans and keyboards), use sonora's (lighter, one library), or let people
    pick?
