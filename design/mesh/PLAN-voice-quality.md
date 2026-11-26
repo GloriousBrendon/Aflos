@@ -1,6 +1,6 @@
 # Plan: `voice-quality` (Aflos)
 
-Status: **DRAFT 2026-11-26**, waiting on approval. Built from
+Status: **APPROVED 2026-11-26** ("approved, start the spike"). Built from
 [SPEC-voice-quality.md](SPEC-voice-quality.md) (approved 2026-11-26).
 Ships as **0.5.3** (compatible: nothing on the wire changes that 0.5.1 or
 0.5.2 can't decode). 0.5.2 ships first, as built.
