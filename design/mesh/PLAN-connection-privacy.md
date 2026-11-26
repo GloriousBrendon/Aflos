@@ -62,11 +62,52 @@ Checkpoint A, and only if the spike disagrees with the spec.
     each person's path.
   - Q6: decided later, when there's a mobile client.
 
+## Changes while building (2026-11-26)
+
+- **Spike result (Task 1):** (a) a relay-only endpoint gives a peer no
+  candidates; (b) refusing a peer never reliably keeps your candidates back
+  (refused in our hello: always leaked; refused in iroh's `after_handshake`
+  hook: leaked in 2 runs of 3, it races them); (c) two endpoints with
+  different keys share one relay fine. So P3 stands, and there's **no
+  `after_handshake` hook**: it can't tell a friend's direct key from anyone
+  else's anyway, and `Allow` after the hello does the refusing.
+- **The direct key isn't in the address record (Task 3 changed).** Every
+  version 2 field is length-checked, so a version 3 record would be
+  unreadable to 0.4.x and a 0.4.x friend couldn't find you at all. Instead
+  friends and own devices are told it over their relayed connection, on a
+  `direct` service (the `DirectCert` and the direct node's relay), at the
+  start of each presence stream, when an own device connects, when the
+  direct node first has a relay, and after a rotation. Records stay version
+  2, 0.4.x friends stay relayed, and the direct key is never on a seed, even
+  sealed. The cost: a fresh connection to a friend starts relayed, and goes
+  direct from the next message on.
+- **The direct key is derived, not stored:** from the device secret and its
+  issue time, kept in `direct-issued` beside the identity. The keystore
+  format doesn't change; a lost file means a fresh key (the safe side).
+- **Sends never wait on the direct key:** the direct node is used only over
+  an open direct connection; otherwise a send goes relayed while the direct
+  node dials in the background for next time.
+- **Space traffic with our own devices may go direct** (`relayed()`); only
+  other people are held to P14.
+- **Hide my IP swaps the direct node in place** instead of restarting
+  networking: on closes it (it never binds at all when started with
+  `--hide-ip`), off starts a fresh key through the rotation path.
+- **P7 needs no special routing:** only friends are ever on the direct
+  node, so a Space that allows direct just uses both nodes; a batch for
+  several Spaces is relayed unless every one allows it.
+- **Reports (P11) are their own message** (layout 4), sent only to the
+  owner's devices and queued on the reporter's device until one takes it
+  (retried on connect and every refresh, for 30 days). The owner keeps
+  them in a sealed `reports` file. (You chose this over an owner-only
+  entry in the Space log, which would have changed its saved format.)
+  Spaces have no "accept" step, so P7's notice shows on the add-member row
+  and the Space header.
+
 ## Tasks
 
 ### Phase 0: the spike (Mesh-Node, about 3 hours)
 
-- [ ] **Task 1: Spike, `tests/two_endpoints.rs` (ignored by default).** On
+- [x] **Task 1: Spike, `tests/two_endpoints.rs` (ignored by default).** On
   the local relay: endpoint A is normal, A′ is relay-only, and B is a peer.
   Capture what B sees, through iroh's remote info and B's candidates (the
   `tests/candidates.rs` method). Check (a) B connected to A′ gets no
@@ -81,30 +122,30 @@ hook may be enough, and I stop to ask you.
 
 ### Phase 1: the engine (Mesh-Node)
 
-- [ ] **Task 2: `DirectCert`** (`mesh-identity/src/direct.rs`): issue and check
+- [x] **Task 2: `DirectCert`** (`mesh-identity/src/direct.rs`): issue and check
   (signed by the device key, domain-separated, issued time). Keystore field
   and migration.
   **Accept:** unit tests for issue and check, a wrong signer, a damaged cert,
   and an old store opening with no direct key.
-- [ ] **Task 3: Address record format 3** (`addr.rs`): an optional
+- [x] ~~**Task 3: Address record format 3**~~ *(replaced: the `direct` service, see above; built in Task 5)* (`addr.rs`): an optional
   `DirectCert`; format 2 still opens.
   **Accept:** unit tests with and without the field, a format 2 record, and a
   cert for a different device being refused.
-- [ ] **Task 4: Hello on the direct endpoint** (`handshake.rs`): it sends and
+- [x] **Task 4: Hello on the direct endpoint** (`handshake.rs`): it sends and
   checks `DeviceCert` + `DirectCert`, and `Peer.device` becomes the device
   key. `Allow` plus an `after_handshake` hook admit only friends and own
   devices there.
   **Accept:** unit tests: a friend is admitted with the mapped device key; a
   non-friend holding the key is refused (code 6); a `DirectCert` from another
   device is `KeyMismatch`.
-- [ ] **Task 5: `Net` with two nodes** (`helper.rs`), plus `for_person` and
+- [x] **Task 5: `Net` with two nodes** (`helper.rs`), plus `for_person` and
   `for_space`. Every `net.node` call site is moved over. Records for friends
   carry the direct key; Space peers' never do.
   **Accept:** all existing tests pass unchanged, and the spec's process test
   "a friend pair goes direct; a non-friend Space pair is relayed and neither
   holds the other's IP" passes, together with "a non-friend who dials the
   device key gets no candidates".
-- [ ] **Task 6: Rotation and block** (P4, P5): rotation every 7 days and on
+- [x] **Task 6: Rotation and block** (P4, P5): rotation every 7 days and on
   unfriend or block. A `direct-moved` frame goes over current friend
   connections, then they close, and records are put again at once. Block
   closes both endpoints' connections.
@@ -112,14 +153,14 @@ hook may be enough, and I stop to ask you.
   key fails), rotation (a connected friend moves; a friend offline for more
   than 7 days, with the clock moved as the mailbox tests do, reconnects
   direct), and "a non-friend with the direct key is refused".
-- [ ] **Task 7: Hide my IP** (P6): `--hide-ip` and `netPrivacy`, with
+- [x] **Task 7: Hide my IP** (P6): `--hide-ip` and `netPrivacy`, with
   networking restarted.
   **Accept:** process test: a friend pair is relayed, and `meshNet` says so.
-- [ ] **Task 8: Status** (P8): `meshNet` gains `direct` and `relayed` counts;
+- [x] **Task 8: Status** (P8): `meshNet` gains `direct` and `relayed` counts;
   open chats and calls get the peer's path (`Direct`, `Relayed`, or
   `Relayed (Hide my IP)`). No addresses, and nothing new in logs (P13).
   **Accept:** unit test of the counts; process tests assert the path.
-- [ ] **Task 9: Space direct switch and reports** (P7, P11): the
+- [x] **Task 9: Space direct switch and reports** (P7, P11): the
   `DirectAllowed` change (owner only) and `for_space` following it. A
   `spaceReport { space, member, reason, messages? }` command writes to
   `<space>:reports`.
@@ -128,23 +169,29 @@ hook may be enough, and I stop to ask you.
   stay relayed; turned off, relayed again); a report reaches the owner's
   devices and no other member's.
 
-**Checkpoint B (short report).** All Mesh-Node tests and clippy are green, and
+**Checkpoint B: passed 2026-11-26.** 460 Mesh-Node tests and clippy
+green. Idle, one unlocked helper on a local relay, release builds, two runs
+each: 0.4.1 used 0.03% CPU and 37 to 39 MiB; with two endpoints, 0.02 to
+0.03% and 37 to 40 MiB (noise), and 2 more sockets. Relay traffic wasn't
+measured (a local relay); keep-alives double, as P3 said.
+
+**Checkpoint B (as planned).** All Mesh-Node tests and clippy are green, and
 idle CPU and relay traffic are measured with two endpoints (P3's cost),
 against 0.4.1. Mesh-Node is tagged `v0.5.0` only when Aflos 0.5.0 ships.
 
 ### Phase 2: Aflos (Mesh-Voice)
 
-- [ ] **Task 10: Privacy settings and status.** The Hide my IP switch with
+- [x] **Task 10: Privacy settings and status.** The Hide my IP switch with
   P6's line, `config.toml` `hide_ip`; the path shown in the call bar and the
   chat header; network status counts.
-- [ ] **Task 11: Space screens.** The owner's "Allow direct connections with
+- [x] **Task 11: Space screens.** The owner's "Allow direct connections with
   members" switch in Space settings; the notice on the add-to-Space screen
   and the Space header; Report on a member's profile and on a message (with
   a "include these messages" box); the owner's Reports list in Space
   settings.
-- [ ] **Task 12: 18+ (P12).** `TERMS.md`, the README, the installer's welcome
+- [x] **Task 12: 18+ (P12).** `TERMS.md`, the README, the installer's welcome
   page, and the AUR `pkgdesc`.
-- [ ] **Task 13: Checkpoint test step.** `checkpoint.rs` gets a step for
+- [x] **Task 13: Checkpoint test step.** `checkpoint.rs` gets a step for
   direct versus relayed and for Hide my IP, through the app's state.
   **Accept:** all tests pass, with no new clippy findings and no new rustfmt
   hunks (the Mesh-Voice rule; no whole-repo reformat).
