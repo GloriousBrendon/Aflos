@@ -89,6 +89,19 @@ Checkpoint A, and only if the spike disagrees with the spec.
   node dials in the background for next time.
 - **Space traffic with our own devices may go direct** (`relayed()`); only
   other people are held to P14.
+- **Hide my IP swaps the direct node in place** instead of restarting
+  networking: on closes it (it never binds at all when started with
+  `--hide-ip`), off starts a fresh key through the rotation path.
+- **P7 needs no special routing:** only friends are ever on the direct
+  node, so a Space that allows direct just uses both nodes; a batch for
+  several Spaces is relayed unless every one allows it.
+- **Reports (P11) are their own message** (layout 4), sent only to the
+  owner's devices and queued on the reporter's device until one takes it
+  (retried on connect and every refresh, for 30 days). The owner keeps
+  them in a sealed `reports` file. (You chose this over an owner-only
+  entry in the Space log, which would have changed its saved format.)
+  Spaces have no "accept" step, so P7's notice shows on the add-member row
+  and the Space header.
 
 ## Tasks
 
@@ -140,14 +153,14 @@ hook may be enough, and I stop to ask you.
   key fails), rotation (a connected friend moves; a friend offline for more
   than 7 days, with the clock moved as the mailbox tests do, reconnects
   direct), and "a non-friend with the direct key is refused".
-- [ ] **Task 7: Hide my IP** (P6): `--hide-ip` and `netPrivacy`, with
+- [x] **Task 7: Hide my IP** (P6): `--hide-ip` and `netPrivacy`, with
   networking restarted.
   **Accept:** process test: a friend pair is relayed, and `meshNet` says so.
-- [ ] **Task 8: Status** (P8): `meshNet` gains `direct` and `relayed` counts;
+- [x] **Task 8: Status** (P8): `meshNet` gains `direct` and `relayed` counts;
   open chats and calls get the peer's path (`Direct`, `Relayed`, or
   `Relayed (Hide my IP)`). No addresses, and nothing new in logs (P13).
   **Accept:** unit test of the counts; process tests assert the path.
-- [ ] **Task 9: Space direct switch and reports** (P7, P11): the
+- [x] **Task 9: Space direct switch and reports** (P7, P11): the
   `DirectAllowed` change (owner only) and `for_space` following it. A
   `spaceReport { space, member, reason, messages? }` command writes to
   `<space>:reports`.
@@ -162,17 +175,17 @@ against 0.4.1. Mesh-Node is tagged `v0.5.0` only when Aflos 0.5.0 ships.
 
 ### Phase 2: Aflos (Mesh-Voice)
 
-- [ ] **Task 10: Privacy settings and status.** The Hide my IP switch with
+- [x] **Task 10: Privacy settings and status.** The Hide my IP switch with
   P6's line, `config.toml` `hide_ip`; the path shown in the call bar and the
   chat header; network status counts.
-- [ ] **Task 11: Space screens.** The owner's "Allow direct connections with
+- [x] **Task 11: Space screens.** The owner's "Allow direct connections with
   members" switch in Space settings; the notice on the add-to-Space screen
   and the Space header; Report on a member's profile and on a message (with
   a "include these messages" box); the owner's Reports list in Space
   settings.
-- [ ] **Task 12: 18+ (P12).** `TERMS.md`, the README, the installer's welcome
+- [x] **Task 12: 18+ (P12).** `TERMS.md`, the README, the installer's welcome
   page, and the AUR `pkgdesc`.
-- [ ] **Task 13: Checkpoint test step.** `checkpoint.rs` gets a step for
+- [x] **Task 13: Checkpoint test step.** `checkpoint.rs` gets a step for
   direct versus relayed and for Hide my IP, through the app's state.
   **Accept:** all tests pass, with no new clippy findings and no new rustfmt
   hunks (the Mesh-Voice rule; no whole-repo reformat).
