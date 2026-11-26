@@ -70,9 +70,16 @@ What a stranger needs to install it, use it daily and not hit a wall.
 - **Reliability passes:** reconnects after sleep and network changes,
   mail after long offline spells, big files, many Spaces.
 - **A website and a privacy policy** that say plainly what's stored where.
-- **Whether Personal keeps the Matrix, Discord and WhatsApp clients**
-  (R3), decided before the public launch; if not, release builds leave
-  them out (they already build as separate helpers).
+- **The Matrix, Discord and WhatsApp clients leave both apps** for a
+  **plugins and themes store** (your idea, 2026-11-26), as VS Code's or
+  Obsidian's work: authors publish plugins from their own repositories,
+  the store is an index we can take entries off. The helpers already talk
+  to Aflos over a line protocol, so that's the plugin boundary; the store
+  adds signing, a permission prompt (what a plugin connects to), updates
+  and a kill switch. Ask a lawyer before Discord, WhatsApp or Teams
+  plugins are listed: running or curating the store may still count as
+  distributing them. Until the store exists, release builds of both apps
+  leave the helpers out.
 - **Two editions from one codebase** (R3): a build switch for Personal and
   Business, with their own name, installer and update channel.
 
