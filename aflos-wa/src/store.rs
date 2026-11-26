@@ -137,6 +137,44 @@ impl Store {
         }
     }
 
+    /// The same person under both IDs, in either order.
+    fn pair(&mut self, a: &str, b: &str) {
+        self.map_lid(a, b);
+        self.map_lid(b, a);
+    }
+
+    /// What a message says about who's who: `sender_alt` is the sender's
+    /// other ID, `recipient_alt` the recipient's. In a 1:1 the chat is the
+    /// other person, so it pairs with the recipient's ID when we sent it and
+    /// with the sender's when they did. Pairing the chat with every alt (as
+    /// before 0.5.1) gave a friend's LID our own number when we wrote to
+    /// them: their chat became our chat with ourselves.
+    pub fn learn_alts(
+        &mut self,
+        chat: &str,
+        sender: &str,
+        sender_alt: Option<&str>,
+        recipient_alt: Option<&str>,
+        from_me: bool,
+        group: bool,
+    ) {
+        if let Some(alt) = sender_alt {
+            self.pair(sender, alt);
+        }
+        let peer_alt = if from_me { recipient_alt } else { sender_alt };
+        if !group && let Some(alt) = peer_alt {
+            self.pair(chat, alt);
+        }
+    }
+
+    /// Forgets every LID that points at our own number but isn't ours:
+    /// what the pre-0.5.1 pairing learned wrongly.
+    pub fn forget_wrong_self(&mut self, own_lid: Option<&str>) {
+        let me = self.me.clone();
+        self.lid_pn
+            .retain(|lid, pn| *pn != me || Some(lid.as_str()) == own_lid);
+    }
+
     pub fn chat(&mut self, id: &str) -> &mut ChatData {
         self.chats.entry(id.to_owned()).or_default()
     }
