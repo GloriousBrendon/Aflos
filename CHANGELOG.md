@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.5.1
+
+- A quiet microphone is heard in Aflos calls: 0.5.0's voice gate cut off
+  speech below a fixed level, however clearly you spoke.
+- Input volume for Aflos calls (Settings, Voice & audio), 0 to 200%,
+  changed live during a call.
+
 ## 0.5.0
 
 - Only friends get a direct connection to you. Everyone else, including

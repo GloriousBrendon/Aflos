@@ -379,6 +379,9 @@ pub struct Config {
     /// Hide my IP (Aflos network): everyone, friends too, is relayed.
     #[serde(default)]
     pub hide_ip: bool,
+    /// Aflos calls' input volume, in percent (100 when unset).
+    #[serde(default)]
+    pub input_volume: Option<u32>,
 }
 
 /// The animated backgrounds (see rain.rs).

@@ -70,6 +70,8 @@ pub(crate) struct Mesh {
     pub ptt_down: bool,
     /// Hide my IP is on (config.toml's `hide_ip`).
     pub hide_ip: bool,
+    /// Calls' input volume in percent (config.toml's `input_volume`).
+    pub input_volume: u32,
     /// Who's typing, by name, in which chat, and when it was heard.
     pub typing: Option<(String, Vec<String>, std::time::Instant)>,
     /// The last received file clicked, and what that did (`mesh_dm::on_click`).

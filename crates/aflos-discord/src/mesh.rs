@@ -792,6 +792,10 @@ impl Node {
     pub fn call_hangup(&self) {
         self.call("callHangup", &[]);
     }
+    /// Input volume for calls, 0 to 200 percent (SPEC-audio A3).
+    pub fn call_gain(&self, percent: u32) {
+        self.call("callGain", &[&percent.to_string()]);
+    }
     /// Hide my IP on or off (SPEC-connection-privacy P6).
     pub fn net_privacy(&self, hide: bool) {
         self.call("netPrivacy", &[if hide { "true" } else { "false" }]);
