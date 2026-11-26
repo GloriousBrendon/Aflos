@@ -5,6 +5,27 @@ Status: **APPROVED 2026-11-26** ("approved, start the spike"). Built from
 Ships as **0.5.3** (compatible: nothing on the wire changes that 0.5.1 or
 0.5.2 can't decode). 0.5.2 ships first, as built.
 
+## The spike (done 2026-11-26, Mesh-Node PR #8)
+
+`mesh-fx` against LSP 1.2.37's Linux CLAP and VST3 builds (198 plugins
+each listed). **Processing:** both formats run 960-frame blocks at
+48 kHz in microseconds (mean 2-6 µs, worst under 61 µs, debug build);
+LSP's compressor cuts a loud tone (0.9 amplitude) by **−6.09 dB in
+both**, so the formats agree. **Editors:** the Parametric Equalizer x8
+draws its full UI in both: CLAP as a floating window it manages, VST3
+embedded in our X11 window (XWayland) with an `IRunLoop` on the frame
+(it registered 1 fd handler and 1 timer, fired 150 and 193 times in
+8 s). Plugins with sidechains run with the sidechain bus off. **Pipe:**
+a 20 ms frame's round trip through a child process, median **4 µs**,
+p99 7 µs, max 0.4 ms (release). **Windows:** `cargo check` passes.
+Not hard stop: Checkpoint A passes.
+
+Changed from the plan: the exact-gain check (±0.1 dB) needs the test
+plugins, which are built in Task 7 with CI; the spike proved processing
+with LSP instead. Found while building: the VST3 host gives no
+`IMessage` (`createInstance` returns not-implemented), which LSP doesn't
+need; Task 5 adds it for plugins that do.
+
 ## Decisions taken while planning
 
 - **The plugin host is a new crate and binary in Mesh-Node, `mesh-fx`**,
@@ -56,7 +77,7 @@ Ships as **0.5.3** (compatible: nothing on the wire changes that 0.5.1 or
 
 ### Phase 1: the engine (Mesh-Node)
 
-- [ ] **Task 1: the spike.** `mesh-fx` loads both test plugins, processes
+- [x] **Task 1: the spike.** `mesh-fx` loads both test plugins, processes
   960-frame blocks at 48 kHz, and opens a real plugin's editor on this
   Linux box. **Accept:** both gains measured within 0.1 dB of what they're
   set to; a block round trip through the pipe under 1 ms in release;
