@@ -9,6 +9,8 @@
 - Input sensitivity: Automatic, or set your own over a live level meter.
 - Test my mic, and Test and hear myself, before a call.
 - Output volume, and each person's own volume, in calls.
+- A call that falls behind (a busy or briefly frozen PC) catches up
+  instead of going quiet until the other person pauses.
 
 ## 0.5.1
 
