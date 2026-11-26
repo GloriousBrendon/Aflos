@@ -22,6 +22,9 @@ pub(crate) enum Msg {
     PttSetting(bool),
     /// Its key, pressed or let go.
     Ptt(bool),
+    /// The input volume slider moved (percent); let go: save it.
+    Gain(u32),
+    GainSaved,
 }
 
 /// Push-to-talk's key: Right Ctrl, typed into nothing (C10, Q4).
@@ -66,6 +69,7 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
         let (input, output) = devices(state);
         node.call_devices(&input, &output);
         node.call_ptt(ptt_mode(&state.mesh));
+        node.call_gain(state.mesh.input_volume);
     };
     match msg {
         Msg::Start(friend) => {
@@ -94,6 +98,14 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             node.call_ptt(ptt_mode(&state.mesh));
         }
         Msg::Ptt(_) => {}
+        Msg::Gain(percent) => {
+            state.mesh.input_volume = percent;
+            node.call_gain(percent);
+        }
+        Msg::GainSaved => {
+            let percent = state.mesh.input_volume;
+            persist(|c| c.input_volume = Some(percent));
+        }
     }
     Task::none()
 }

@@ -73,7 +73,7 @@ dependencies = [
 
 [[package]]
 name = "aflos"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "aflos-core",
  "aflos-discord",

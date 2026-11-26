@@ -1704,6 +1704,7 @@ fn boot() -> (App, Task<Message>) {
     };
     (app.mesh.muted_spaces, app.mesh.ptt) = (config.muted_spaces.clone(), config.push_to_talk);
     app.mesh.hide_ip = config.hide_ip;
+    app.mesh.input_volume = config.input_volume.unwrap_or(100).min(200);
     mesh_ui::HIDE_IP.store(config.hide_ip, std::sync::atomic::Ordering::Relaxed);
     // With mesh-node, everything else waits until the Aflos identity is open.
     let task = if app.mesh_node.is_some() {
@@ -8697,7 +8698,7 @@ fn settings_page<'a>(session: &'a Session, state: &'a App, width: f32) -> Elemen
         ]
         .spacing(20)
         .into(),
-        SettingsPage::Voice => voice_page(session, state.mesh.ptt, p),
+        SettingsPage::Voice => voice_page(session, state.mesh.ptt, state.mesh.input_volume, p),
         SettingsPage::Sounds => sounds_page(&state.sounds, p),
         SettingsPage::Keybinds => keybinds_page(p),
     };
@@ -9392,7 +9393,12 @@ fn rice_export<'a>(state: &'a App) -> Element<'a, Message> {
     .into()
 }
 
-fn voice_page<'a>(session: &'a Session, ptt: bool, p: &'a theme::Palette) -> Element<'a, Message> {
+fn voice_page<'a>(
+    session: &'a Session,
+    ptt: bool,
+    gain: u32,
+    p: &'a theme::Palette,
+) -> Element<'a, Message> {
     let discord = match &session.discord_voice {
         Some(theme::DiscordVoice::Url(url)) => format!("The 🎧 button opens {url} for Discord voice."),
         Some(theme::DiscordVoice::Command(cmd)) => format!("The 🎧 button runs `{cmd}` for Discord voice."),
@@ -9401,6 +9407,15 @@ fn voice_page<'a>(session: &'a Session, ptt: bool, p: &'a theme::Palette) -> Ele
     column![
         page_header("Voice & audio", "Devices for 1:1 calls, and Discord voice.", p),
         audio_view(session, p),
+        row![
+            text(format!("Input volume in Aflos calls: {gain}%")).size(13).width(260),
+            slider(0.0..=200.0, gain as f32, |v| Message::MeshCall(mesh_calls::Msg::Gain(v.round() as u32)))
+                .step(5.0_f32)
+                .on_release(Message::MeshCall(mesh_calls::Msg::GainSaved))
+                .width(220),
+        ]
+        .spacing(12)
+        .align_y(iced::Alignment::Center),
         button(text(format!("{} Push to talk in Aflos calls: hold Right Ctrl while Aflos is focused", if ptt { "☑" } else { "☐" })).size(13))
             .on_press(Message::MeshCall(mesh_calls::Msg::PttSetting(!ptt)))
             .padding([4, 0])
