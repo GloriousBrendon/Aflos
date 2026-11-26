@@ -5,6 +5,14 @@
 - Only friends get a direct connection to you. Everyone else, including
   people you share a Space with, reaches you only through a relay and can't
   learn your IP address. Friends on 0.4.x stay relayed until they update.
+- Hide my IP (Settings, Privacy & E2EE): everyone, friends too, reaches
+  you through a relay.
+- The status line, a call and a DM's header say whether you're connected
+  directly or through a relay.
+- A Space's owner can allow direct connections between members who are
+  friends.
+- Report a member to the Space's owner, with a reason and their recent
+  messages. Reports go to the owner only, never to Aflos.
 - Aflos is for people 18 and over (TERMS.md).
 
 ## 0.4.1
