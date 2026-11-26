@@ -1,6 +1,6 @@
 # Plan: `audio` (Aflos)
 
-Status: **DRAFT 2026-11-26**, for your review. Built from
+Status: **APPROVED 2026-11-26**. Built from
 [SPEC-audio.md](SPEC-audio.md) (approved 2026-11-26). Ships as **0.5.2**
 (small, compatible: the 0.5.x rule). The hotfix part (gate minimum, input
 volume, `callGain`) went out in 0.5.1.
