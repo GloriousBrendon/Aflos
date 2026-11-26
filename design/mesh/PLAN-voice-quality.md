@@ -14,7 +14,8 @@ Ships as **0.5.3** (compatible: nothing on the wire changes that 0.5.1 or
   `mesh-node` never links either.
 - **One `mesh-fx` per call or mic test**, started lazily when the chain
   has at least one plugin on. Nothing starts for people with no plugins,
-  so their calls are exactly 0.5.2's.
+  so their calls are exactly 0.5.2's: the built-in chain is the default
+  (F0), and adding a plugin never switches a built-in stage off.
 - **The pipe:** `mesh-fx`'s stdin/stdout carry `[tag u8][len u32 LE]
   [payload]` messages. Audio is tag 1, 960 `i16` samples (1,920 bytes) in
   and the same back; control is tag 2, one JSON object (`chain`, `edit`,
@@ -95,7 +96,8 @@ Ships as **0.5.3** (compatible: nothing on the wire changes that 0.5.1 or
 
 ### Phase 2: the app (Aflos) and Discord
 
-- [ ] **Task 8: Plugins in Voice & audio.** A list (name, format,
+- [ ] **Task 8: Plugins in Voice & audio** (F0: a collapsed "Advanced:
+  plugins" section below the built-in controls, empty by default). A list (name, format,
   latency, on/off, up/down, Edit, remove), Add from the scan list, Add
   folder, Rescan; the bypass notice with Restart plugins; the chain in
   `config.toml`, sent at start. **Accept:** unit tests: the chain
