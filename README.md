@@ -13,6 +13,8 @@ Discord-style Spaces and voice calls, end-to-end encrypted and with no central
 server. It can also sign in to your Matrix, Discord and WhatsApp accounts, so
 those chats sit in the same window.
 
+**Aflos is for people 18 and over** (see [TERMS.md](TERMS.md)).
+
 Aflos began as a Matrix client called Mesh. Some older notes still use that
 name (see [design/mesh/README.md](design/mesh/README.md)).
 

@@ -8,7 +8,7 @@
 pkgname=aflos-chat
 pkgver=0.4.1
 pkgrel=1
-pkgdesc="Encrypted, decentralized chat on its own peer-to-peer network, plus Matrix, Discord and WhatsApp"
+pkgdesc="Encrypted, decentralized chat on its own peer-to-peer network, plus Matrix, Discord and WhatsApp (for adults, 18+)"
 arch=('x86_64')
 url="https://github.com/GloriousBrendon/Aflos"
 license=('AGPL-3.0-or-later')
@@ -65,6 +65,7 @@ package() {
 
   # The name, logo and icons aren't under the AGPL (README: Trademark).
   install -Dm644 design/brand/aflos/LICENSE.txt "$pkgdir/usr/share/licenses/$pkgname/BRAND-LICENSE.txt"
+  install -Dm644 TERMS.md "$pkgdir/usr/share/doc/$pkgname/TERMS.md"
 
   install -Dm644 /dev/stdin "$pkgdir/usr/share/applications/aflos.desktop" <<EOF
 [Desktop Entry]

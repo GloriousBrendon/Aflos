@@ -51,6 +51,11 @@ ArchitecturesInstallIn64BitMode=x64compatible
 ; Aflos and its helpers may be running: close them (Restart Manager) first.
 CloseApplications=force
 RestartApplications=no
+; The welcome page says who Aflos is for (TERMS.md); silent updates skip it.
+DisableWelcomePage=no
+
+[Messages]
+WelcomeLabel2=This will install [name/ver] on your computer.%n%nAflos is for people 18 and over. By installing it, you confirm you are at least 18.
 
 [Tasks]
 Name: desktopicon; Description: "Create a desktop shortcut"; Flags: unchecked
