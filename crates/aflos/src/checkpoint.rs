@@ -150,9 +150,9 @@ impl World {
         self.press_until(copy, "unlocking", || Message::MeshForm(Msg::Submit), unlocked);
     }
 
-    /// Locking, through the call the app has for it (no button yet).
+    /// Log out (locks it).
     fn lock(&self, copy: &mut Copy) {
-        copy.app.mesh.node.as_ref().expect("the helper").lock();
+        let _ = update(&mut copy.app, Message::MeshForm(Msg::LogOut));
         let locked = |a: &App| a.mesh.identity.as_ref().is_some_and(|i| i.state == mesh::State::Locked);
         self.until(copy, "locked", locked);
     }
@@ -716,6 +716,33 @@ fn checkpoint_b_steps_1_to_6() {
         Message::MeshCall(mesh_calls::Msg::PersonVolume(id_b.clone(), 50)),
     );
     assert_eq!(a.app.mesh.person_volumes.get(&id_b), Some(&50));
+
+    // 12. Remove from this device: the password, two presses; the helper
+    // restarts with no identity, and its keystore is gone.
+    let _ = update(
+        &mut a.app,
+        Message::MeshForm(Msg::RemovePassword(PASSWORD.into())),
+    );
+    let _ = update(&mut a.app, Message::MeshForm(Msg::RemoveIdentity));
+    assert!(
+        a.app
+            .mesh
+            .identity
+            .as_ref()
+            .is_some_and(|i| i.state == mesh::State::Unlocked),
+        "one press only arms it"
+    );
+    let _ = update(&mut a.app, Message::MeshForm(Msg::RemoveIdentity));
+    world.until(&mut a, "no identity", |app| {
+        app.mesh
+            .identity
+            .as_ref()
+            .is_some_and(|i| i.state == mesh::State::None)
+    });
+    assert!(
+        !root.join(a.name).join("identity.mks").exists(),
+        "the keystore is deleted"
+    );
 
     for copy in [a, b, c, d] {
         copy.helper.abort();
