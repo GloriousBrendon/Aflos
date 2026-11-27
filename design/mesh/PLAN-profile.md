@@ -6,15 +6,15 @@ are the same as for the modules before it (`cargo test`, `cargo clippy`).
 
 ## Task list
 
-- [ ] **Task 1: The manifest** (`mesh-dm/src/profile.rs`; PR2, PR4, PR5,
+- [x] **Task 1: The manifest** (Mesh-Node #10, merged) (`mesh-dm/src/profile.rs`; PR2, PR4, PR5,
   PR7). Parse `profile.toml`, the asset list, signing and checking under
   `mesh/v1/profile`, versions, every cap. **Accept:** unit tests for parsing,
   signatures, versions and each cap at and over its limit.
-- [ ] **Task 2: Capped decoding** (`mesh-node/src/decode.rs`; PR8). Images
+- [x] **Task 2: Capped decoding** (Mesh-Node #11) (`mesh-node/src/decode.rs`; PR8). Images
   through `image` with limits set before decoding; audio through
   `symphonia`. **Accept:** the crafted bombs in the spec become placeholders
   within 100 ms and under 64 MB.
-- [ ] **Task 3: Publish and deliver** (`mesh-node/src/profile.rs`; PR1,
+- [x] **Task 3: Publish and deliver** (Mesh-Node #12) (`mesh-node/src/profile.rs`; PR1,
   PR3, PR14, PR15). `profileSet`, the version on connect, the manifest over
   the 1:1 session, assets by hash, the cache, sync between own devices,
   removal on unfriend or block. **Accept:** the process test's first four
