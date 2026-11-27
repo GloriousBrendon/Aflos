@@ -2,6 +2,14 @@
 
 ## 0.6.0
 
+- Friends are consent first: no more friend requests. Give someone your
+  code (or ID) and use theirs; you're friends once both of you have added
+  the other. Adding someone shows them nothing. In a Space, Add friend is
+  on each member's row. Requests sent before 0.6.0 are dropped unanswered.
+- Fixed: someone you'd added could show as your friend after you shared
+  a Space, before they'd added you back.
+- Chat bubbles: the time and ticks sit beside each other, and the hover
+  bar sits beside the bubble instead of over it.
 - Profiles you can rice, MySpace style, free for everyone: an avatar, a
   banner, a background, a bio, links, a gallery of up to 12 pictures, a
   profile song and a status, in the order you set, in your own colors
