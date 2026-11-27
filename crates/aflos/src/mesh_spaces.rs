@@ -200,9 +200,14 @@ pub(crate) fn pane<'a>(
         .align_y(iced::Alignment::Center),
         ui::mono(
             format!(
-                "{} channels · {} members",
+                "{} channels · {} members{}",
                 space.channels.len(),
-                space.members.len()
+                space.members.len(),
+                if space.direct_allowed {
+                    " · direct connections on"
+                } else {
+                    ""
+                }
             ),
             11.0,
             p.text_muted()
@@ -276,6 +281,7 @@ fn quick_channel<'a>(
     };
     let space = space.to_owned();
     let typed = text_input("channel name", name)
+        .id(iced::widget::Id::new(QUICK_FIELD))
         .on_input(move |v| Message::MeshSpace(Msg::Quick(Some((space.clone(), v)))))
         .on_submit(Message::MeshSpace(Msg::QuickCreate))
         .padding(6)
@@ -335,6 +341,9 @@ pub(crate) struct Form {
     new_space: Option<String>,
     /// "+ New channel" under a Space's channels: the Space, and the name typed.
     quick: Option<(String, String)>,
+    /// A report being written: who about, the reason typed, and whether to
+    /// include their recent messages (P11).
+    report: Option<(String, String, bool)>,
 }
 
 #[derive(Debug, Clone)]
@@ -362,11 +371,21 @@ pub(crate) enum Msg {
     CategoryCreate,
     CategoryDelete(String),
     MembersMayAdd(bool),
+    /// The owner's "Allow direct connections with members" (P7).
+    Direct(bool),
     AddPick(Pick),
     Add,
     /// A member, made admin (true) or member.
     Role(String, bool),
     Kick(String),
+    /// Reporting a member to the owner (P11).
+    ReportStart(String),
+    ReportReason(String),
+    ReportInclude(bool),
+    ReportSend,
+    ReportCancel,
+    /// The owner is done with a report: who sent it, and when.
+    ReportDismiss(String, u64),
     Ban(String),
     Unban(String),
     /// Asks before `end`, `leave` or `transfer:<id>`, and does it on the
@@ -426,6 +445,31 @@ fn over(may: &May, role: &str) -> bool {
     }
 }
 
+const QUICK_FIELD: &str = "quick-channel";
+const NEW_SPACE_FIELD: &str = "new-space-name";
+const RENAME_FIELD: &str = "rename-name";
+
+/// A Space name box that's open, and its field: focused when it opens.
+pub(crate) fn first_field(m: &crate::mesh_ui::Mesh) -> Option<(&'static str, &'static str)> {
+    let f = &m.space_form;
+    if f.quick.is_some() {
+        Some(("quick-channel", QUICK_FIELD))
+    } else if f.new_space.is_some() {
+        Some(("new-space", NEW_SPACE_FIELD))
+    } else if f.renaming.is_some() {
+        Some(("rename", RENAME_FIELD))
+    } else {
+        None
+    }
+}
+
+/// Escape: closes an open name box (new channel, new Space, renaming);
+/// false if none was open.
+pub(crate) fn close_form(m: &mut crate::mesh_ui::Mesh) -> bool {
+    let f = &mut m.space_form;
+    f.quick.take().is_some() | f.new_space.take().is_some() | f.renaming.take().is_some()
+}
+
 pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
     let m = &mut state.mesh;
     let f = &mut m.space_form;
@@ -439,6 +483,9 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             let name = (open.as_ref())
                 .and_then(|id| m.spaces.iter().find(|x| x.id == *id))
                 .map(|x| x.name.clone());
+            if let Some(id) = &open {
+                node.space_change("spaceReports", &[id]);
+            }
             *f = Form {
                 settings: open,
                 name: name.unwrap_or_default(),
@@ -541,6 +588,9 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             "spaceMembersMayAdd",
             &[s, if on { "true" } else { "false" }],
         ),
+        Msg::Direct(on) => {
+            node.space_change("spaceDirect", &[s, if on { "true" } else { "false" }])
+        }
         Msg::AddPick(pick) => f.add = pick.id,
         Msg::Add => {
             if let Some(who) = f.add.take() {
@@ -552,6 +602,40 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             node.space_change("spaceRole", &[s, &who, role]);
         }
         Msg::Kick(who) => node.space_change("spaceKick", &[s, &who]),
+        Msg::ReportStart(who) => f.report = Some((who, String::new(), false)),
+        Msg::ReportReason(reason) => {
+            if let Some(r) = &mut f.report {
+                r.1 = reason;
+            }
+        }
+        Msg::ReportInclude(on) => {
+            if let Some(r) = &mut f.report {
+                r.2 = on;
+            }
+        }
+        Msg::ReportCancel => f.report = None,
+        Msg::ReportSend => {
+            if let Some((who, reason, include)) = f.report.take() {
+                // Their latest few lines here, oldest first.
+                let quoted: Vec<&str> = match include {
+                    true => {
+                        let lines = m.space_lines.get(s).into_iter().flatten();
+                        let theirs: Vec<&str> = lines
+                            .filter(|(from, _)| *from == who)
+                            .map(|(_, t)| t.as_str())
+                            .collect();
+                        theirs[theirs.len().saturating_sub(5)..].to_vec()
+                    }
+                    false => Vec::new(),
+                };
+                let mut args = vec![s, who.as_str(), reason.trim()];
+                args.extend(quoted);
+                node.space_change("spaceReport", &args);
+            }
+        }
+        Msg::ReportDismiss(from, at) => {
+            node.space_change("spaceReportDismiss", &[s, &from, &at.to_string()])
+        }
         Msg::Ban(who) => node.space_change("spaceBan", &[s, &who]),
         Msg::Unban(who) => node.space_change("spaceUnban", &[s, &who]),
         Msg::Confirm(Some(what)) if f.confirm.as_deref() == Some(what.as_str()) => {
@@ -614,12 +698,14 @@ fn act<'a>(
 }
 
 fn input<'a>(
+    id: &'static str,
     placeholder: &str,
     value: &str,
     on: fn(String) -> Msg,
     submit: Msg,
 ) -> Element<'a, Message> {
     text_input(placeholder, value)
+        .id(iced::widget::Id::new(id))
         .on_input(move |v| Message::MeshSpace(on(v)))
         .on_submit(Message::MeshSpace(submit))
         .padding(8)
@@ -643,7 +729,7 @@ pub(crate) fn new_space(state: &App) -> Element<'_, Message> {
             let ready = !name.trim().is_empty();
             column![
                 ui::mono("NEW SPACE: ITS NAME", 11.0, p.text_muted()),
-                input("", name, Msg::NewSpaceName, Msg::NewSpaceCreate),
+                input(NEW_SPACE_FIELD, "", name, Msg::NewSpaceName, Msg::NewSpaceCreate),
                 row![
                     act(
                         "Create",
@@ -729,7 +815,7 @@ fn renaming<'a>(f: &Form, id: &str, p: &'a theme::Palette) -> Option<Element<'a,
     let (_, name) = f.renaming.as_ref().filter(|(r, _)| r == id)?;
     let save = act("Save", p.accent(), Some(Msg::RenameDone), p);
     Some(
-        row![input("", name, Msg::RenameText, Msg::RenameDone), save]
+        row![input(RENAME_FIELD, "", name, Msg::RenameText, Msg::RenameDone), save]
             .spacing(6)
             .into(),
     )
@@ -783,7 +869,7 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
             .push(ui::section("name", p))
             .push(
                 row![
-                    input("", &f.name, Msg::Name, Msg::Rename),
+                    input("space-name", "", &f.name, Msg::Name, Msg::Rename),
                     add("Rename", Msg::Rename)
                 ]
                 .spacing(6),
@@ -793,8 +879,23 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
                 p.text(),
                 Some(Msg::MembersMayAdd(!space.members_may_add)),
                 p,
-            ))
-            .push(ui::section("categories", p));
+            ));
+        if may.owner {
+            let mark = if space.direct_allowed { "☑" } else { "☐" };
+            col = col
+                .push(act(
+                    format!("{mark} Allow direct connections with members"),
+                    p.text(),
+                    Some(Msg::Direct(!space.direct_allowed)),
+                    p,
+                ))
+                .push(
+                    text("Members who are friends connect directly in this Space: faster voice, and they can learn each other's IP address. Members who aren't friends stay relayed.")
+                        .size(12)
+                        .color(p.text_muted()),
+                );
+        }
+        col = col.push(ui::section("categories", p));
         let mut cats: Vec<&mesh::SpaceCategory> = space.categories.iter().collect();
         cats.sort_by_key(|c| c.position);
         for c in cats {
@@ -812,6 +913,7 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
             });
         }
         let new = input(
+            "category-name",
             "New category",
             &f.category,
             Msg::CategoryName,
@@ -857,6 +959,7 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
         col = col.push(
             row![
                 input(
+                    "channel-name",
                     "New channel",
                     &f.channel,
                     Msg::ChannelName,
@@ -905,6 +1008,10 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
                 p,
             );
             col = col.push(row![pick, go].spacing(6).align_y(iced::Alignment::Center));
+            if space.direct_allowed {
+                let note = "Direct connections are on: members who are friends connect directly in this Space.";
+                col = col.push(text(note).size(12).color(p.text_muted()));
+            }
         }
     }
     let me = mesh.my_id();
@@ -937,8 +1044,64 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
                     .push(act("Kick", p.text(), Some(Msg::Kick(m.id.clone())), p))
                     .push(act("Ban", p.danger(), Some(Msg::Ban(m.id.clone())), p));
             }
+            // A report goes to the owner, so not about them, nor by them.
+            if !may.owner && m.role != "owner" && space.role.is_some() {
+                row = row.push(act(
+                    "Report",
+                    p.text(),
+                    Some(Msg::ReportStart(m.id.clone())),
+                    p,
+                ));
+            }
         }
         col = col.push(row);
+        if let Some((who, reason, include)) = &f.report
+            && *who == m.id
+        {
+            let mark = if *include { "☑" } else { "☐" };
+            col = col
+                .push(input("space-report", "Why? Only the owner sees this.", reason, Msg::ReportReason, Msg::ReportSend))
+                .push(
+                    row![
+                        act(format!("{mark} Include their recent messages"), p.text(), Some(Msg::ReportInclude(!include)), p),
+                        act("Send to the owner", p.accent(), Some(Msg::ReportSend), p),
+                        act("Cancel", p.text_bright(), Some(Msg::ReportCancel), p),
+                    ]
+                    .spacing(6),
+                )
+                .push(
+                    text("Reports go to this Space's owner only, never to Aflos. You can block them too.")
+                        .size(12)
+                        .color(p.text_muted()),
+                );
+        }
+    }
+    let reports = mesh
+        .reports
+        .get(&space.id)
+        .filter(|r| may.owner && !r.is_empty());
+    if let Some(reports) = reports {
+        col = col.push(ui::section("reports", p));
+        for r in reports {
+            let who = |id: &str| name_in(mesh, Some(space), id);
+            let head = format!("{} reported {}: {}", who(&r.from), who(&r.about), r.reason);
+            let dismiss = act(
+                "Dismiss",
+                p.text(),
+                Some(Msg::ReportDismiss(r.from.clone(), r.at)),
+                p,
+            );
+            col = col.push(
+                row![
+                    text(head).size(13).color(p.text()).width(Length::Fill),
+                    dismiss
+                ]
+                .spacing(6),
+            );
+            for q in &r.quoted {
+                col = col.push(text(format!("“{q}”")).size(12).color(p.text_muted()));
+            }
+        }
     }
     if may.admin && !space.bans.is_empty() {
         col = col.push(ui::section("banned", p));
@@ -981,6 +1144,20 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_open_name_box_takes_the_focus_and_escape_closes_it() {
+        let mut m = crate::mesh_ui::Mesh::default();
+        assert_eq!(first_field(&m), None);
+        assert!(!close_form(&mut m));
+        m.space_form.quick = Some(("space1".into(), String::new()));
+        assert_eq!(first_field(&m), Some(("quick-channel", QUICK_FIELD)));
+        assert!(close_form(&mut m));
+        assert_eq!(first_field(&m), None);
+        m.space_form.new_space = Some(String::new());
+        assert_eq!(first_field(&m).map(|(form, _)| form), Some("new-space"));
+        assert!(close_form(&mut m) && m.space_form.new_space.is_none());
+    }
 
     fn space(json: &str) -> mesh::Space {
         serde_json::from_str(json).unwrap()

@@ -18,10 +18,79 @@ pub(crate) enum Tab {
     Add,
 }
 
+/// What the mic goes through in calls (SPEC-audio A3), as `callAudio`
+/// takes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct AudioPrefs {
+    pub gain: bool,
+    pub noise: bool,
+    pub echo: bool,
+    /// Manual sensitivity in dBFS; `None` is Automatic.
+    pub threshold: Option<f32>,
+    pub output: u32,
+}
+
+impl Default for AudioPrefs {
+    fn default() -> Self {
+        Self {
+            gain: true,
+            noise: true,
+            echo: true,
+            threshold: None,
+            output: 100,
+        }
+    }
+}
+
+impl AudioPrefs {
+    pub fn from_config(c: &crate::theme::Config) -> Self {
+        let d = Self::default();
+        Self {
+            gain: c.audio_gain.unwrap_or(d.gain),
+            noise: c.audio_noise.unwrap_or(d.noise),
+            echo: c.audio_echo.unwrap_or(d.echo),
+            threshold: c.audio_threshold.map(|t| t.clamp(-90.0, 0.0)),
+            output: c.output_volume.unwrap_or(d.output).min(200),
+        }
+    }
+
+    pub fn save(&self, c: &mut crate::theme::Config) {
+        (c.audio_gain, c.audio_noise, c.audio_echo) =
+            (Some(self.gain), Some(self.noise), Some(self.echo));
+        (c.audio_threshold, c.output_volume) = (self.threshold, Some(self.output));
+    }
+
+    pub fn json(&self) -> String {
+        serde_json::json!({
+            "gain": self.gain, "noise": self.noise, "echo": self.echo,
+            "threshold": self.threshold, "output": self.output,
+        })
+        .to_string()
+    }
+}
+
+/// Hide my IP as `mesh-node` should start with it: read at every start, so a
+/// restart after the switch changed keeps it.
+pub(crate) static HIDE_IP: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// `mesh-node`'s flags for its next start.
+pub(crate) fn node_args() -> Vec<String> {
+    match HIDE_IP.load(std::sync::atomic::Ordering::Relaxed) {
+        true => vec!["--hide-ip".into()],
+        false => Vec::new(),
+    }
+}
+
 /// The `mesh-node` side of the app.
 #[derive(Default)]
 pub(crate) struct Mesh {
     pub node: Option<mesh::Node>,
+    /// Reports members sent us, by Space, for the Spaces we own (P11).
+    pub reports: HashMap<String, Vec<mesh::SpaceReport>>,
+    /// The latest lines seen in each Space (author, text), so a report can
+    /// quote what someone said.
+    pub space_lines: HashMap<String, Vec<(String, String)>>,
     /// The latest report; `None` until the helper's first.
     pub identity: Option<mesh::Identity>,
     /// The identity has been opened once this run, so the other networks
@@ -50,6 +119,18 @@ pub(crate) struct Mesh {
     /// Push-to-talk is on (config.toml), and whether its key is held.
     pub ptt: bool,
     pub ptt_down: bool,
+    /// Hide my IP is on (config.toml's `hide_ip`).
+    pub hide_ip: bool,
+    /// Calls' input volume in percent (config.toml's `input_volume`).
+    pub input_volume: u32,
+    /// Calls' processing, as set in Voice & audio (SPEC-audio A3).
+    pub audio: AudioPrefs,
+    /// The mic's latest level and whether it went out (A5).
+    pub level: Option<(f32, bool)>,
+    /// The mic test while it runs: whether it plays back.
+    pub mic_test: Option<bool>,
+    /// Each person's volume in calls, by ID (A6).
+    pub person_volumes: std::collections::BTreeMap<String, u32>,
     /// Who's typing, by name, in which chat, and when it was heard.
     pub typing: Option<(String, Vec<String>, std::time::Instant)>,
     /// The last received file clicked, and what that did (`mesh_dm::on_click`).
@@ -70,6 +151,17 @@ impl Mesh {
 
     /// A person's name: ours, our name for a friend, the name they gave
     /// themselves, else the start of their ID.
+    /// How we're connected with `id` now, for the call bar and the chat
+    /// header (SPEC-connection-privacy P8); `None` when we aren't.
+    pub fn path_to(&self, id: &str) -> Option<&'static str> {
+        let net = self.net.as_ref()?;
+        match net.paths.get(id)?.as_str() {
+            "direct" => Some("Direct"),
+            _ if net.hide_ip => Some("Relayed: Hide my IP is on"),
+            _ => Some("Relayed"),
+        }
+    }
+
     pub fn name_of(&self, id: &str) -> String {
         if self.my_id().as_deref() == Some(id) {
             return self.identity.as_ref().and_then(|i| i.username.clone()).unwrap_or_else(|| "you".to_string());
@@ -116,6 +208,9 @@ struct Settings {
     confirm: String,
     verdict: Option<(bool, String)>,
     export_password: String,
+    /// Remove from this device: the password, and whether it's been pressed once.
+    remove_password: String,
+    remove_armed: bool,
     /// Check an ID: what's pasted, and the safety number for it (with its QR).
     check: String,
     safety: Option<(mesh::Safety, Option<qr_code::Data>)>,
@@ -187,6 +282,11 @@ pub(crate) enum Msg {
     ExportPassword(String),
     Export,
     ExportTo(Option<PathBuf>),
+    /// Locks the identity (and stops keeping it unlocked): Log out.
+    LogOut,
+    RemovePassword(String),
+    /// Remove from this device: the first press arms it, the second sends.
+    RemoveIdentity,
     CheckInput(String),
     Check,
     CopyTicket,
@@ -337,6 +437,9 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             if error.func == "idChangePassword" {
                 s.old.clear();
             }
+            if error.func == "idRemove" {
+                (s.remove_password, s.remove_armed) = (String::new(), false);
+            }
             s.note = Some((error.func, false, error.message));
         }
         mesh::Event::Safety(safety) => {
@@ -364,6 +467,8 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             s.note = Some((func, true, message.to_string()));
         }
         mesh::Event::Net(net) => m.net = Some(net),
+        mesh::Event::AudioLevel { level, open } => m.level = Some((level, open)),
+        mesh::Event::SpaceReports(r) => drop(m.reports.insert(r.space, r.reports)),
         mesh::Event::Ticket(ticket) => {
             m.settings.busy = None;
             m.settings.ticket_copied = true;
@@ -516,6 +621,7 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             }
             f.error = None;
             match (onboarding, f.restoring, &f.backup) {
+                (false, ..) if f.username.trim().is_empty() || f.password.is_empty() => return Task::none(),
                 (false, ..) => node.unlock(&f.username, &f.password),
                 (true, ..) if f.joining && f.received.is_some() => {
                     if !can_continue(f) {
@@ -550,6 +656,28 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             s.busy = Some("idKeepUnlocked");
             s.note = None;
             node.keep_unlocked(on);
+        }
+        Msg::LogOut => {
+            if s.busy.is_none() {
+                s.busy = Some("idLock");
+                // Logged out means the password next time, not opening by itself.
+                if identity.as_ref().is_some_and(|i| i.keep_unlocked) {
+                    node.keep_unlocked(false);
+                }
+                node.lock();
+            }
+        }
+        Msg::RemovePassword(value) => (s.remove_password, s.remove_armed) = (value, false),
+        Msg::RemoveIdentity => {
+            if s.busy.is_none() && !s.remove_password.is_empty() {
+                if s.remove_armed {
+                    s.busy = Some("idRemove");
+                    s.note = None;
+                    node.remove_identity(&s.remove_password);
+                } else {
+                    s.remove_armed = true;
+                }
+            }
         }
         Msg::Old(value) => s.old = value,
         Msg::New(value) => {
@@ -795,9 +923,15 @@ fn net_line(net: Option<&mesh::Net>) -> String {
         return "Connecting…".into();
     }
     let mut line = format!("Online · relay {}", net.relay.as_deref().map(relay_name).unwrap_or("?"));
-    if net.connections > 0 {
+    // People, by path (P8); an older mesh-node gives only the connections.
+    if net.direct_count + net.relayed_count > 0 {
+        line.push_str(&format!(" · {} direct, {} relayed", net.direct_count, net.relayed_count));
+    } else if net.connections > 0 {
         let s = if net.connections == 1 { "" } else { "s" };
         line.push_str(&format!(" · {} connection{s}{}", net.connections, if net.direct { ", direct" } else { "" }));
+    }
+    if net.hide_ip {
+        line.push_str(" · Hide my IP");
     }
     if net.published {
         line.push_str(" · findable by contacts");
@@ -847,10 +981,17 @@ fn hint<'a>(verdict: &Option<(bool, String)>, password: &str, confirm: &str, p: 
     }
 }
 
+/// A labelled field. Its label is its ID (labels are unique on any one
+/// screen), so `first_field` can put the focus in it.
 fn field<'a>(label: &'static str, value: &str, on: fn(String) -> Msg, secure: bool, submit: Msg, p: &theme::Palette) -> Element<'a, Message> {
     column![
         ui::mono(label, 11.0, p.text_muted()),
-        text_input("", value).on_input(move |v| Message::MeshForm(on(v))).on_submit(Message::MeshForm(submit)).secure(secure).padding(10),
+        text_input("", value)
+            .id(iced::widget::Id::new(label))
+            .on_input(move |v| Message::MeshForm(on(v)))
+            .on_submit(Message::MeshForm(submit))
+            .secure(secure)
+            .padding(10),
     ]
     .spacing(6)
     .into()
@@ -858,6 +999,60 @@ fn field<'a>(label: &'static str, value: &str, on: fn(String) -> Msg, secure: bo
 
 fn link_button<'a>(label: &'static str, msg: Msg, p: &theme::Palette) -> Element<'a, Message> {
     button(ui::sans(label, 13.0, Weight::Normal, p.accent())).on_press(Message::MeshForm(msg)).padding(0).style(iced::widget::button::text).into()
+}
+
+/// Friends → Add friend's field (its label).
+pub(crate) const CHECK_FIELD: &str = "THEIR CODE OR ID";
+
+/// The identity screen in front, by name, and its first field (the
+/// password, at unlock, once the username is there).
+pub(crate) fn first_field(state: &App) -> Option<(&'static str, &'static str)> {
+    if open(state) {
+        return None;
+    }
+    let f = &state.mesh.form;
+    match state.mesh.identity.as_ref()?.state {
+        State::Unlocked => None,
+        State::Locked => Some(("unlock", if f.username.trim().is_empty() { "USERNAME" } else { "PASSWORD" })),
+        State::None if f.restoring => Some(("restore", "ITS USERNAME")),
+        State::None if f.joining && f.received.is_some() => Some(("link-password", "PASSWORD FOR THIS DEVICE")),
+        State::None if f.joining => Some(("link", "LINK CODE")),
+        State::None if !f.warned => Some(("create", "USERNAME")),
+        State::None => None,
+    }
+}
+
+/// Escape on an identity screen: back from restoring, linking or the
+/// warning, as their Back buttons.
+pub(crate) fn on_escape(state: &App) -> Option<Message> {
+    if open(state) || state.mesh.form.busy {
+        return None;
+    }
+    let f = &state.mesh.form;
+    let back = match state.mesh.identity.as_ref()?.state {
+        State::None if f.restoring => Msg::Restore(false),
+        State::None if f.joining => Msg::Join(false),
+        State::None if f.warned => Msg::Warned(false),
+        _ => return None,
+    };
+    Some(Message::MeshForm(back))
+}
+
+/// Escape on the Friends page: closes New group; false if it wasn't open.
+pub(crate) fn close_dialog(m: &mut Mesh) -> bool {
+    m.new_group.take().is_some()
+}
+
+/// Enter on the identity's 2 of 2, which has no field to take it.
+pub(crate) fn on_enter(state: &App) -> Option<Message> {
+    let f = &state.mesh.form;
+    let warning = state.mesh.identity.as_ref().is_some_and(|i| i.state == State::None)
+        && !open(state)
+        && f.warned
+        && !f.restoring
+        && !f.joining
+        && !f.busy;
+    warning.then_some(Message::MeshForm(Msg::Submit))
 }
 
 pub(crate) fn view(state: &App) -> Element<'_, Message> {
@@ -1130,13 +1325,60 @@ pub(crate) fn manage(state: &App) -> Element<'_, Message> {
     .spacing(8)
     .extend(note("idExport"));
 
+    let log_out = column![
+        heading("log out", p),
+        text("Locks Aflos on this device. Your username and password open it again.")
+            .size(12)
+            .color(p.text()),
+        action("Log out", "idLock", Some(Msg::LogOut)),
+    ]
+    .spacing(8)
+    .extend(note("idLock"));
+
+    let only_device = identity.devices.len() <= 1;
+    let remove_warning = if only_device {
+        "This is your only device. Unless you've exported a backup, your account, friends, Spaces and messages are gone for good."
+    } else {
+        "Your other devices keep your account. Afterwards, remove this device from the list on one of them."
+    };
+    let remove_label = match (s.busy == Some("idRemove"), s.remove_armed) {
+        (true, _) => "One moment…",
+        (false, true) => "Really remove it? Click again",
+        (false, false) => "Remove from this device",
+    };
+    let remove = column![
+        heading("remove from this device", p),
+        text(remove_warning)
+            .size(12)
+            .color(if only_device { p.danger() } else { p.text() }),
+        field(
+            "YOUR PASSWORD",
+            &s.remove_password,
+            Msg::RemovePassword,
+            true,
+            Msg::RemoveIdentity,
+            p
+        ),
+        button(ui::sans(remove_label, 13.0, Weight::Semibold, p.danger()))
+            .on_press_maybe(
+                (s.busy.is_none() && !s.remove_password.is_empty())
+                    .then_some(Message::MeshForm(Msg::RemoveIdentity))
+            )
+            .padding([6, 12])
+            .style(flat_button_style(p)),
+    ]
+    .spacing(8)
+    .extend(note("idRemove"));
+
     scrollable(
-        column![id, friends, network, devices, keep, password, backup]
-            .spacing(22)
-            .padding(iced::Padding {
-                right: 12.0,
-                ..iced::Padding::ZERO
-            }),
+        column![
+            id, friends, network, devices, keep, password, backup, log_out, remove
+        ]
+        .spacing(22)
+        .padding(iced::Padding {
+            right: 12.0,
+            ..iced::Padding::ZERO
+        }),
     )
     .height(Length::Fill)
     .into()
@@ -1557,8 +1799,50 @@ mod tests {
     }
 
     #[test]
+    fn audio_settings_keep_and_send() {
+        let mut c = crate::theme::Config::default();
+        assert_eq!(
+            AudioPrefs::from_config(&c),
+            AudioPrefs::default(),
+            "all on, Automatic"
+        );
+        let set = AudioPrefs {
+            gain: false,
+            noise: true,
+            echo: false,
+            threshold: Some(-45.0),
+            output: 150,
+        };
+        set.save(&mut c);
+        assert_eq!(AudioPrefs::from_config(&c), set);
+        let v: serde_json::Value = serde_json::from_str(&set.json()).unwrap();
+        assert_eq!(
+            (
+                v["gain"].as_bool(),
+                v["echo"].as_bool(),
+                v["threshold"].as_f64(),
+                v["output"].as_u64()
+            ),
+            (Some(false), Some(false), Some(-45.0), Some(150))
+        );
+        let auto: serde_json::Value = serde_json::from_str(&AudioPrefs::default().json()).unwrap();
+        assert!(auto["threshold"].is_null(), "Automatic is null");
+    }
+
+    #[test]
     fn network_lines() {
-        let mut net = mesh::Net { state: mesh::NetState::Online, relay: Some("https://aps1-1.relay.n0.iroh.link./".into()), direct: false, connections: 0, published: false, keys: false };
+        let mut net = mesh::Net {
+            state: mesh::NetState::Online,
+            relay: Some("https://aps1-1.relay.n0.iroh.link./".into()),
+            direct: false,
+            connections: 0,
+            published: false,
+            keys: false,
+            paths: Default::default(),
+            direct_count: 0,
+            relayed_count: 0,
+            hide_ip: false,
+        };
         assert_eq!(net_line(Some(&net)), "Online · relay aps1");
         (net.connections, net.direct) = (2, true);
         assert_eq!(net_line(Some(&net)), "Online · relay aps1 · 2 connections, direct");
@@ -1566,6 +1850,14 @@ mod tests {
         assert!(net_line(Some(&net)).ends_with(" · findable by contacts"));
         net.relay = Some("https://relay.example.org:8443/".into());
         assert!(net_line(Some(&net)).starts_with("Online · relay relay.example.org ·"));
+        let mut people = net.clone();
+        (people.published, people.direct_count, people.relayed_count) = (false, 1, 2);
+        assert_eq!(
+            net_line(Some(&people)),
+            "Online · relay relay.example.org · 1 direct, 2 relayed"
+        );
+        people.hide_ip = true;
+        assert!(net_line(Some(&people)).ends_with(" · Hide my IP"));
         net.state = mesh::NetState::Connecting;
         assert_eq!(net_line(Some(&net)), "Connecting…");
         assert_eq!(net_line(None), "Offline");

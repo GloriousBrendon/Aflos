@@ -95,3 +95,4 @@ update-desktop-database "$apps" 2>/dev/null || true
 # here: a cache in your home folder goes stale and hides other apps' icons.)
 touch "$icons"
 echo "installed to $bin"
+echo "Aflos is for people 18 and over (see TERMS.md)."

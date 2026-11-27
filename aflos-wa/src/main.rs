@@ -283,9 +283,11 @@ impl App {
             Event::Connected(_) => {
                 if let Some(pn) = self.client.pn() {
                     self.store.me = pn.to_non_ad().to_string();
-                    if let Some(lid) = self.client.lid() {
+                    let own = self.client.lid().map(|l| l.to_non_ad().to_string());
+                    self.store.forget_wrong_self(own.as_deref());
+                    if let Some(lid) = &own {
                         let me = self.store.me.clone();
-                        self.store.map_lid(&lid.to_non_ad().to_string(), &me);
+                        self.store.map_lid(lid, &me);
                     }
                 }
                 emit("waReady", &json!({}));
@@ -394,12 +396,16 @@ impl App {
         }
         let chat_s = chat.to_string();
         let sender = src.sender.to_non_ad().to_string();
-        for alt in [&src.sender_alt, &src.recipient_alt].into_iter().flatten() {
-            let alt = alt.to_non_ad().to_string();
-            for (a, b) in [(&chat_s, &alt), (&alt, &chat_s), (&sender, &alt), (&alt, &sender)] {
-                self.store.map_lid(a, b);
-            }
-        }
+        let alt = |j: &Option<Jid>| j.as_ref().map(|j| j.to_non_ad().to_string());
+        let (sender_alt, recipient_alt) = (alt(&src.sender_alt), alt(&src.recipient_alt));
+        self.store.learn_alts(
+            &chat_s,
+            &sender,
+            sender_alt.as_deref(),
+            recipient_alt.as_deref(),
+            src.is_from_me,
+            src.is_group,
+        );
         if chat.is_lid()
             && !self.store.lid_pn.contains_key(&chat_s)
             && let Ok(Some(entry)) = self.client.get_lid_pn_entry(&chat).await
@@ -1429,6 +1435,56 @@ mod tests {
         assert_eq!((snap.chats[0].name.as_str(), snap.chats[0].group), ("Family", true));
         assert_eq!(snap.chats[1].name, "+4");
         assert_eq!(snap.archived.len(), 1);
+    }
+
+    /// The 0.5.0 bug: writing to Dylan (his chat a LID, our own number as
+    /// the sender's alt) filed his chat as our chat with ourselves.
+    #[test]
+    fn our_messages_never_give_a_friend_our_number() {
+        let (me, me_lid) = ("me@s.whatsapp.net", "111@lid");
+        let (dylan, dylan_lid) = ("27820000000@s.whatsapp.net", "222@lid");
+        let mut store = Store::default();
+        store.me = me.into();
+        store.map_lid(me_lid, me);
+        // We write to him: the chat is his LID, the sender us.
+        store.learn_alts(dylan_lid, me_lid, Some(me), None, true, false);
+        assert_eq!(
+            store.canon(dylan_lid),
+            dylan_lid,
+            "his LID isn't our number"
+        );
+        store.learn_alts(dylan_lid, me_lid, Some(me), Some(dylan), true, false);
+        assert_eq!(store.canon(dylan_lid), dylan);
+        // He writes to us: the chat and the sender are his LID.
+        let mut fresh = Store::default();
+        fresh.me = me.into();
+        fresh.learn_alts(dylan_lid, dylan_lid, Some(dylan), Some(me), false, false);
+        assert_eq!(fresh.canon(dylan_lid), dylan, "his LID is his number");
+        assert_eq!(fresh.name_of(dylan_lid), "+27820000000");
+        // In a group only the sender's IDs pair; the group stays itself.
+        fresh.learn_alts(
+            "9@g.us",
+            "333@lid",
+            Some("27830000000@s.whatsapp.net"),
+            None,
+            false,
+            true,
+        );
+        assert_eq!(fresh.canon("333@lid"), "27830000000@s.whatsapp.net");
+        assert_eq!(fresh.canon("9@g.us"), "9@g.us");
+    }
+
+    #[test]
+    fn a_wrong_self_mapping_is_forgotten() {
+        let mut store = Store::default();
+        store.me = "me@s.whatsapp.net".into();
+        store.map_lid("111@lid", "me@s.whatsapp.net");
+        store.map_lid("222@lid", "me@s.whatsapp.net"); // learned wrongly
+        store.map_lid("333@lid", "27830000000@s.whatsapp.net");
+        store.forget_wrong_self(Some("111@lid"));
+        assert_eq!(store.canon("111@lid"), "me@s.whatsapp.net");
+        assert_eq!(store.canon("222@lid"), "222@lid");
+        assert_eq!(store.canon("333@lid"), "27830000000@s.whatsapp.net");
     }
 
     #[test]

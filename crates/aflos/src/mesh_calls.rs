@@ -22,6 +22,19 @@ pub(crate) enum Msg {
     PttSetting(bool),
     /// Its key, pressed or let go.
     Ptt(bool),
+    /// The input volume slider moved (percent); let go: save it.
+    Gain(u32),
+    GainSaved,
+    /// A switch, the sensitivity or the output volume changed: sent at once,
+    /// and kept if `true` (a switch); a slider is kept when let go
+    /// (`AudioSaved`).
+    Audio(mesh_ui::AudioPrefs, bool),
+    AudioSaved,
+    /// The mic test: `None` stops it, `Some(hear)` starts it.
+    MicTest(Option<bool>),
+    /// One person's volume moved (their ID, percent); let go: save it.
+    PersonVolume(String, u32),
+    PersonVolumeSaved,
 }
 
 /// Push-to-talk's key: Right Ctrl, typed into nothing (C10, Q4).
@@ -66,6 +79,11 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
         let (input, output) = devices(state);
         node.call_devices(&input, &output);
         node.call_ptt(ptt_mode(&state.mesh));
+        node.call_gain(state.mesh.input_volume);
+        node.call_audio(&state.mesh.audio.json());
+        for (id, percent) in &state.mesh.person_volumes {
+            node.call_volume(id, *percent);
+        }
     };
     match msg {
         Msg::Start(friend) => {
@@ -94,6 +112,42 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             node.call_ptt(ptt_mode(&state.mesh));
         }
         Msg::Ptt(_) => {}
+        Msg::Gain(percent) => {
+            state.mesh.input_volume = percent;
+            node.call_gain(percent);
+        }
+        Msg::GainSaved => {
+            let percent = state.mesh.input_volume;
+            persist(|c| c.input_volume = Some(percent));
+        }
+        Msg::Audio(prefs, save) => {
+            state.mesh.audio = prefs;
+            node.call_audio(&prefs.json());
+            if save {
+                persist(|c| prefs.save(c));
+            }
+        }
+        Msg::AudioSaved => {
+            let prefs = state.mesh.audio;
+            persist(|c| prefs.save(c));
+        }
+        Msg::MicTest(test) => {
+            // The test uses the current settings, as a call would.
+            with_devices(state);
+            node.audio_test(test.is_some(), test == Some(true));
+            state.mesh.mic_test = test;
+            if test.is_none() {
+                state.mesh.level = None;
+            }
+        }
+        Msg::PersonVolume(id, percent) => {
+            node.call_volume(&id, percent);
+            state.mesh.person_volumes.insert(id, percent.min(200));
+        }
+        Msg::PersonVolumeSaved => {
+            let volumes = state.mesh.person_volumes.clone();
+            persist(|c| c.person_volumes = volumes);
+        }
     }
     Task::none()
 }
@@ -168,7 +222,15 @@ pub(crate) fn bar(state: &App) -> Option<Element<'_, Message>> {
     let status = match call.state.as_str() {
         "calling" => "Ringing…".to_string(),
         "ringing" => "is calling you".to_string(),
-        _ if call.speaking.is_empty() => "In call".to_string(),
+        // A DM call names its path (P8); a voice channel has many.
+        _ if call.speaking.is_empty() => match voice
+            .is_none()
+            .then(|| state.mesh.path_to(&call.with))
+            .flatten()
+        {
+            Some(path) => format!("In call · {path}"),
+            None => "In call".to_string(),
+        },
         _ => {
             let space = voice.and_then(|(s, _)| state.mesh.spaces.iter().find(|x| x.id == *s));
             let names: Vec<String> = call
@@ -181,6 +243,10 @@ pub(crate) fn bar(state: &App) -> Option<Element<'_, Message>> {
     };
     let act = |msg: Msg| Message::MeshCall(msg);
     let mut controls = row![].spacing(8).align_y(iced::Alignment::Center);
+    // A DM call: the friend's volume for us (SPEC-audio A6).
+    if voice.is_none() && call.state == "live" {
+        controls = controls.push(volume_slider(&state.mesh, &call.with, 110.0));
+    }
     if call.state == "ringing" {
         controls = controls
             .push(
@@ -247,6 +313,19 @@ pub(crate) fn bar(state: &App) -> Option<Element<'_, Message>> {
     Some(bar.into())
 }
 
+/// `id`'s volume for us, 0 to 200%, kept per ID (SPEC-audio A6).
+fn volume_slider<'a>(mesh: &mesh_ui::Mesh, id: &str, width: f32) -> Element<'a, Message> {
+    let id = id.to_owned();
+    let at = mesh.person_volumes.get(&id).copied().unwrap_or(100);
+    iced::widget::slider(0.0..=200.0, at as f32, move |v| {
+        Message::MeshCall(Msg::PersonVolume(id.clone(), v.round() as u32))
+    })
+    .step(5.0_f32)
+    .on_release(Message::MeshCall(Msg::PersonVolumeSaved))
+    .width(width)
+    .into()
+}
+
 /// A voice channel in a Space's pane: join on click, and who's in it.
 pub(crate) fn voice_row<'a>(
     mesh: &'a mesh_ui::Mesh,
@@ -286,22 +365,26 @@ pub(crate) fn voice_row<'a>(
         } else {
             p.text_muted()
         };
+        let mut who = row![
+            ui::swatch(dot, 6.0, 6.0, 3.0),
+            ui::sans(
+                crate::mesh_spaces::name_in(mesh, Some(space), id),
+                12.0,
+                Weight::Normal,
+                p.text()
+            )
+        ];
+        // Their volume for us, while we're in the channel with them (A6).
+        if here && mesh.my_id().as_deref() != Some(id.as_str()) {
+            who = who.push(volume_slider(mesh, id, 90.0));
+        }
         col = col.push(
-            row![
-                ui::swatch(dot, 6.0, 6.0, 3.0),
-                ui::sans(
-                    crate::mesh_spaces::name_in(mesh, Some(space), id),
-                    12.0,
-                    Weight::Normal,
-                    p.text()
-                )
-            ]
-            .spacing(6)
-            .align_y(iced::Alignment::Center)
-            .padding(iced::Padding {
-                left: 32.0,
-                ..iced::Padding::ZERO
-            }),
+            who.spacing(6)
+                .align_y(iced::Alignment::Center)
+                .padding(iced::Padding {
+                    left: 32.0,
+                    ..iced::Padding::ZERO
+                }),
         );
     }
     col.into()

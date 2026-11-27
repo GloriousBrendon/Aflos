@@ -3,8 +3,8 @@
 # Run workflow, or `gh workflow run release.yml --ref <branch>`) for a dry run:
 # it builds everything and checks the release's files and SHA256SUMS, keeps
 # them as the run's "release" artifact, and publishes nothing. mesh-node comes
-# from the private Mesh-Node repo's origin main, through a read-only deploy key
-# (secret MESH_NODE_KEY); no local checkout is involved.
+# from the public Mesh-Node repo, at the tag matching Aflos's version (v0.4.1
+# for Aflos 0.4.1): tag Mesh-Node first. No local checkout is involved.
 #
 # Every file is also published under Mesh's old name (Mesh-Setup-*.exe,
 # mesh-*-linux-x86_64.tar.gz): Mesh 0.3.1's updater only looks for those.
@@ -25,29 +25,31 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with: { path: Mesh-Voice }
+        with: { path: Aflos }
+      - id: ver
+        shell: bash
+        run: echo "v=$(grep -m1 '^version' Aflos/crates/aflos/Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: GloriousBrendon/Mesh-Node
-          ref: main
-          ssh-key: ${{ secrets.MESH_NODE_KEY }}
+          ref: v${{ steps.ver.outputs.v }}
           path: Mesh-Node
       - uses: dtolnay/rust-toolchain@stable
       - run: choco install innosetup -y --no-progress
       # build.ps1 is the same script as on your PC (SPEC-packaging P1).
-      - run: Mesh-Voice\installer\build.ps1
+      - run: Aflos\installer\build.ps1
         shell: pwsh
       - name: Copy under Mesh's old name, for Mesh 0.3.1's updater
         shell: pwsh
         run: |
-          $setup = Get-ChildItem Mesh-Voice/dist/Aflos-Setup-*.exe | Select-Object -Last 1
+          $setup = Get-ChildItem Aflos/dist/Aflos-Setup-*.exe | Select-Object -Last 1
           Copy-Item $setup.FullName (Join-Path $setup.DirectoryName ($setup.Name -replace '^Aflos-', 'Mesh-'))
       - uses: actions/upload-artifact@v4
         with:
           name: windows
           path: |
-            Mesh-Voice/dist/Aflos-Setup-*.exe
-            Mesh-Voice/dist/Mesh-Setup-*.exe
+            Aflos/dist/Aflos-Setup-*.exe
+            Aflos/dist/Mesh-Setup-*.exe
 
   linux:
     # 24.04: 22.04's PipeWire is too old for libspa (aflos-wa, aflos-dc). The
@@ -56,12 +58,14 @@ jobs:
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-        with: { path: Mesh-Voice }
+        with: { path: Aflos }
+      - id: ver
+        shell: bash
+        run: echo "v=$(grep -m1 '^version' Aflos/crates/aflos/Cargo.toml | cut -d'"' -f2)" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@v4
         with:
           repository: GloriousBrendon/Mesh-Node
-          ref: main
-          ssh-key: ${{ secrets.MESH_NODE_KEY }}
+          ref: v${{ steps.ver.outputs.v }}
           path: Mesh-Node
       - uses: dtolnay/rust-toolchain@stable
       - run: >
@@ -69,20 +73,20 @@ jobs:
           libopus-dev libpipewire-0.3-dev libspa-0.2-dev clang pkg-config cmake
       - name: Build
         run: |
-          (cd Mesh-Voice && cargo build --release -p aflos)
-          (cd Mesh-Voice/aflos-wa && cargo build --release)
-          (cd Mesh-Voice/aflos-dc && cargo build --release)
+          (cd Aflos && cargo build --release -p aflos)
+          (cd Aflos/aflos-wa && cargo build --release)
+          (cd Aflos/aflos-dc && cargo build --release)
           (cd Mesh-Node && cargo build --release -p mesh-node)
       - name: Pack
         run: |
-          v=$(grep -m1 '^version' Mesh-Voice/crates/aflos/Cargo.toml | cut -d'"' -f2)
+          v=$(grep -m1 '^version' Aflos/crates/aflos/Cargo.toml | cut -d'"' -f2)
           d=aflos-$v-linux-x86_64
           mkdir $d
-          cp Mesh-Voice/target/release/aflos $d/aflos
-          cp Mesh-Voice/aflos-wa/target/release/aflos-wa Mesh-Voice/aflos-dc/target/release/aflos-dc \
-             Mesh-Node/target/release/mesh-node Mesh-Voice/installer/install-linux.sh \
+          cp Aflos/target/release/aflos $d/aflos
+          cp Aflos/aflos-wa/target/release/aflos-wa Aflos/aflos-dc/target/release/aflos-dc \
+             Mesh-Node/target/release/mesh-node Aflos/installer/install-linux.sh \
              $d/
-          cp -r Mesh-Voice/crates/aflos/assets/hicolor $d/
+          cp -r Aflos/crates/aflos/assets/hicolor $d/
           tar czf $d.tar.gz $d
           # Mesh 0.3.1's updater runs <file name>/install-linux.sh: same files, old names.
           old=mesh-$v-linux-x86_64
@@ -101,6 +105,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          path: Aflos
+          sparse-checkout: CHANGELOG.md
+          sparse-checkout-cone-mode: false
       - uses: actions/download-artifact@v4
         with: { merge-multiple: true }
       - name: Check the files and write SHA256SUMS
@@ -121,12 +130,20 @@ jobs:
             *.exe
             *.tar.gz
             SHA256SUMS
+      # This version's CHANGELOG.md section heads the notes; a dry run checks
+      # that it's there.
+      - name: Write the release notes
+        run: |
+          v=$(compgen -G 'aflos-*-linux-x86_64.tar.gz' | sed 's/^aflos-//; s/-linux-x86_64\.tar\.gz$//')
+          awk -v h="## $v" '$0 == h { f = 1; next } /^## / { f = 0 } f' Aflos/CHANGELOG.md > notes.md
+          grep -q . notes.md || { echo "::error::CHANGELOG.md has no ## $v section"; exit 1; }
+          cat notes.md
       - if: startsWith(github.ref, 'refs/tags/v')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease \
-            --title "Aflos $GITHUB_REF_NAME" --notes-file - Aflos-Setup-*.exe aflos-*.tar.gz Mesh-Setup-*.exe mesh-*.tar.gz SHA256SUMS <<'EOF'
+          cat >> notes.md <<'EOF'
+
           A beta for friends.
 
           **Windows:** run `Aflos-Setup-*.exe`. It isn't signed, so Windows shows
@@ -141,3 +158,6 @@ jobs:
 
           Check your download against `SHA256SUMS`.
           EOF
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --prerelease \
+            --title "Aflos $GITHUB_REF_NAME" --notes-file notes.md \
+            Aflos-Setup-*.exe aflos-*.tar.gz Mesh-Setup-*.exe mesh-*.tar.gz SHA256SUMS

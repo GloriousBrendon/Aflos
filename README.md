@@ -13,6 +13,8 @@ Discord-style Spaces and voice calls, end-to-end encrypted and with no central
 server. It can also sign in to your Matrix, Discord and WhatsApp accounts, so
 those chats sit in the same window.
 
+**Aflos is for people 18 and over** (see [TERMS.md](TERMS.md)).
+
 Aflos began as a Matrix client called Mesh. Some older notes still use that
 name (see [design/mesh/README.md](design/mesh/README.md)).
 
@@ -33,8 +35,9 @@ Mesh-Node's current `main`, which is what the release builds bundle.
   plus categories, roles (owner, admin, member), admin-only channels,
   mentions, replies, files, kicks and bans.
 - **Voice calls.** 1:1 calls in DMs, and voice channels in Spaces for up to
-  10 people. Push to talk and noise suppression are built in. Calls are voice
-  only, with no echo cancellation yet, so use headphones.
+  10 people. Push to talk, echo cancellation, automatic gain and noise
+  suppression are built in, with a mic test and per-person volume. Calls are
+  voice only for now.
 - **End-to-end encryption.** Messages, group messages, Space events and files
   are encrypted per device with Olm (vodozemac). Each file gets its own key.
   Call audio goes straight between devices over encrypted QUIC.
@@ -62,8 +65,20 @@ These are native clients signed in to your own accounts, not Matrix bridges.
 The Discord and WhatsApp helpers have not been tested much on real accounts
 yet.
 
-**Planned:** video and screen share on Aflos calls, echo cancellation, and a
-relay and seed that people outside the home network can reach.
+**Planned:** rice-able profiles, video and screen share on Aflos calls, and a
+relay and seed that people outside the home network can reach. See
+[ROADMAP.md](ROADMAP.md).
+
+**Known limits:**
+
+- **Drag and drop on Wayland.** Dropping files on the window works on Windows
+  and X11, but not under Wayland (Hyprland, KDE, GNOME) yet: it waits for
+  winit's new drag-and-drop API
+  ([rust-windowing/winit#4571](https://github.com/rust-windowing/winit/pull/4571),
+  merged for winit 0.31, still in beta) and for iced, on winit 0.30 today, to
+  pick it up ([#11](https://github.com/GloriousBrendon/Aflos/issues/11)).
+  Instead, copy the files in your file manager (or with `wl-copy`) and press
+  Ctrl+V in the message box.
 
 ## Layout
 
@@ -255,11 +270,12 @@ joining or creating spaces, and Discord friend requests through the bridge.
 
 Copyright (C) 2026 GloriousBrendon
 
-Aflos is free software: you can redistribute it and/or modify it under the
-terms of the GNU Affero General Public License as published by the Free
-Software Foundation, either version 3 of the License, or (at your option) any
-later version. See [LICENSE](LICENSE). Contributions: see
-[CONTRIBUTING.md](CONTRIBUTING.md).
+Aflos and `mesh-node`, its network engine (from the Mesh-Node repo, shipped
+in every release), are both free software: you can redistribute them and/or
+modify them under the terms of the GNU Affero General Public License as
+published by the Free Software Foundation, either version 3 of the License,
+or (at your option) any later version (AGPL-3.0-or-later). See
+[LICENSE](LICENSE). Contributions: see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 The vendored `songbird` and `serenity-voice-model` in `aflos-dc/vendor/` keep
 their ISC license, and the Michroma font keeps the SIL Open Font License.

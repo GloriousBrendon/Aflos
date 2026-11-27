@@ -65,6 +65,8 @@ pub enum Event {
     /// A page of an open channel, newest last (`Node::space_open`); comes
     /// again while it's open when it changes.
     SpaceMessages(SpacePage),
+    /// The reports this device holds for a Space it owns (P11).
+    SpaceReports(SpaceReports),
     /// A new post by someone else in a channel.
     SpaceNotify(SpaceNotify),
     /// Someone is typing in a channel: their IDs.
@@ -75,6 +77,12 @@ pub enum Event {
     },
     /// Where our call stands (SPEC-calls): a DM call or a voice channel.
     Call(Call),
+    /// The mic's level after processing (dBFS), and whether it goes out:
+    /// about 15 a second in a call or the mic test (SPEC-audio A5).
+    AudioLevel {
+        level: f32,
+        open: bool,
+    },
     /// Who's in one voice channel now, by ID.
     Voice {
         space: String,
@@ -206,6 +214,10 @@ pub struct Space {
     /// Members may add their friends, not only admins.
     #[serde(default)]
     pub members_may_add: bool,
+    /// The owner lets members who are friends connect directly in this
+    /// Space (SPEC-connection-privacy P7); off by default.
+    #[serde(default)]
+    pub direct_allowed: bool,
     /// Banned IDs (shown to admins, to unban).
     #[serde(default)]
     pub bans: Vec<String>,
@@ -268,6 +280,26 @@ pub struct SpacePage {
     /// Older lines exist (`Node::space_open` with `before`).
     #[serde(default)]
     pub more: bool,
+}
+
+/// A `meshSpaceReports`: what members reported to us, as a Space's owner.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SpaceReports {
+    pub space: String,
+    pub reports: Vec<SpaceReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct SpaceReport {
+    /// Who reported, and who about (`mesh1…` IDs).
+    pub from: String,
+    pub about: String,
+    pub reason: String,
+    /// The messages the reporter included.
+    #[serde(default)]
+    pub quoted: Vec<String>,
+    /// When, Unix seconds: with `from`, what dismissing one names.
+    pub at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -362,6 +394,17 @@ pub struct Net {
     /// Those records carry this device's e2ee keys: secure messages ready.
     #[serde(default)]
     pub keys: bool,
+    /// Each connected person's path, `direct` or `relay`, by `mesh1…` ID
+    /// (SPEC-connection-privacy P8). Never an address.
+    #[serde(default)]
+    pub paths: std::collections::BTreeMap<String, String>,
+    #[serde(default, rename = "directCount")]
+    pub direct_count: usize,
+    #[serde(default, rename = "relayedCount")]
+    pub relayed_count: usize,
+    /// Hide my IP is on: everyone, friends too, is relayed (P6).
+    #[serde(default, rename = "hideIp")]
+    pub hide_ip: bool,
 }
 
 /// A `meshPing`: who answered, by which path, and how fast.
@@ -615,6 +658,11 @@ impl Node {
     pub fn link_finish(&self, username: &str, password: &str) {
         self.call("linkFinish", &[username, password]);
     }
+    /// Deletes this device's copy of the identity, if `password` is right;
+    /// answers with `Identity` (`none`) and the helper restarts, or `Error`.
+    pub fn remove_identity(&self, password: &str) {
+        self.call("idRemove", &[password]);
+    }
     /// Removes one of our other linked devices by its key; answers with `Identity`.
     pub fn remove_device(&self, key: &str) {
         self.call("deviceRemove", &[key]);
@@ -755,6 +803,30 @@ impl Node {
     pub fn call_hangup(&self) {
         self.call("callHangup", &[]);
     }
+    /// Input volume for calls, 0 to 200 percent (SPEC-audio A3).
+    /// The switches, sensitivity and output volume, as `callAudio`'s JSON.
+    pub fn call_audio(&self, json: &str) {
+        self.call("callAudio", &[json]);
+    }
+    /// One person's volume for us, 0 to 200 percent.
+    pub fn call_volume(&self, id: &str, percent: u32) {
+        self.call("callVolume", &[id, &percent.to_string()]);
+    }
+    /// The mic test: on (and played back with `hear`), or off.
+    pub fn audio_test(&self, on: bool, hear: bool) {
+        match (on, hear) {
+            (true, true) => self.call("audioTest", &["on", "hear"]),
+            (true, false) => self.call("audioTest", &["on"]),
+            (false, _) => self.call("audioTest", &["off"]),
+        }
+    }
+    pub fn call_gain(&self, percent: u32) {
+        self.call("callGain", &[&percent.to_string()]);
+    }
+    /// Hide my IP on or off (SPEC-connection-privacy P6).
+    pub fn net_privacy(&self, hide: bool) {
+        self.call("netPrivacy", &[if hide { "true" } else { "false" }]);
+    }
     pub fn call_mute(&self, on: bool) {
         self.call("callMute", &[if on { "true" } else { "false" }]);
     }
@@ -782,16 +854,23 @@ impl Node {
 
 /// Runs `mesh-node --data <data>` for as long as `events` is open, restarting
 /// it when it exits (the same backoff as `whatsapp::run_native`).
-pub async fn run(exe: PathBuf, data: PathBuf, events: mpsc::UnboundedSender<Event>) {
-    run_with(exe, Vec::new(), data, events).await;
+/// `args` gives its flags at each start, so a restart after a setting
+/// changed (Hide my IP) starts it as the setting now is.
+pub async fn run(
+    exe: PathBuf,
+    args: impl Fn() -> Vec<String>,
+    data: PathBuf,
+    events: mpsc::UnboundedSender<Event>,
+) {
+    run_with(exe, args, data, events).await;
 }
 
 /// `run`, with more flags for `mesh-node` (a test's relay and seed).
-pub async fn run_with(exe: PathBuf, args: Vec<String>, data: PathBuf, events: mpsc::UnboundedSender<Event>) {
+pub async fn run_with(exe: PathBuf, args: impl Fn() -> Vec<String>, data: PathBuf, events: mpsc::UnboundedSender<Event>) {
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
     while !events.is_closed() {
         let mut cmd = tokio::process::Command::new(&exe);
-        cmd.args(&args).arg("--data").arg(&data).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true);
+        cmd.args(args()).arg("--data").arg(&data).stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).kill_on_drop(true);
         #[cfg(windows)]
         cmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
         let mut child = match cmd.spawn() {
@@ -896,7 +975,15 @@ fn line_event(line: &str) -> Option<Event> {
             serde_json::from_str::<Spaces>(payload).ok().map(|s| Event::Spaces(s.spaces))
         }
         "meshSpaceMessages" => serde_json::from_str(payload).ok().map(Event::SpaceMessages),
+        "meshSpaceReports" => serde_json::from_str(payload).ok().map(Event::SpaceReports),
         "meshCall" => serde_json::from_str(payload).ok().map(Event::Call),
+        "meshAudioLevel" => {
+            let v: serde_json::Value = serde_json::from_str(payload).ok()?;
+            Some(Event::AudioLevel {
+                level: v["level"].as_f64()? as f32,
+                open: v["open"].as_bool().unwrap_or(false),
+            })
+        }
         "meshVoice" => {
             let v: serde_json::Value = serde_json::from_str(payload).ok()?;
             let people = v["people"]
@@ -1129,6 +1216,37 @@ mod tests {
         assert_eq!((news.category.as_deref(), news.admins_post), (Some("k1"), true));
         assert_eq!((club.members[1].name.as_str(), club.members[1].role.as_str()), ("bea", "member"));
         assert_eq!((club.unread(), club.mentions()), (2, 1));
+        assert!(!club.direct_allowed, "off unless meshSpaces says so");
+        let on = r#"{"spaces":[{"id":"aa11","name":"club","role":"owner","channels":[],"members":[],"directAllowed":true}]}"#;
+        let Some(Event::Spaces(on)) = line_event(&line("meshSpaces", on)) else {
+            panic!("no spaces")
+        };
+        assert!(on[0].direct_allowed);
+        let Some(Event::AudioLevel { level, open }) =
+            line_event(&line("meshAudioLevel", r#"{"level":-31.5,"open":true}"#))
+        else {
+            panic!("no level")
+        };
+        assert_eq!((level, open), (-31.5, true));
+        let reports = r#"{"space":"aa11","reports":[{"from":"mesh1b","about":"mesh1c","reason":"spam","quoted":["buy now"],"at":7}]}"#;
+        let Some(Event::SpaceReports(reports)) = line_event(&line("meshSpaceReports", reports))
+        else {
+            panic!("no reports")
+        };
+        let r = &reports.reports[0];
+        assert_eq!(
+            (
+                reports.space.as_str(),
+                r.from.as_str(),
+                r.about.as_str(),
+                r.at
+            ),
+            ("aa11", "mesh1b", "mesh1c", 7)
+        );
+        assert_eq!(
+            (r.reason.as_str(), r.quoted.as_slice()),
+            ("spam", &["buy now".to_string()][..])
+        );
 
         let page = r#"{"space":"aa11","channel":"c1","more":false,"events":[{"id":"57dd","from":"mesh1b","text":"hi","edited":false,"replyTo":null,"attachments":[],"reactions":[],"late":false,"time":5,"sent":false}]}"#;
         let Some(Event::SpaceMessages(page)) = line_event(&line("meshSpaceMessages", page)) else {

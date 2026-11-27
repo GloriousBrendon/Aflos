@@ -85,7 +85,7 @@ impl World {
         ]);
         let helper = self.rt.spawn(mesh::run_with(
             self.exe.clone(),
-            args,
+            move || args.clone(),
             self.root.join(name),
             tx,
         ));
@@ -150,9 +150,9 @@ impl World {
         self.press_until(copy, "unlocking", || Message::MeshForm(Msg::Submit), unlocked);
     }
 
-    /// Locking, through the call the app has for it (no button yet).
+    /// Log out (locks it).
     fn lock(&self, copy: &mut Copy) {
-        copy.app.mesh.node.as_ref().expect("the helper").lock();
+        let _ = update(&mut copy.app, Message::MeshForm(Msg::LogOut));
         let locked = |a: &App| a.mesh.identity.as_ref().is_some_and(|i| i.state == mesh::State::Locked);
         self.until(copy, "locked", locked);
     }
@@ -251,12 +251,8 @@ fn send(copy: &mut Copy, text: &str) {
 /// The paperclip with a file picked, then Enter.
 fn send_file(copy: &mut Copy, path: &Path) {
     let filename = path.file_name().unwrap().to_string_lossy().into_owned();
-    let attachment = Attachment {
-        mime: mime_guess_from(&filename),
-        filename,
-        data: std::fs::read(path).unwrap(),
-        path: Some(path.to_owned()),
-    };
+    let mime = mime_guess_from(&filename);
+    let attachment = Attachment::new(filename, mime, std::fs::read(path).unwrap(), Some(path.to_owned()));
     let _ = update(&mut copy.app, Message::AttachmentPicked(Some(attachment)));
     let _ = update(&mut copy.app, Message::SendMessage);
 }
@@ -679,6 +675,74 @@ fn checkpoint_b_steps_1_to_6() {
     for copy in [&mut a, &mut b, &mut d] {
         world.until(copy, "all three in it", all_in);
     }
+
+    // 10. PLAN-connection-privacy Task 13: friends are direct; with Hide my
+    // IP on, A's path to B is relayed and says why; off, direct again.
+    let path = |app: &App| app.mesh.path_to(&id_b);
+    world.until(&mut a, "A direct with B", |app| path(app) == Some("Direct"));
+    let _ = update(&mut a.app, Message::MeshHideIp(true));
+    world.until(&mut a, "relayed with Hide my IP", |app| {
+        path(app) == Some("Relayed: Hide my IP is on")
+    });
+    let _ = update(&mut a.app, Message::MeshHideIp(false));
+    world.until(&mut a, "direct again", |app| path(app) == Some("Direct"));
+
+    // 11. PLAN-audio Task 9: the mic test's meter moves (A's tone goes out);
+    // a manual sensitivity above it reaches mesh-node (not sending); the
+    // test stops; a person's volume is kept.
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::MicTest(Some(false))),
+    );
+    world.until(&mut a, "the meter, sending", |app| {
+        app.mesh.level.is_some_and(|(_, open)| open)
+    });
+    let mut strict = a.app.mesh.audio;
+    strict.threshold = Some(0.0);
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::Audio(strict, true)),
+    );
+    world.until(&mut a, "not sending above 0 dBFS", |app| {
+        app.mesh.level.is_some_and(|(_, open)| !open)
+    });
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::MicTest(None)),
+    );
+    assert!(a.app.mesh.level.is_none(), "the meter stops with the test");
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::PersonVolume(id_b.clone(), 50)),
+    );
+    assert_eq!(a.app.mesh.person_volumes.get(&id_b), Some(&50));
+
+    // 12. Remove from this device: the password, two presses; the helper
+    // restarts with no identity, and its keystore is gone.
+    let _ = update(
+        &mut a.app,
+        Message::MeshForm(Msg::RemovePassword(PASSWORD.into())),
+    );
+    let _ = update(&mut a.app, Message::MeshForm(Msg::RemoveIdentity));
+    assert!(
+        a.app
+            .mesh
+            .identity
+            .as_ref()
+            .is_some_and(|i| i.state == mesh::State::Unlocked),
+        "one press only arms it"
+    );
+    let _ = update(&mut a.app, Message::MeshForm(Msg::RemoveIdentity));
+    world.until(&mut a, "no identity", |app| {
+        app.mesh
+            .identity
+            .as_ref()
+            .is_some_and(|i| i.state == mesh::State::None)
+    });
+    assert!(
+        !root.join(a.name).join("identity.mks").exists(),
+        "the keystore is deleted"
+    );
 
     for copy in [a, b, c, d] {
         copy.helper.abort();

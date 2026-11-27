@@ -1,7 +1,7 @@
 # Spec: `connection-privacy` (Aflos)
 
 Status: **APPROVED 2026-11-25**, with your changes of the same day (P3, P4,
-P7, P12, P14, open question 6). Plan: PLAN-connection-privacy (to write). No code yet. Depends on
+P7, P12, P14, open question 6). Plan: [PLAN-connection-privacy](PLAN-connection-privacy.md) (APPROVED 2026-11-26). No code yet. Depends on
 [`transport`](SPEC-transport.md), [`routing`](SPEC-routing.md),
 [`social`](SPEC-social.md), [`spaces`](SPEC-spaces.md) and
 [`seed`](SPEC-seed.md) as built in Mesh-Node v0.4.1. Decisions marked
