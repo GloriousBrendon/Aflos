@@ -7751,7 +7751,7 @@ fn bubble_row<'a>(
             false,
             p,
         ))
-        .push(ui::mono(time.to_string(), 10.0, p.text_muted()));
+        .push(bubble_footer(message, session, time, mine, p));
     let bubble = container(inner)
         .padding([6, 10])
         .max_width(560)
@@ -7764,10 +7764,24 @@ fn bubble_row<'a>(
         top: if first { 8.0 } else { 0.0 },
         ..iced::Padding::ZERO
     };
+    // The hover bar floats in the free space beside the bubble (left of
+    // ours, right of theirs), level with its top, so it covers none of it.
+    let id = hover_id(message);
+    let bar = id.as_deref().and_then(|id| hover_bar(message, id, session, p));
+    let hover = |line: Element<'a, Message>| -> Element<'a, Message> {
+        let Some(id) = id.clone() else { return line };
+        let mut layers = stack![line];
+        if let Some(bar) = bar {
+            let side = if mine { iced::alignment::Horizontal::Left } else { iced::alignment::Horizontal::Right };
+            layers = layers.push(container(bar).width(Length::Fill).padding(gap).align_x(side));
+        }
+        mouse_area(layers)
+            .on_enter(Message::HoverMessage(id.clone()))
+            .on_exit(Message::UnhoverMessage(id))
+            .into()
+    };
     if mine {
-        return row![Space::new().width(Length::Fill), bubble]
-            .padding(gap)
-            .into();
+        return hover(row![Space::new().width(Length::Fill), bubble].padding(gap).into());
     }
     // Cozy: their picture by the first of a run, room for it by the rest.
     let face: Element<'a, Message> = match density {
@@ -7782,10 +7796,14 @@ fn bubble_row<'a>(
         theme::Density::Cozy => Space::new().width(32.0).into(),
         _ => Space::new().width(0.0).into(),
     };
-    row![face, bubble, Space::new().width(Length::Fixed(48.0))]
-        .spacing(8)
-        .padding(gap)
-        .into()
+    hover(
+        row![face, bubble, Space::new().width(Length::Fixed(48.0))]
+            .spacing(8)
+            .padding(gap)
+            // The whole width, so the hover bar has the free space to sit in.
+            .width(Length::Fill)
+            .into(),
+    )
 }
 
 /// A message's body: prose (with inline `code`), fenced code blocks, an
@@ -7849,8 +7867,9 @@ fn message_content<'a>(
         }
     }
 
-    // An Aflos message's "sending", "edited" or "late".
-    if let Some(mark) = message.web_id.as_ref().and_then(|id| session.web_marks.get(id)) {
+    // An Aflos message's "sending", "edited" or "late" (a bubble shows it
+    // beside its time instead, `bubble_footer`).
+    if fill && let Some(mark) = message.web_id.as_ref().and_then(|id| session.web_marks.get(id)) {
         col = col.push(ui::mono(mark.as_str(), 10.0, p.text_muted()));
     }
     if !message.reactions.is_empty() {
@@ -7899,24 +7918,66 @@ fn message_content<'a>(
     if picking {
         col = col.push(quick_reactions(message, id, p));
     }
+    if !fill {
+        // A bubble's hover bar sits beside the bubble, not over it
+        // (`bubble_row`), so it never covers a voice note's controls.
+        return col.into();
+    }
     let mut layers = stack![col];
-    if picking || session.hovered.as_deref() == Some(id) {
-        let ours = (session.mesh_mine.contains(id), session.mesh_editable.contains(id));
-        let channel = session.web_chat.as_ref().is_some_and(|c| mesh_spaces::split(&c.id).is_some());
+    if let Some(bar) = hover_bar(message, id, session, p) {
         layers = layers.push(
-            container(message_actions(message, id, ours, channel, p))
+            container(bar)
                 .width(Length::Fill)
                 .align_x(iced::alignment::Horizontal::Right),
         );
-    }
-    if !fill {
-        // The hover bar sits over the bubble, not the timeline's width.
-        layers = layers.width(Length::Shrink);
     }
     mouse_area(layers)
         .on_enter(Message::HoverMessage(id.to_string()))
         .on_exit(Message::UnhoverMessage(id.to_string()))
         .into()
+}
+
+/// A message's id for hovering: its Aflos or WhatsApp id, else its Matrix event.
+fn hover_id(message: &TimelineMessage) -> Option<String> {
+    message
+        .web_id
+        .clone()
+        .or_else(|| message.event_id.as_ref().map(|e| e.to_string()))
+}
+
+/// The hover bar for `id`, when it's hovered or its reaction picker is open.
+fn hover_bar<'a>(message: &TimelineMessage, id: &str, session: &Session, p: &'a theme::Palette) -> Option<Element<'a, Message>> {
+    let picking = session.reacting.as_deref() == Some(id);
+    if !picking && session.hovered.as_deref() != Some(id) {
+        return None;
+    }
+    let ours = (session.mesh_mine.contains(id), session.mesh_editable.contains(id));
+    let channel = session.web_chat.as_ref().is_some_and(|c| mesh_spaces::split(&c.id).is_some());
+    Some(message_actions(message, id, ours, channel, p))
+}
+
+/// A bubble's last line: the time, then its mark beside it. WhatsApp's ticks
+/// show as ✓ or ✓✓ (the accent once read, the word in a tooltip); an Aflos
+/// mark ("sending", "edited", "late") follows a dot.
+fn bubble_footer<'a>(message: &TimelineMessage, session: &Session, time: &str, mine: bool, p: &theme::Palette) -> Element<'a, Message> {
+    let mut line = row![ui::mono(time.to_string(), 10.0, p.text_muted())]
+        .spacing(4)
+        .align_y(iced::Alignment::Center);
+    if let Some(mark) = message.web_id.as_ref().and_then(|id| session.web_marks.get(id)) {
+        match mark.split_once(' ') {
+            Some((ticks, word)) if ticks.starts_with('✓') => {
+                let color = if word == "read" { p.accent() } else { p.text_muted() };
+                line = line.push(iced::widget::tooltip(
+                    ui::mono(ticks.to_string(), 10.0, color),
+                    container(text(word.to_string()).size(12)).padding([4, 8]),
+                    iced::widget::tooltip::Position::Top,
+                ));
+            }
+            _ => line = line.push(ui::mono(format!("· {mark}"), 10.0, p.text_muted())),
+        }
+    }
+    let align = if mine { iced::alignment::Horizontal::Right } else { iced::alignment::Horizontal::Left };
+    container(line).width(Length::Fill).align_x(align).into()
 }
 
 /// The quoted message above a reply: its author and a line of its text.
