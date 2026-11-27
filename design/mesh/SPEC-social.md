@@ -1,64 +1,78 @@
 # Spec: `social` (Aflos)
 
-Status: **DRAFT revision 2 (2026-11-25)**, for review, with the review answers
-of the same day folded in (D16, D17, D21, D25). Revision 1 was
-approved 2026-11-10 (requests through a live friend code). Revision 2 makes
-friendship consent-first: two people become friends only when both agree,
-and nothing is ever shown to someone because another person added them.
-Friend requests and friend codes go away; pairing codes and an in-Space
-"Add friend" replace them. Plan: PLAN-social changes (to write, version
-0.5.0). Depends on [`routing`](SPEC-routing.md), [`seed`](SPEC-seed.md),
-[`spaces`](SPEC-spaces.md) and
+Status: **APPROVED revision 3 (2026-11-27)**, the user's design of that
+evening ("keep the friend code, just both users need to send the code to
+become friends"), approved with the go-ahead to build and release. Revision
+1 was approved 2026-11-10 (requests through a live friend code). Revision 2
+(2026-11-25, pairing codes with SPAKE2) was a draft and is **replaced**: its
+text stays below, marked, for the record. Plan: PLAN-social, revision 3
+tasks (version 0.6.0). Depends on [`routing`](SPEC-routing.md),
+[`seed`](SPEC-seed.md), [`spaces`](SPEC-spaces.md) and
 [`connection-privacy`](SPEC-connection-privacy.md).
 
 ## Objective
 
-Aflos is for close friends, consent first. Friendship is the thing that
-unlocks everything private: DMs, calls, presence and direct connections
-(connection-privacy P1). So becoming friends must need both people, every
-time, and asking must cost the other person nothing: no request in their
-inbox, no notification, no "pending" they have to deal with.
+Aflos is for close friends, consent first. Friendship unlocks everything
+private: DMs, calls, presence, profiles and direct connections. So two
+people become friends only when **both** have added the other, and adding
+someone puts nothing in front of them: no request, no notification, no
+Pending list to deal with.
 
-There are three ways to become friends, all mutual:
-
-1. **Pairing** (outside a Space): one of you taps Pair and reads out or
-   sends a short code like `7-gitaar-koffie`; the other types it within 2
-   minutes; both see the other's name and identicon and tap Confirm. In person,
-   one shows a QR code and the other scans it, which also marks you verified.
-2. **Add friend in a Space**: on a member's profile. When both of you have
-   pressed it, you're friends. If only one has, the other never knows.
-3. **Add by ID** (revision 1's D2, kept): two people who already have each
-   other's IDs each add the other.
-
-**What stays from revision 1:** friends, blocked and removed kinds, the
-account sync between your own devices (D11), presence (D12, D13), names and
-verified (D14), and counts-only logs (D15).
-
-**What goes:** friend requests and their seed store (revision 1's D1, D3
-to D7), the `incoming` kind with Accept and Decline, and friend codes (the
-30-day `K7QM-3XPA` kind) with their seed services.
-
-**Not in this revision:** custom status text (later); mutual friends and
-suggestions (they'd show you strangers); pairing through a DHT instead of
-the seed (designed below, built later).
+**How:** friend codes stay exactly as they are, but a code is now only a
+short way to give someone your ID. Using a code (or typing an ID, or
+pressing Add friend on a Space member) adds that person **on your side**.
+When both of you have added each other, you're friends.
 
 **User stories**
 
-- I'm on the phone with a friend. I tap Pair and read out `7-gitaar-koffie`.
-  They type it; we each see the other's name and identicon, tap Confirm, and
-  we're friends.
-- At a braai, my friend shows a QR code and I scan it. Same result, nothing
-  typed.
-- Someone in a Space I'm in seems nice. I press Add friend on their profile.
-  Nothing happens on their side. Weeks later they press it too, and we're
-  both told we're friends.
-- Someone presses Add friend on me and I never press it back. I'm never told,
-  and nothing about them shows up anywhere.
-- Someone overhears half my pairing code and tries to guess the rest. They
-  get one guess; it's wrong; my pairing says "someone tried a wrong code;
-  start again".
-- In a Space, I can talk in its channels with anyone, but I can only DM or
-  call my friends.
+- I give a friend my code on the phone and they give me theirs. We each
+  type the other's; a moment later we're friends.
+- Someone gets my code from a friend of a friend and adds me. Nothing shows
+  on my side, ever; unless I add them too, nothing happens.
+- In a Space, I press Add friend on a member I like. If they press it on
+  me too, we're friends; if not, they never know.
+
+## Decisions (revision 3)
+
+| # | Decision | Why |
+|---|---|---|
+| R3-1 | **Friend codes stay** (identity's `FriendCode`, the seed's `code-hold`, `code-get`, `code-revoke`, their limits and 30-day life), unchanged. Using one resolves it to an ID (`code-get`), and the ID is added as `outgoing`. | They work, the seed already serves them, and people know them. Nothing new on the seed. |
+| R3-2 | **Friends = both added.** Kinds `outgoing` (you added them; they don't know), `friend`, `blocked`, `removed`. `incoming` is no longer made. An `outgoing` contact becomes a `friend` only on **proof that they added you too**: (a) their `added` message (R3-3), or (b) their presence stream, which a device only sends to its friends (D12). **A connection alone no longer counts** (revision 1's D8): Space members connect without adding each other (spaces S2). | Consent from both sides, proved, never inferred. |
+| R3-3 | **The `added` message.** A new device-to-device service `added`, one frame, `1`: "I have you as `outgoing` or `friend`". A device sends it to each connected device of someone it has as `outgoing` or `friend`, when the connection comes up and when it adds them. Receiving it from someone you have as `outgoing` makes them your friend and you answer with yours; from anyone else it's dropped and nothing is shown or kept. The connection is end-to-end encrypted and authenticated by device key, so it can't be forged; only friends, contacts and Space peers can connect at all. | The smallest proof that works over the connections that already exist. |
+| R3-4 | **No requests.** `friendRequest(code, note)` becomes "add by code": it resolves the code and adds them as `outgoing`, with no knock and no note. `friendAccept`, `friendDecline`, the knock collection and the request half of `meshSocial` go. The seed keeps its knock services for 0.5.x clients; nobody on 0.6.0 reads them, and what's in them expires (seed D8). | One mechanism for codes, IDs and Spaces. The seed needs no redeploy. |
+| R3-5 | **Add friend in a Space** (revision 2's D19, kept): on a member's row, it adds them as `outgoing`. | Space members already know each other's IDs. |
+| R3-6 | **Cancel and remove** (revision 2's D9, simpler): Cancel drops your `outgoing` entry at once; there's no token to outlive it. Remove turns a friend into `removed` and cuts them off as before. | No seed state, so nothing lingers. |
+| R3-7 | **A dishonest seed** could answer a code with someone else's ID. As today, the safety number (D14) is how you check a friend is who you think; Aflos shows "Verified" once you've compared it. A short fingerprint in the code wouldn't stop a seed that can grind keys, so the code stays as it is. | Honest about the limit; the seed is ours today, and each side has to add the wrong ID for anything to happen. |
+| R3-8 | **DMs and calls only between friends** (revision 2's D22): already how the helper works (`not-a-friend`). | |
+| R3-9 | **Older clients.** A 0.5.x user's request to a 0.6.0 user is never read. If the 0.6.0 user adds them back, the 0.5.x side counts the connection as friendship (revision 1) and starts presence, which the 0.6.0 side takes as proof (R3-2 b): they end up friends. Existing friendships are untouched. | Mixed versions still work in the direction that matters. |
+
+**Kept from revisions 1 and 2:** blocked and removed kinds, account sync
+(D11), presence, status and names (D12 to D14), counts-only logs (D15).
+**Not taken from revision 2:** pairing codes and QR (D16, D18, D20), mutual
+tokens on the seed (D17), identicons (D21: profiles' avatars now), moving
+device linking onto pairing codes (D25), new seed limits (D24), and removing
+friend codes (D23).
+
+**Migration at the first unlock on 0.6.0:** friends, blocked and removed
+stay; `outgoing` stays `outgoing`; `incoming` requests you never answered
+become `removed` without being shown again.
+
+**Commands (helper):** `codeResolve(code)`, `friendRequest(code)` (add by
+code), `friendAdd(id, nick)`, `friendCancel(id)`, `friendRemove(id)`,
+`friendRename`, `friendVerify`, `block`, `unblock`, `statusSet`,
+`socialList`. `meshSocial` keeps `friends`, `outgoing`, `blocked` and
+status; its `incoming` is always empty.
+
+**Testing:** unit tests in the keystore (an `incoming` entry migrates to
+`removed`; `outgoing` becomes `friend` only through `added`); process tests:
+two people add each other by code and become friends; one-sided adds by
+code, by ID and through a Space leave the other side with nothing; a Space
+connection between an `outgoing` contact and a member who didn't add them
+doesn't make friends; Cancel before the other adds you means no friendship.
+
+---
+
+# Revision 2 (replaced 2026-11-27, kept for the record)
 
 ## Decisions (revision 2)
 
