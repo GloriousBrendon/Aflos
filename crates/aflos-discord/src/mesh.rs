@@ -94,6 +94,12 @@ pub enum Event {
     Profile(Profile),
     /// Top 8 asks, answers and who's shown (PR11).
     Top8(Top8),
+    /// The plugins found (`Node::fx_scan`): `{plugins: [{path, format, id,
+    /// name, vendor}], broken: [{path, error}]}` (SPEC-voice-quality).
+    FxPlugins(serde_json::Value),
+    /// How a person's plugins are doing: `{state, latency?, error?}`, or an
+    /// `{answer}` to `fx_edit`, `fx_params`, `fx_param`, `fx_save`.
+    Fx(serde_json::Value),
     /// The helper exited; it's restarted by itself.
     Disconnected,
 }
@@ -907,6 +913,28 @@ impl Node {
         self.call(func, args);
     }
 
+    /// Finds plugins (SPEC-voice-quality): `{"dirs": [...], "fresh": bool}`;
+    /// answers with `FxPlugins`.
+    pub fn fx_scan(&self, json: &str) {
+        self.call("fxScan", &[json]);
+    }
+    /// Our plugin chain, `[{path, id, on}]` in order; answers with `Fx`.
+    pub fn fx_chain(&self, json: &str) {
+        self.call("fxChain", &[json]);
+    }
+    /// The plugins again after a bypass.
+    pub fn fx_restart(&self) {
+        self.call("fxRestart", &[]);
+    }
+    /// A plugin's editor, parameters and state, by its place in the chain;
+    /// they work while the mic test or a call runs. `func` is `fxEdit`,
+    /// `fxEditClose`, `fxParams`, `fxParam` (with a parameter id and value)
+    /// or `fxSave`; answers come as `Fx {answer}`.
+    pub fn fx(&self, func: &str, args: &[&str]) {
+        debug_assert!(func.starts_with("fx"));
+        self.call(func, args);
+    }
+
     /// Calls a friend (SPEC-calls); answers with `Call` events.
     pub fn call_start(&self, friend: &str) {
         self.call("callStart", &[friend]);
@@ -1115,6 +1143,8 @@ fn line_event(line: &str) -> Option<Event> {
         "meshSpaceNotify" => serde_json::from_str(payload).ok().map(Event::SpaceNotify),
         "meshProfile" => serde_json::from_str(payload).ok().map(Event::Profile),
         "meshTop8" => serde_json::from_str(payload).ok().map(Event::Top8),
+        "meshFxPlugins" => serde_json::from_str(payload).ok().map(Event::FxPlugins),
+        "meshFx" => serde_json::from_str(payload).ok().map(Event::Fx),
         "meshSpaceTyping" => {
             let v: serde_json::Value = serde_json::from_str(payload).ok()?;
             let who = v["who"].as_array()?.iter().filter_map(|w| w.as_str().map(str::to_owned)).collect();

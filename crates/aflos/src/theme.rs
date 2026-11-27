@@ -400,6 +400,15 @@ pub struct Config {
     /// Play a friend's profile song when their profile opens (off: SPEC-profile PR10).
     #[serde(default)]
     pub autoplay_songs: bool,
+    /// A person's own voice plugins, in order (SPEC-voice-quality).
+    #[serde(default)]
+    pub fx_plugins: Vec<crate::fx_ui::Plugin>,
+    /// Folders to look for plugins in, besides the standard ones.
+    #[serde(default)]
+    pub fx_dirs: Vec<String>,
+    /// Aflos calls' voice quality: `low`, `standard` (unset), `high`, `studio`.
+    #[serde(default)]
+    pub audio_quality: Option<String>,
 }
 
 /// The animated backgrounds (see rain.rs).

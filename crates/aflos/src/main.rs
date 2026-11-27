@@ -11,6 +11,7 @@ mod mesh_dm;
 mod mesh_spaces;
 mod mesh_ui;
 mod migrate;
+mod fx_ui;
 mod profile_ui;
 mod rain;
 mod sounds;
@@ -1438,6 +1439,7 @@ enum Message {
     MeshSpace(mesh_spaces::Msg),
     MeshCall(mesh_calls::Msg),
     Profile(profile_ui::Msg),
+    Fx(fx_ui::Msg),
     /// The Hide my IP switch (SPEC-connection-privacy P6).
     MeshHideIp(bool),
     /// Join a Discord voice channel, or call a Discord DM.
@@ -1709,6 +1711,7 @@ fn boot() -> (App, Task<Message>) {
     app.mesh.input_volume = config.input_volume.unwrap_or(100).min(200);
     app.mesh.audio = mesh_ui::AudioPrefs::from_config(&config);
     app.mesh.profile.autoplay = config.autoplay_songs;
+    (app.mesh.fx.chain, app.mesh.fx.dirs) = (config.fx_plugins.clone(), config.fx_dirs.clone());
     app.mesh.person_volumes = config.person_volumes.clone();
     mesh_ui::HIDE_IP.store(config.hide_ip, std::sync::atomic::Ordering::Relaxed);
     // With mesh-node, everything else waits until the Aflos identity is open.
@@ -1991,6 +1994,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         Message::MeshSpace(msg) => mesh_spaces::update(state, msg),
         Message::MeshCall(msg) => mesh_calls::update(state, msg),
         Message::Profile(msg) => profile_ui::update(state, msg),
+        Message::Fx(msg) => fx_ui::update(state, msg),
         Message::MeshHideIp(on) => {
             state.mesh.hide_ip = on;
             mesh_ui::HIDE_IP.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -9466,7 +9470,7 @@ fn rice_export<'a>(state: &'a App) -> Element<'a, Message> {
 
 fn voice_page<'a>(
     session: &'a Session,
-    mesh: &mesh_ui::Mesh,
+    mesh: &'a mesh_ui::Mesh,
     p: &'a theme::Palette,
 ) -> Element<'a, Message> {
     let (ptt, gain, prefs) = (mesh.ptt, mesh.input_volume, mesh.audio);
@@ -9488,6 +9492,8 @@ fn voice_page<'a>(
         .spacing(12)
         .align_y(iced::Alignment::Center),
         audio_processing(mesh, prefs, p),
+        voice_quality(prefs, p),
+        fx_ui::view(mesh, p),
         button(text(format!("{} Push to talk in Aflos calls: hold Right Ctrl while Aflos is focused", if ptt { "☑" } else { "☐" })).size(13))
             .on_press(Message::MeshCall(mesh_calls::Msg::PttSetting(!ptt)))
             .padding([4, 0])
@@ -9498,6 +9504,28 @@ fn voice_page<'a>(
             .color(p.text_muted()),
     ]
     .spacing(20)
+    .into()
+}
+
+/// SPEC-voice-quality: Low to Studio, and what it costs to send.
+fn voice_quality<'a>(prefs: mesh_ui::AudioPrefs, p: &'a theme::Palette) -> Element<'a, Message> {
+    let labels: Vec<&'static str> = fx_ui::QUALITIES.iter().map(|(l, _, _)| *l).collect();
+    let now = fx_ui::QUALITIES.iter().find(|(_, q, _)| *q == prefs.quality).copied().unwrap_or(fx_ui::QUALITIES[1]);
+    let pick = pick_list(labels, Some(now.0), move |label| {
+        let mut next = prefs;
+        next.quality = fx_ui::QUALITIES.iter().find(|(l, _, _)| *l == label).map_or("standard", |(_, q, _)| q);
+        Message::MeshCall(mesh_calls::Msg::Audio(next, true))
+    })
+    .padding(4);
+    row![
+        text("Voice quality in Aflos calls").size(13).width(260),
+        pick,
+        text(format!("{} kb/s · about {} kb/s up in a call of 5", now.2, fx_ui::upload(now.2, 5)))
+            .size(12)
+            .color(p.text_muted()),
+    ]
+    .spacing(12)
+    .align_y(iced::Alignment::Center)
     .into()
 }
 
