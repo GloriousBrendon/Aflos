@@ -235,3 +235,22 @@ two-machine check, in the same sitting as the other modules' gates.
 ## Open questions
 
 None.
+
+## Revision 3 tasks (2026-11-27, APPROVED with SPEC-social revision 3; 0.6.0)
+
+- [ ] **Task R3-1: the proof** (Mesh-Node). A connection alone no longer
+  makes friends (`Back::Reached`, `Back::Connected`); a new `added` service
+  carries "I have you as outgoing or friend", sent on connect and on add;
+  receiving it from an `outgoing` contact makes them a friend. Presence
+  stays a proof. **Accept:** a process test where a Space member we added,
+  who didn't add us, connects and stays `outgoing`; and two who add each
+  other become friends.
+- [ ] **Task R3-2: no requests** (Mesh-Node). `friendRequest(code)` adds by
+  code; knock collection, `friendAccept`, `friendDecline` go; `incoming`
+  migrates to `removed` at unlock. **Accept:** keystore unit tests; the
+  social process tests updated.
+- [ ] **Task R3-3: Aflos.** The Pending tab shows only who you've added
+  (waiting for them); "Send friend request" becomes "Add friend"; no
+  Accept or Decline; Add friend on Space member rows; copy says "you're
+  friends once they add you too". **Accept:** the checkpoint's friends
+  steps pass with the new flow.

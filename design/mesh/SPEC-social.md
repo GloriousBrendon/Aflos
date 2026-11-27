@@ -1,311 +1,280 @@
-# Spec: `social` (Mesh)
+# Spec: `social` (Aflos)
 
-Status: **APPROVED 2026-11-10**: requests only through a live friend code
-(Q1, your answer), silent decline, friends synced between your devices,
-invisible but reachable, custom status text later. Plan:
-[PLAN-social.md](PLAN-social.md). Module 5 of the build order in
-[CAPABILITY-MAP.md](CAPABILITY-MAP.md). Depends on
-[`routing`](SPEC-routing.md) (built; Checkpoint B by hand pending) and
-[`seed`](SPEC-seed.md) (built; homelab deploy waiting on Checkpoint B).
+Status: **APPROVED revision 3 (2026-11-27)**, the user's design of that
+evening ("keep the friend code, just both users need to send the code to
+become friends"), approved with the go-ahead to build and release. Revision
+1 was approved 2026-11-10 (requests through a live friend code). Revision 2
+(2026-11-25, pairing codes with SPAKE2) was a draft and is **replaced**: its
+text stays below, marked, for the record. Plan: PLAN-social, revision 3
+tasks (version 0.6.0). Depends on [`routing`](SPEC-routing.md),
+[`seed`](SPEC-seed.md), [`spaces`](SPEC-spaces.md) and
+[`connection-privacy`](SPEC-connection-privacy.md).
 
 ## Objective
 
-Turn routing's bare contacts into friends, the way Discord has them. Someone
-holding one of your live friend codes can ask to be your friend; nobody else
-can. You accept or decline. Friends see each other's presence, and you can
-block anyone. Your other devices keep the same friends and blocks.
+Aflos is for close friends, consent first. Friendship unlocks everything
+private: DMs, calls, presence, profiles and direct connections. So two
+people become friends only when **both** have added the other, and adding
+someone puts nothing in front of them: no request, no notification, no
+Pending list to deal with.
 
-Today two people become reachable only when each pastes the other's ID and
-clicks Add as contact (routing D9), and neither learns that the other did.
-After this module, one side sends a request with your code. You get it even if
-you were offline when it was sent, and one click on Accept makes you friends
-on both sides.
-
-**What this module delivers**
-
-1. **Friend requests through a live code.** A sealed request, encrypted to
-   the code's owner, left on the seed under the code. The seed takes it only
-   while the code is live, and it uses up one of the code's uses. Only the
-   owner can read requests back.
-2. **Add by ID**, for two people who already have each other's IDs (D2).
-3. **Accept, decline, cancel, remove.** Accept makes the sender a contact.
-   Routing's records and allow list do the rest, and the first connection
-   tells both sides they're friends.
-4. **Friends, pending and blocked lists**, kept in the keystore with the
-   contacts routing already stores.
-5. **Blocking.** A blocked ID is never a contact. Its requests are dropped
-   unread, and its connections are refused (routing D9).
-6. **Account sync between your own devices.** Your friends, pending requests,
-   blocks and chosen status are the same on every device.
-7. **Presence.** Online, idle, do not disturb and invisible, sent only to
-   friends over live connections.
-8. **Mesh in Mesh-Voice's Friends page**: Online, All, Pending and Blocked,
-   plus Add Friend taking a friend code (a request) or an ID (add by ID).
-
-**Not in v1 of this module**
-
-- Custom status text and activities (decided: later).
-- Mutual friends and suggestions. Both need friend-of-friend (routing Q1).
-- Offline delivery of anything except requests, which already wait on the
-  seed. Presence is live only. An Accept made while the sender is offline
-  reaches them when either side next connects (at most routing's 30-minute
-  refresh), or through `mailbox` later.
-- Telling a removed friend they were removed. Their side shows you offline
-  until they remove you too.
-- Reporting and moderation. There's nobody to report to. Spaces moderation
-  is `spaces`.
+**How:** friend codes stay exactly as they are, but a code is now only a
+short way to give someone your ID. Using a code (or typing an ID, or
+pressing Add friend on a Space member) adds that person **on your side**.
+When both of you have added each other, you're friends.
 
 **User stories**
 
-- My friend gives me a friend code. I paste it into Add Friend, check the
-  safety number, and send a request with a note. They're offline. When they
-  open Mesh an hour later, the request is under Pending, with my name and
-  note.
-- They click Accept. Within a few seconds I see them under Online, and we can
-  ping each other by ID.
-- Someone has my ID from a screenshot but no live code. They can't send me
-  anything, and they can't tell whether I'm online.
-- A friend and I already have each other's IDs. We each Add by ID, and we're
-  friends as soon as our devices connect.
-- Someone I don't want sends me a request. I block them from the request.
-  Nothing more from them shows up, on this device or my laptop.
-- I set Do not disturb on my desktop. My laptop shows Do not disturb too,
-  and so do my friends.
-- I go Invisible. My friends see me as offline, but they can still reach me.
-- I remove a friend. They drop off my lists on both my devices, and within
-  routing's 2 hours they can't find me any more.
+- I give a friend my code on the phone and they give me theirs. We each
+  type the other's; a moment later we're friends.
+- Someone gets my code from a friend of a friend and adds me. Nothing shows
+  on my side, ever; unless I add them too, nothing happens.
+- In a Space, I press Add friend on a member I like. If they press it on
+  me too, we're friends; if not, they never know.
 
-### Decisions this spec makes
+## Decisions (revision 3)
 
 | # | Decision | Why |
 |---|---|---|
-| D1 | **Requests only through a live friend code** (Q1). A request is put on the seed under the code's `lookup_id`, which only someone who has the code can derive (Argon2id, identity D4). The seed takes it only while that code is held there and live: not expired, revoked or used up. **Each request uses up one of the code's uses**, so a single-use code (the default) admits one request. Looking a code up (`code-get`) no longer uses it up. *This changes seed D7, where a lookup counted a use.* | Your answer: "that's why we built it to expire." Having an ID alone gets a stranger nothing. A code's expiry, use limit and revoke now control who can ask, which is what they were for. Counting the request rather than the lookup means Check an ID (resolve, then compare the safety number) doesn't burn the code before the request is sent. |
-| D2 | **Two people with only IDs become friends by each adding the other** (Add by ID). Adding an ID makes it an `outgoing` contact. That publishes routing records for them and lets their devices in. When both have done it, the first connection between them makes them friends. Nothing is sent to someone who added you by ID alone. They find out only if they add you too. | With D1, an ID can't carry a request, so the only way in by ID is the mutual one routing already has. It's like swapping phone numbers: each of you saves the other. No request goes to the other side, so a leaked ID still gets a stranger nothing. |
-| D3 | **Only the owner reads requests.** `knock-get` carries the code's `CodeRevoke` (lookup ID and revoke secret, identity D5). The seed checks it against the code's revoke tag, the same way `code-revoke` does, and answers that code's requests and whether the code is still live. | Nobody else, including other code holders, can see or count your requests. Reading shows the seed the revoke secret. That only lets the seed delete the code, which it could do anyway. |
-| D4 | **A sealed request.** The sender makes a throwaway key and seals to the owner's root key: `X25519(throwaway, owner root)` → `blake3::derive_key("mesh/v1/knock-key")` → XChaCha20-Poly1305. Inside, signed by the sender's device key (domain `mesh/v1/knock`): the sender's `DeviceList`, the owner's ID, the code's lookup ID, the sender's display name (≤ 64 bytes), a note (≤ 280 bytes) and the created time. The seed sees the lookup ID, an 8-byte slot and ciphertext. | It reuses routing's machinery: `RootKey::diffie_hellman` already takes an Edwards public key, so the throwaway key is a fresh `RootKey`. No new dependencies. The owner ID and lookup ID inside stop the seed, or anyone else, replaying a request under another code. The `DeviceList` proves the sender's ID and gives routing their devices. |
-| D5 | **The slot is per sender**: the pair's slot (routing D1's pair secret, context `mesh/v1/knock-slot`, mixed with the lookup ID). A resend replaces the earlier request, and still uses a use. | The seed can't tell two senders apart, but one sender can't stack requests. |
-| D6 | **Seed limits for requests**: per device, 20 puts an hour and 60 gets a minute; per source network (/24 or /48), 60 puts an hour; at most 32 requests per code, dropping the oldest; 4 KiB per request (as address records, since both carry a device list); 100,000 in all. A request is kept **7 days**, even after its code is gone, so the owner can still collect it. | The code's own uses already bound requests per code, and the per-network limit bounds what one place can send. Seven days covers someone away for a week. |
-| D7 | **The owner's device collects requests** for every code it made, at unlock and every 5 minutes. It keeps collecting for a code until the seed says the code is gone and it has read that code's requests. Then it drops the code from its list. *Changed from today, where a used-up code leaves the list as soon as a seed says so: the last request would be lost.* Codes are per device (identity), so the device that made a code collects for it. The requests then reach your other devices through sync (D11). | No request is lost because of when the code ran out. |
-| D8 | **Friends are mutual contacts.** Each person in your account state has a kind: `outgoing` (you asked, or added their ID), `friend`, `incoming` (they asked; **not** let through the handshake), `blocked`, or `removed` (a tombstone for sync). Routing's contacts are exactly the `outgoing` and `friend` entries. Any connection that passes the handshake with an `outgoing` contact makes them a `friend`, because their device let you in, so they've added you too. | Routing's allow list already makes a connection mean "we've both added each other". Accept, and add-by-ID on both sides, both end up as such a connection, so there's no separate "accepted" message to lose. |
-| D9 | **Accept, decline, cancel, remove.** Accept turns `incoming` into `friend`, publishes records, and dials the sender. Their side becomes `friend` on that connection (D8). If the sender is offline, it happens the next time either side dials (routing's refresh). **Decline is silent**: the request is dropped, the sender stays `outgoing`, and nothing tells them. Cancel drops your `outgoing` entry. Remove turns a friend into `removed` and closes their connections. | As in Discord, a declined sender isn't told, which keeps it free of pressure and leaks nothing. |
-| D10 | **Blocking.** `block(id)` makes the ID `blocked`, drops any contact or request for them, and closes their connections. A blocked sender's requests are opened only to read who sent them, then dropped and never shown. Unblocking makes them `removed` (it doesn't bring back a friendship). At most 10,000 blocks. | Per account, kept on your devices (map decision). Because a blocked ID is never a contact, routing D9 already refuses its connections and never publishes records for it. Blocking adds only the request filter and the sync. |
-| D11 | **Account sync between your own devices.** The account state is a last-writer-wins map keyed by ID. Each entry has a kind, your nickname for them, a verified flag, their display name and note (for requests), and `(changed_at, device)`. `removed` tombstones are kept for good: the newest 1,000, the oldest going first past that. *Changed 2026-11-11 (audit finding 14): with a 90-day life, a device unused that long brought back friends removed since, and filtering old entries instead kept a newly linked or restored device from taking friendships older than 90 days.* Your chosen status is synced the same way. Your devices find each other through routing under the **self pair** (`PairKeys::new(root, own ID)`), which only your devices can derive. They connect (own devices are allowed, routing D9) and swap state on a `sync` stream: at connect, at each refresh, and on every change to the devices that are connected. | Your answer: sync friends, not just blocks. Otherwise a friend you add on the desktop can't reach the laptop, because only the desktop publishes records for them. The self pair gives own-device rendezvous with no new mechanism. Last-writer-wins with tombstones is enough for one person editing their own lists, and it ends the same whatever order merges happen in. |
-| D12 | **Presence over live connections, to friends only.** While unlocked, the helper dials each friend and `outgoing` contact at unlock and at each refresh. Once one is a friend and connected, each side sends its presence on a `presence` stream, on change and every 60 s. A friend who sends nothing for 150 s, or whose connections all close, is offline. | Presence has to be live, and seed records refresh every 30 minutes, which is too slow. Friends are tens, not thousands, and an idle QUIC connection costs almost nothing (transport measured 0.07% CPU). |
-| D13 | **The status model.** You pick one status for the account: online, idle, DND or invisible, synced to your devices (D11). Each device also goes auto-idle after 10 minutes without input in Mesh-Voice. A friend sees your best device: DND beats online, which beats idle. **Invisible** sends `offline` to friends, but you stay connected and reachable (Q4, as recommended). | Discord's model, which people already know. Auto-idle has to be per device, because it's per keyboard. |
-| D14 | **Names.** A friend's display name comes from their request (or their sync of it) and is only a hint (identity: "self-chosen, not unique"). Your nickname for them wins when set. **Verified** is a flag you set after comparing the safety number, and it's synced (D11). | Identity left showing "verified" to `social`. |
-| D15 | **Nothing identifying is logged**, on the seed or in the helper's stderr: no IDs, lookup IDs, names or notes, only counts. | Same rule as routing D10. |
+| R3-1 | **Friend codes stay** (identity's `FriendCode`, the seed's `code-hold`, `code-get`, `code-revoke`, their limits and 30-day life), unchanged. Using one resolves it to an ID (`code-get`), and the ID is added as `outgoing`. | They work, the seed already serves them, and people know them. Nothing new on the seed. |
+| R3-2 | **Friends = both added.** Kinds `outgoing` (you added them; they don't know), `friend`, `blocked`, `removed`. `incoming` is no longer made. An `outgoing` contact becomes a `friend` only on **proof that they added you too**: (a) their `added` message (R3-3), or (b) their presence stream, which a device only sends to its friends (D12). **A connection alone no longer counts** (revision 1's D8): Space members connect without adding each other (spaces S2). | Consent from both sides, proved, never inferred. |
+| R3-3 | **The `added` message.** A new device-to-device service `added`, one frame, `1`: "I have you as `outgoing` or `friend`". A device sends it to each connected device of someone it has as `outgoing` or `friend`, when the connection comes up and when it adds them. Receiving it from someone you have as `outgoing` makes them your friend and you answer with yours; from anyone else it's dropped and nothing is shown or kept. The connection is end-to-end encrypted and authenticated by device key, so it can't be forged; only friends, contacts and Space peers can connect at all. | The smallest proof that works over the connections that already exist. |
+| R3-4 | **No requests.** `friendRequest(code, note)` becomes "add by code": it resolves the code and adds them as `outgoing`, with no knock and no note. `friendAccept`, `friendDecline`, the knock collection and the request half of `meshSocial` go. The seed keeps its knock services for 0.5.x clients; nobody on 0.6.0 reads them, and what's in them expires (seed D8). | One mechanism for codes, IDs and Spaces. The seed needs no redeploy. |
+| R3-5 | **Add friend in a Space** (revision 2's D19, kept): on a member's row, it adds them as `outgoing`. | Space members already know each other's IDs. |
+| R3-6 | **Cancel and remove** (revision 2's D9, simpler): Cancel drops your `outgoing` entry at once; there's no token to outlive it. Remove turns a friend into `removed` and cuts them off as before. | No seed state, so nothing lingers. |
+| R3-7 | **A dishonest seed** could answer a code with someone else's ID. As today, the safety number (D14) is how you check a friend is who you think; Aflos shows "Verified" once you've compared it. A short fingerprint in the code wouldn't stop a seed that can grind keys, so the code stays as it is. | Honest about the limit; the seed is ours today, and each side has to add the wrong ID for anything to happen. |
+| R3-8 | **DMs and calls only between friends** (revision 2's D22): already how the helper works (`not-a-friend`). | |
+| R3-9 | **Older clients.** A 0.5.x user's request to a 0.6.0 user is never read. If the 0.6.0 user adds them back, the 0.5.x side counts the connection as friendship (revision 1) and starts presence, which the 0.6.0 side takes as proof (R3-2 b): they end up friends. Existing friendships are untouched. | Mixed versions still work in the direction that matters. |
 
-### Changed 2026-11-14 by `spaces`
+**Kept from revisions 1 and 2:** blocked and removed kinds, account sync
+(D11), presence, status and names (D12 to D14), counts-only logs (D15).
+**Not taken from revision 2:** pairing codes and QR (D16, D18, D20), mutual
+tokens on the seed (D17), identicons (D21: profiles' avatars now), moving
+device linking onto pairing codes (D25), new seed limits (D24), and removing
+friend codes (D23).
 
-Approved with [SPEC-spaces.md](SPEC-spaces.md) (revision 3, S2 as changed
-2026-11-14). The decisions above don't change.
+**Migration at the first unlock on 0.6.0:** friends, blocked and removed
+stay; `outgoing` stays `outgoing`; `incoming` requests you never answered
+become `removed` without being shown again.
 
-- **D8 and D11 are unchanged.** Members of your Spaces aren't account
-  entries, so nothing new is synced and the account's format is the same.
-  Routing, mail and the handshake take your contacts plus the members of the
-  Spaces you hold (spaces S2). A connection with someone who's only a Space
-  member never makes them a friend, because they have no `outgoing` entry.
-- **`MAX_CONTACTS` (1,000)** counts contacts and Space members together, once
-  per person. An add to a Space that would take you past it is refused for
-  you, with that reason.
+**Commands (helper):** `codeResolve(code)`, `friendRequest(code)` (add by
+code), `friendAdd(id, nick)`, `friendCancel(id)`, `friendRemove(id)`,
+`friendRename`, `friendVerify`, `block`, `unblock`, `statusSet`,
+`socialList`. `meshSocial` keeps `friends`, `outgoing`, `blocked` and
+status; its `incoming` is always empty.
+
+**Testing:** unit tests in the keystore (an `incoming` entry migrates to
+`removed`; `outgoing` becomes `friend` only through `added`); process tests:
+two people add each other by code and become friends; one-sided adds by
+code, by ID and through a Space leave the other side with nothing; a Space
+connection between an `outgoing` contact and a member who didn't add them
+doesn't make friends; Cancel before the other adds you means no friendship.
+
+---
+
+# Revision 2 (replaced 2026-11-27, kept for the record)
+
+## Decisions (revision 2)
+
+Numbers from revision 1 are kept where the decision is kept; new ones start
+at D16.
+
+| # | Decision | Why |
+|---|---|---|
+| D2 | **Add by ID, mutual.** *Kept, mechanism changed.* Adding an ID makes it `outgoing` and puts a **mutual token** for the pair on the seeds (D17). When both have added each other, the token matches and both become friends. Nothing is sent to the other person, and nothing shows on their side. | Revision 1 made the first connection between two `outgoing` contacts the proof that both had added each other. With Spaces, members can connect without having added each other (spaces S2), so a connection no longer proves consent; the token does. |
+| D8 | **Kinds:** `outgoing` (you added them, by ID or Add friend; they don't know), `friend`, `blocked`, `removed` (a tombstone for sync). **`incoming` is gone.** Friendship comes only from a matched token (D17) or a completed pairing (D16), never from a connection. *Changed.* | Consent first: there's no state where someone else's action puts something in front of you. |
+| D9 | **Cancel and remove.** Cancel drops your `outgoing` entry and stops your token being renewed; the token already on the seed lasts until it expires (7 days, D17), so the Add friend button says "If they add you back before <date>, you'll be friends; cancel stops it after that." Remove turns a friend into `removed`, closes their connections and rotates your direct key (connection-privacy P4). Accept and decline are gone. *Changed.* | A token can't be taken back from the seed without letting someone probe and retract (D17), so its short life is stated honestly instead. |
+| D10 | **Blocking.** *Kept, simplified.* `block(id)` makes the ID `blocked`, drops any `outgoing` entry, closes their connections and rotates your direct key. There are no requests to filter any more. A blocked person's later tokens can never match, because you never put one for them. | As before, minus requests. |
+| D11 | **Account sync.** *Kept,* without `incoming` entries or request notes. | |
+| D12–D15 | **Presence, status, names, logs.** *Kept unchanged.* | |
+| D16 | **Pairing codes, Magic Wormhole style, with SPAKE2** (RustCrypto `spake2`, already a dependency for device linking). (1) A taps **Pair**. A's throwaway node (relay-only, connection-privacy P9) claims a **nameplate** from the seed's pairing service: the lowest free number, so it's short (`7`). A picks **two words** at random and shows `7-gitaar-koffie`. (2) B types it within **2 minutes**. B claims that nameplate as the second side; **only one second side is ever allowed**. (3) Both run SPAKE2 with the whole code as the password and the nameplate in the identity, exchanging messages through the seed's mailbox for that nameplate. (4) With the shared key, each sends a sealed **card**: its ID, signed `DeviceList` and display name; the other side shows it with the ID's identicon (D21). (5) Both see the other's card and tap **Confirm**; each sends a sealed confirm. When both have confirmed, both add the other as `friend` (no token needed). A pairing by QR (D20) also marks the friend **verified** (D14); a typed or spoken code doesn't, and those friends can compare the safety number later. (6) The nameplate is released: done, cancelled, wrong code, or 2 minutes up. **One guess per attempt:** a wrong code (SPAKE2 key confirmation fails) ends the pairing on both sides, and A must start again with a new code. *Your choice; mechanism proposed.* | Magic Wormhole's design: a short code is safe because a wrong guess burns it, so an attacker gets one try at about 1 in 65,536 (two words of 256; D18), and A sees the failed try. The seed only relays: it sees a nameplate, two throwaway keys and ciphertext (SPAKE2 messages are random-looking). Reusing the link module's SPAKE2 setup keeps new crypto to zero. |
+| D17 | **The mutual token** (for D2 and D19). For a pair of IDs, both sides can compute the same token: `blake3::derive_key("mesh/v1/mutual", pair secret)` (routing D1's pair secret, from either root key and the other's ID), plus a **side** bit (0 for the lower ID). New seed service `mutual-put(token, side)`: the seed stores `(token, side)` for **7 days** and answers `matched` if the other side's entry is there, else `waiting`. There's no get and no delete. While you have someone as `outgoing`, your device puts the token again at unlock and each refresh (routing's 30 minutes), so it learns of a match within a refresh, and the token never lapses while you still want it. On `matched`, both become `friend` and connect. *Proposed.* | The seed compares; neither side learns anything without putting its own token, and putting is pressing (so "probing" is consenting). No delete means nobody can put, read the answer, and take it back before the other notices. The seed learns that two throwaway sessions are a pair, as it already can from address records (seed D10b), but not who. |
+| D18 | **Code words: Afrikaans and English lists, 256 words each**, no word on both lists, no two words within one edit of each other, all 3 to 8 letters. The code is `nameplate-word-word`; the words come from your app language's list; the typing side accepts words from either list (each word maps to its index in its own list), lowercase, with spaces or hyphens. | Two words of 8 bits is Wormhole's strength, and one guess per attempt makes it enough. Accepting both lists lets an Afrikaans speaker read a code to an English speaker. Edit distance keeps typos from becoming another valid word. |
+| D19 | **Add friend inside a Space.** On a member's profile, "Add friend" makes them `outgoing` and puts the mutual token (D17). When both have pressed it, both are told "You and <name> are now friends". A one-sided press shows only on the presser's side ("Added; if they add you too, you'll be friends"). *Your choice.* | Space members already know each other's IDs, so this is D2 with a button. |
+| D20 | **In person: a QR code** carrying `mesh://pair/<nameplate>/<secret>`, where the secret is 128 random bits instead of two words. Scanning runs the same flow (D16) with no typing; both still see cards and Confirm. The QR expires with its nameplate (2 minutes). *Your choice.* | A long secret needs no guess limit, but keeping the same flow means one code path. |
+| D21 | **An identicon, no pictures yet.** The pairing card, the friends list, contacts and Space member lists show the name beside a pattern generated from the ID (an identicon: a symmetric 5×5 grid in a colour, both from `blake3(ID)`), so two people with the same name look different. Profile pictures come later. *Your choice (2026-11-25).* | Seeing something that belongs to that ID before confirming makes the confirm meaningful, without building pictures, their sync and their limits now. |
+| D22 | **DMs and calls only between friends.** In a Space you can talk in channels with every member, but you can't DM or call someone who isn't your friend; their profile shows "Add friend" instead. Group DMs contain only friends of the creator, and each member only sees DMs from their own friends (dm D7 as is). Existing DM threads with non-friends stay readable but closed for sending. *Your choice.* | Private messages are for people who both agreed to be friends. |
+| D23 | **Friend codes go away** (identity's 30-day `FriendCode`, `mesh://code/` links, the seed's `code-hold`, `code-get`, `code-revoke`). See *What replaces friend codes*. *Your choice.* | Pairing does their job with consent on both sides, and needs nothing stored for 30 days. |
+| D25 | **Device linking moves onto pairing codes.** The link code becomes a pairing code (`nameplate-word-word`, D18) and linking's rendezvous moves from an address record keyed by the code to the pairing service's nameplate and mailbox (D16). Linking's own SPAKE2 messages and the identity hand-over (`link.rs`) stay as they are; only the code format and where the two sides meet change. Identity's `FriendCode` type then goes. In 0.5.0 if the plan shows it's a small change; otherwise 0.5.1, and the plan says which. *Your choice (2026-11-25).* | One kind of code is simpler for people. |
+| D24 | **Seed limits for pairing and tokens** (connection-privacy: all callers are relayed, so the shared relayed buckets are what bind). Per throwaway key: 10 nameplate claims an hour and 64 token puts an hour. Everyone together: 600 nameplate claims an hour, 20,000 token puts an hour, 200,000 tokens held, 1,000 live nameplates. Per nameplate: 2 sides, 8 messages a side, 64 KiB a message. *Proposed.* | Ten users pair a handful of times a day and put tokens for their few `outgoing` people every 30 minutes: well under 1% of each. |
+
+### Removed in revision 2
+
+| # | Was | Why removed |
+|---|---|---|
+| D1 | Requests only through a live friend code; a request used up one of the code's uses. | Consent first: a request puts something in front of someone who didn't ask. |
+| D3 | Only the owner reads requests (`knock-get` with the code's revoke). | No requests. |
+| D4 | The sealed request format. | No requests. |
+| D5 | Per-sender request slots. | No requests. |
+| D6 | Seed limits for requests (20 puts an hour per device, 32 per code, 7 days). | No requests. |
+| D7 | The owner's device collects requests every 5 minutes. | No requests. |
+
+Also gone with them: `knock.rs` (identity), `knocks.rs` (seed store),
+`knock-put` and `knock-get`, the `incoming` kind, `friendRequest`,
+`friendAccept`, `friendDecline`, and the request half of `meshSocial`.
 
 ## Behaviour
 
-### Seed side (D1, D3, D6)
+### Seed side
 
-- `code-get` answers as before but no longer counts a use.
-- New store `knocks.rs`, shaped like `addrs.rs`: lookup ID → the code's
-  revoke tag and up to 32 `(slot, put_at, ciphertext)`, saved to
-  `knocks.bin` every 5 minutes and on stop. A damaged file is refused.
-- `knock-put` frame: `lookup_id ‖ slot ‖ ciphertext`. Answers `ok`, `gone`
-  (no live code under that lookup ID; this looks the same as never held),
-  `slow-down`, `full` or `bad`. `ok` uses up one of the code's uses.
-- `knock-get` frame: a `CodeRevoke` (48 bytes). Answers `0`, a byte for live
-  (1) or gone (0), then each request (u16 length + bytes); `1` if the revoke
-  doesn't match a code or box; or `3` (slow-down).
-- Requests are swept 7 days after they were put. A box goes once it's empty
-  and its code is gone.
-- The hourly counts line gains request puts, gets and requests held.
+- **Removed services:** `code-hold`, `code-get`, `code-revoke`,
+  `knock-put`, `knock-get`, and their stores `codes.bin` and `knocks.bin`
+  (deleted at the first start of a 0.5.0 seed, after logging their counts).
+- **Pairing service:**
+  - `pair-claim()` → `nameplate` (u16, the lowest free), live for 2 minutes.
+  - `pair-join(nameplate)` → `ok`, or `gone` (not live, or a second side
+    already joined; they look the same).
+  - `pair-put(nameplate, side, message)` and `pair-get(nameplate, side,
+    after)`: the mailbox. A get waits up to 20 s for a message newer than
+    `after`, then answers what's there.
+  - `pair-close(nameplate, side)`: frees it; it's freed anyway when done,
+    or 2 minutes after the claim.
+  - Nameplates and messages live in memory only; nothing is written to
+    disk.
+- **Mutual tokens:** `mutual-put(token, side)` → `matched` | `waiting` |
+  `slow-down`. Stored in `mutual.bin`, 7 days from the last put, saved like
+  `addrs.bin` (a damaged file starts empty: tokens come back within a
+  refresh).
+- The hourly counts line: claims, joins, wrong codes, token puts, matches.
+- **Kept:** `addr-put`, `addr-get` (routing, and device linking's
+  rendezvous), the mail services and mail records.
 
 ### Client side (the helper)
 
-- **Commands**, each answered by `meshSocial`:
-  - `friendRequest(code, note)`: resolves the code, seals a request, puts it
-    on every seed, then makes the owner `outgoing`. Errors: the code's parse
-    kinds, `not-found` (the code is gone), `self`, `blocked` (unblock them
-    first), `already-friend`, `slow-down`, `offline`.
-  - `friendAdd(id, nick)`: add by ID (D2), as `outgoing`.
-  - `friendAccept(id)`, `friendDecline(id)`, `friendCancel(id)`,
-    `friendRemove(id)`, `friendRename(id, nick)`,
-    `friendVerify(id, true|false)`.
-  - `block(id)` and `unblock(id)`. Blocking works whether or not they're in
-    your lists.
-  - `statusSet(online|idle|dnd|invisible)`; `activity(active|idle)`, which
-    Mesh-Voice sends after 10 minutes without input and on the next input.
-  - `socialList`.
-- These replace routing's `contact*` commands and `meshContacts`.
-  `netPingId` stays, for friends and `outgoing` contacts.
-- **`meshSocial`** is sent after each command, when a request arrives, on a
-  presence change and after a sync:
+- **Commands:**
+  - `pairStart()` → `meshPair {state:"code", code, qr, expires}`.
+  - `pairJoin(code)` (typed, or the scanned `mesh://pair/…`) → `meshPair
+    {state:"card", id, name}` once the other card arrives (Aflos draws the
+    identicon from the ID).
+  - `pairConfirm()`, `pairCancel()`.
+  - `meshPair {state:"done", id}` or `{state:"failed", reason:"wrong-code" |
+    "expired" | "cancelled" | "taken" | "offline"}`.
+  - `friendAdd(id)` (D2, D19), `friendCancel(id)`, `friendRemove(id)`,
+    `friendRename`, `friendVerify`, `block`, `unblock`, `statusSet`,
+    `activity`, `socialList`: as before, minus requests.
+- **`meshSocial`** loses `incoming`; `outgoing` entries gain `until` (when
+  the token lapses if cancelled).
+- **Pairing state machine** in `mesh-identity` (`pair.rs`, beside
+  `link.rs`, sharing its SPAKE2 helpers): A and B roles, messages
+  `Spake | Card | Confirm`, each sealed with XChaCha20-Poly1305 under keys
+  derived from the SPAKE2 key (`mesh/v1/pair-a`, `mesh/v1/pair-b`).
 
-  ```json
-  {"friends":  [{"id","name","nick","verified","presence":"online|idle|dnd|offline","seen"}],
-   "incoming": [{"id","name","note","at"}],
-   "outgoing": [{"id","nick","at"}],
-   "blocked":  [{"id","nick","at"}],
-   "status": "online|idle|dnd|invisible"}
-  ```
+### Aflos
 
-- **Streams**: two new transport services, `presence` (status frames) and
-  `sync` (account state), both postcard in length-capped frames.
+- **Add friend** (Friends page tab): two buttons, *Pair* (shows the code,
+  big, plus the QR and a 2-minute countdown) and *Scan or type a code*; and
+  under them, *Add by ID* with its line "they need to add you too".
+- A member's profile in a Space: *Add friend* / *Added (waiting)* / *Friends*.
+- Non-friends' profiles have no Message or Call buttons (D22).
 
-### Mesh-Voice
+## What replaces friend codes
 
-*As built (2026-11-10): Mesh-Voice has no Friends page for any network, so
-the lists, requests and status menu are on Your ID for now
-([PLAN-social.md](PLAN-social.md) Task 10). A Discord-style page in the
-shell is open for your decision.*
+| Where friend codes are used today | Replaced by |
+|---|---|
+| Friends → Add friend: "your friend code" (make, list, revoke codes) | *Pair*: a code and QR for 2 minutes, nothing kept afterwards. |
+| Friends → Add friend: "Check an ID" taking a code, then *Send friend request* | *Scan or type a code* runs pairing; an ID goes to *Add by ID* (D2). |
+| New (+) menu: "Add a friend — By their Aflos friend code or ID" | "Add a friend — Pair, or add by ID". |
+| Friends list empty states ("make a code to give someone, or type theirs") | "No friends yet. Under Add friend, tap Pair and give them the code." |
+| Your ID: "Friends, requests and friend codes are on Home, under Friends." | "Friends and pairing are on Home, under Friends." |
+| `mesh://code/<code>` links | Gone; a pasted one says "Friend codes were replaced by pairing; ask them to Pair with you." |
+| **Onboarding** | Onboarding never showed a friend code. Its only code is the **device link code** ("I already have Aflos": type the code from your other device), which is device linking, not friendship. **D25** moves it onto the pairing service and code format, so there's one kind of code. |
+| The seed's code store and limits (seed D7, D8's code limits, D9's `codes.bin`) | Removed; pairing and tokens (D24) instead. |
 
-- **Friends page** for Mesh, as for the other networks: Online, All, Pending
-  (incoming with Accept / Decline / Block, outgoing with Cancel) and Blocked
-  (Unblock). The presence dot comes from `presence`.
-- **Add Friend** gains a Mesh mode. A friend code resolves (as Check an ID
-  does) and shows the safety number, an optional note and Send request. An
-  ID shows Add by ID, with a line saying they need to add you too.
-- **Your status** menu: Online, Idle, Do not disturb, Invisible.
-- **A friend's profile**: nickname (editable), short ID, safety number with
-  Mark as verified, Ping, Remove, Block.
-- Your ID's Contacts list (routing) goes away. The Friends page replaces it.
+**Migration at the first unlock on 0.5.0:**
 
-## Tech stack
+- **Friends, blocked, removed:** unchanged.
+- **`outgoing` entries** (you added them by ID, or sent a request) become
+  presses: the device starts putting their mutual tokens. If they had added
+  you too (an `outgoing` entry on their side), it matches once both are on
+  0.5.0.
+- **`incoming` requests** that you never accepted are deleted without being
+  shown again. The senders keep you as `outgoing` (a press you never see).
+- **Your held codes** are dropped from the keystore; the helper stops
+  holding and collecting. A 0.5.0 seed deletes its code and request stores;
+  a 0.4.x seed drops them within 30 days (seed D8's hold life).
+- **What a 0.4.x client does with a 0.5.0 friend or seed:** set out in the
+  0.5.0 plan (PLAN-social). In short: 0.4.x code and request calls to a
+  0.5.0 seed get "unknown service" and show "update Aflos to add friends";
+  existing friendships between 0.4.x and 0.5.0 keep working.
 
-Nothing new. The request seal reuses `RootKey::diffie_hellman` (routing D1)
-with a throwaway `RootKey`, plus `blake3`, `chacha20poly1305` and `postcard`,
-all already dependencies.
+## Pairing through a DHT later
 
-## Commands
+Today the seed is the meeting place. To move it to a DHT (iroh's
+pkarr/mainline, or a later Aflos DHT) without changing the user's flow:
 
-```
-cargo test --workspace                       # Mesh-Node
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test -p mesh-app -p mesh-discord       # Mesh-Voice
-```
-
-## Project structure
-
-```
-Mesh-Node/
-  crates/mesh-identity/src/knock.rs       seal and open a request
-  crates/mesh-identity/src/account.rs     account state: LWW map, merge, tombstones
-  crates/mesh-identity/src/keystore.rs    account state stored, contacts kept in step
-  crates/mesh-node/src/codes.rs           code-get stops counting; spend a use
-  crates/mesh-node/src/knocks.rs          the seed's request store and limits
-  crates/mesh-node/src/seed.rs            knock-put / knock-get services
-  crates/mesh-node/src/social.rs          collecting requests, presence, sync (a child module of helper.rs)
-  crates/mesh-node/src/helper.rs          friend*, block, status commands; meshSocial
-  crates/mesh-node/tests/social.rs        a seed, two people, one with two devices
-Mesh-Voice/
-  crates/mesh-discord/src/mesh.rs         meshSocial, the new commands
-  crates/mesh-app/src/…                   Friends page, Add Friend Mesh mode, status
-```
-
-## Code style
-
-The same as routing: pure, unit-tested identity modules, a seed store shaped
-like `codes.rs`, limits as named constants, and derivation contexts as
-constants (`mesh/v1/knock-key`, `mesh/v1/knock-slot`, `mesh/v1/knock`).
+- **The nameplate becomes a lookup.** A derives a key pair from the code
+  (`Argon2id(code)` → seed → Ed25519) and publishes a short-lived signed
+  record under that public key, holding A's throwaway endpoint key and relay
+  URL (the same trick device linking already uses with the seed's address
+  records). B derives the same key from the typed code, resolves the record,
+  and dials A's throwaway node through the relay.
+- **SPAKE2 runs over that connection** instead of the seed's mailbox, with
+  the same messages (D16). The one-guess rule moves to A: A's throwaway node
+  takes one session and closes.
+- **What changes for privacy:** a record on a public DHT can be found by
+  anyone who tries all 65,536 codes against Argon2id (minutes to hours on a
+  GPU). They learn a throwaway key and a relay for 2 minutes, and still get
+  only one SPAKE2 guess. The nameplate stops being a short number; the code
+  becomes three words (`gitaar-koffie-braai`) so the lookup key alone has
+  more entropy.
+- Mutual tokens (D17) need a store that answers "is the other side there",
+  which a DHT does only as "publish yours, look for theirs": each side
+  publishes a record under `derive(token, side)` and looks for the other.
+  That works, but anyone who can compute the token (only the two people) can
+  look without publishing, so the probe protection of D17 is lost. Keep
+  tokens on seeds until there's a design for that.
 
 ## Testing strategy
 
-- **Unit tests**:
-  - `knock.rs`: seal and open round trip. The wrong owner, a tampered byte,
-    a request replayed under another lookup ID, and a device list from
-    another root are all refused.
-  - `account.rs`: merge is commutative and idempotent. The newer change wins.
-    A tombstone beats an older add and loses to a newer one. Only the
-    oldest tombstones past 1,000 go; an empty account takes an old friend.
-  - `knocks.rs` and `codes.rs`: a put needs a live code and uses a use; a
-    single-use code takes one request; a resend replaces; a full box drops
-    its oldest; reading needs the right revoke; requests outlive their code;
-    every limit; restart; a damaged file.
-  - Keystore: a keystore from routing opens with its contacts as `outgoing`.
-    The account state survives unlock and backup.
-- **Process test** (`tests/social.rs`): a seed, Alice, and Bob on two devices
-  (the second from Bob's backup).
-  - Bob makes a code and locks. Alice requests with it. A second request
-    with the same single-use code gets `not-found`. Bob unlocks, sees the
-    request and accepts. Both show each other as friends and online, and
-    ping by ID.
-  - Bob's second device shows Alice as a friend without doing anything.
-  - Bob sets DND: Alice sees `dnd`. Bob goes invisible: Alice sees `offline`
-    but can still ping him.
-  - Alice locks. Bob sees her offline.
-  - Carol requests Bob, and Bob blocks her from the request. Her next
-    request (with a new code) shows on neither of Bob's devices.
-  - Decline: Dave stays `outgoing` and gets no event.
-  - Add by ID on both sides makes two people friends.
-  - The seed's files and log contain no ID, name or note.
-- **Two-machine check** (by hand, the module gate, with the homelab seed):
-  1. The Linux box makes a friend code and closes Mesh. Windows sends a
-     request with it.
-  2. The Linux box opens Mesh, sees the request and accepts. Both show
-     Online within 5 s.
-  3. Status changes show on the other machine within 2 s.
-  4. Block and unblock from the other side, then remove.
-  5. `docker logs` on the seed shows counts only.
+- **Unit:**
+  - `pair.rs`: a round trip for both roles; a wrong code fails key
+    confirmation on both sides; a replayed or tampered message is refused;
+    cards are bound to the session (a card from another session fails).
+  - Word lists: 256 words each, disjoint, edit distance ≥ 2, parse in
+    either language, with spaces or hyphens, any case.
+  - Mutual tokens: both sides compute the same token; the store matches
+    only opposite sides; expiry; no delete; limits; damaged file starts
+    empty.
+  - Seed pairing service: lowest-free nameplates, one second side, 2-minute
+    expiry, mailbox order, limits.
+- **Process tests** (on the local relay, a 0.5.0 seed):
+  - Pairing: Alice pairs with Bob by code; both confirm; friends on both
+    sides and on Bob's second device. Then by QR text.
+  - Wrong code: Carol joins Alice's nameplate with wrong words; both sides
+    fail; Alice's nameplate is gone; Bob's correct join after that gets
+    `taken`.
+  - Expiry: a code typed after 2 minutes (clock offset) fails `expired`.
+  - Add friend in a Space: Alice presses; Bob's helper emits nothing and
+    his state has no trace of Alice's press; Bob presses; both become
+    friends within one refresh.
+  - Cancel: Alice presses and cancels; Bob presses 8 days later (clock
+    offset): no friendship.
+  - D22: a DM or call to a non-friend member is refused; channel messages
+    work.
+  - Migration: a 0.4.x keystore with friends, `outgoing`, `incoming` and
+    held codes opens with friends kept, `outgoing` kept, `incoming` and
+    codes gone.
+- **By hand:** pair two machines on different networks by reading a code
+  aloud; pair by QR with a phone camera pointed at the screen (the scanning
+  side is the second desktop's webcam, or typing the QR's text); press Add
+  friend on both sides of a Space.
 
 ## Boundaries
 
-- **Always:**
-  - Every seed request goes through the throwaway identity.
-  - Every request is sealed to the owner and signed by the sender's device.
-  - Presence goes to friends only.
-  - Counts-only logs.
-- **Ask first:**
-  - Any new dependency.
-  - Changing D1–D15.
-  - Custom status text, or anything that would show presence to
-    non-friends.
-- **Never:**
-  - Take a request without a live code.
-  - Let an `incoming` request through the handshake before it's accepted.
-  - Show a blocked ID's request, or tell them they're blocked.
-  - Tell a sender they were declined.
-  - Log or keep IDs, names or notes on the seed.
-  - Name the homelab in the public Mesh-Voice repo.
+- **Always:** both sides consent to every friendship; one-sided presses are
+  invisible to the other; one guess per pairing; counts-only logs.
+- **Ask first:** any way for one person's action to show something to
+  another before they've agreed; a code shorter than two words; any new
+  dependency (the word lists are data, not a crate).
+- **Never:** friend requests, suggestions, a public directory or search.
 
-## Success criteria
+## Resolved questions (2026-11-25)
 
-1. Requests, the account state, the seed store and the keystore changes pass
-   their tests on Linux and Windows. Clippy and fmt are clean.
-2. The process test passes, covering: a request sent while the owner is
-   locked, a spent code refused, accept, sync to a second device, presence,
-   block, decline, and add by ID.
-3. On the gate, Accept → both Online in under 5 s, and a status change shows
-   on the other side in under 2 s.
-4. Idle while unlocked with 50 friends, 10 of them online, stays under 0.5%
-   CPU on Linux. Live presence connections cost more than routing's 0.2%.
-5. The seed's request file and logs contain no ID, name or note.
-
-## Risks and mitigations
-
-| Risk | Impact | Mitigation |
-|---|---|---|
-| Someone with an unlimited, never-expiring code floods the box | Low | A box holds 32 and drops the oldest. The per-network limits apply. Revoke the code. |
-| Requests reach only the device that made the code | Low | Sync passes them to your other devices as soon as they connect (D11). |
-| Clock skew makes a request look too old or too new | Low | The owner accepts a created time up to a day ahead and up to 8 days old. |
-| Two devices edit the same entry at once | Low | Last-writer-wins by `changed_at`, ties broken by device key. One person rarely races themselves. |
-| Many live presence connections on a big friends list | Low | Only friends who are online, and idle QUIC is cheap. Criterion 4 measures it. |
-
-## Resolved questions (2026-11-10)
-
-- **Q1. Who can send a request?** Only someone holding a live friend code
-  (D1). Two people with only IDs add each other (D2).
-- **Q2. Decline?** Silent, like Discord (D9).
-- **Q3. Sync friends between devices?** Yes: friends, pending requests,
-  blocks and status (D11).
-- **Q4. Invisible?** Friends see you offline, but can still reach you (D13).
-- **Q5. Custom status text?** Later.
+1. **Picture:** not in 0.5.0; the name and an identicon (D21).
+2. **Device linking onto pairing:** yes, if small (D25).
+3. **Pairing marks verified:** by QR in person, yes; by a typed or spoken
+   code, no (D16).
+4. **Token life:** 7 days (D17).
 
 ## Open questions
 
