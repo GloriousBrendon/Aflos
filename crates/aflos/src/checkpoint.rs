@@ -150,9 +150,9 @@ impl World {
         self.press_until(copy, "unlocking", || Message::MeshForm(Msg::Submit), unlocked);
     }
 
-    /// Locking, through the call the app has for it (no button yet).
+    /// Log out (locks it).
     fn lock(&self, copy: &mut Copy) {
-        copy.app.mesh.node.as_ref().expect("the helper").lock();
+        let _ = update(&mut copy.app, Message::MeshForm(Msg::LogOut));
         let locked = |a: &App| a.mesh.identity.as_ref().is_some_and(|i| i.state == mesh::State::Locked);
         self.until(copy, "locked", locked);
     }
@@ -686,6 +686,110 @@ fn checkpoint_b_steps_1_to_6() {
     });
     let _ = update(&mut a.app, Message::MeshHideIp(false));
     world.until(&mut a, "direct again", |app| path(app) == Some("Direct"));
+
+    // 11. PLAN-audio Task 9: the mic test's meter moves (A's tone goes out);
+    // a manual sensitivity above it reaches mesh-node (not sending); the
+    // test stops; a person's volume is kept.
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::MicTest(Some(false))),
+    );
+    world.until(&mut a, "the meter, sending", |app| {
+        app.mesh.level.is_some_and(|(_, open)| open)
+    });
+    let mut strict = a.app.mesh.audio;
+    strict.threshold = Some(0.0);
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::Audio(strict, true)),
+    );
+    world.until(&mut a, "not sending above 0 dBFS", |app| {
+        app.mesh.level.is_some_and(|(_, open)| !open)
+    });
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::MicTest(None)),
+    );
+    assert!(a.app.mesh.level.is_none(), "the meter stops with the test");
+    let _ = update(
+        &mut a.app,
+        Message::MeshCall(mesh_calls::Msg::PersonVolume(id_b.clone(), 50)),
+    );
+    assert_eq!(a.app.mesh.person_volumes.get(&id_b), Some(&50));
+
+    // 13. PLAN-profile (SPEC-profile): A publishes a profile from the
+    // editor; B, a friend, gets it, opens it, and has A's avatar for faces.
+    // B asks A for B's Top 8 and shows A once A says yes. In the club, A
+    // sets a card and D, a member but not B's friend, sets one too; the
+    // owner hides D's line, and B never gets D's profile.
+    use crate::profile_ui::Msg as Pmsg;
+    let profile = |m: Pmsg| Message::Profile(m);
+    let avatar = root.join("alice-avatar.png");
+    image::RgbaImage::from_pixel(32, 32, image::Rgba([200, 60, 90, 255])).save(&avatar).unwrap();
+    let _ = update(&mut a.app, profile(Pmsg::Edit));
+    let bio = text_editor::Action::Edit(text_editor::Edit::Paste(Arc::new("Frontman of Nagbreek.".to_owned())));
+    let _ = update(&mut a.app, profile(Pmsg::Bio(bio)));
+    let _ = update(&mut a.app, profile(Pmsg::Picked(crate::profile_ui::Slot::Avatar, vec![avatar])));
+    let _ = update(&mut a.app, profile(Pmsg::Publish));
+    let has_bio = |app: &App, id: &str| {
+        (app.mesh.profile.held.get(id)).is_some_and(|p| p.toml.as_deref().is_some_and(|t| t.contains("Frontman of Nagbreek.")))
+    };
+    world.until(&mut a, "A's own profile published", |app| has_bio(app, &id_a));
+    world.until(&mut b, "A's profile with its avatar", |app| {
+        has_bio(app, &id_a) && session(app).avatars.get(&crate::profile_ui::avatar_key(&id_a)).is_some_and(Option::is_some)
+    });
+    let _ = update(&mut b.app, profile(Pmsg::Open(id_a.clone())));
+    assert!(crate::profile_ui::page(session(&b.app), &b.app).is_some(), "the profile in the chat pane");
+    let _ = update(&mut b.app, profile(Pmsg::Ask(id_a.clone())));
+    world.until(&mut a, "B's Top 8 ask", |app| app.mesh.profile.top8.asks.contains(&id_b));
+    let _ = update(&mut a.app, profile(Pmsg::Answer(id_b.clone(), true)));
+    world.until(&mut b, "A's yes", |app| app.mesh.profile.top8.may_show.iter().any(|m| m.id == id_a));
+    let _ = update(&mut b.app, profile(Pmsg::Show(id_a.clone(), true)));
+    world.until(&mut b, "A shown", |app| app.mesh.profile.top8.shown == [id_a.clone()]);
+    let _ = update(&mut b.app, profile(Pmsg::Close));
+
+    for (copy, name, line) in [(&mut a, "Al", "owner here"), (&mut d, "Dee", "rude words")] {
+        let _ = update(&mut copy.app, profile(Pmsg::CardOpen(s.clone())));
+        let _ = update(&mut copy.app, profile(Pmsg::CardName(name.into())));
+        let _ = update(&mut copy.app, profile(Pmsg::CardLine(line.into())));
+        let _ = update(&mut copy.app, profile(Pmsg::CardSave));
+    }
+    let member_line = |app: &App, who: &str| {
+        club(app).and_then(|x| x.members.into_iter().find(|m| m.id == who)).and_then(|m| m.line)
+    };
+    world.until(&mut b, "both cards", |app| {
+        member_line(app, &id_a).as_deref() == Some("owner here") && member_line(app, &id_d).as_deref() == Some("rude words")
+    });
+    let _ = update(&mut a.app, profile(Pmsg::Hide(s.clone(), id_d.clone(), "line")));
+    world.until(&mut b, "D's line hidden", |app| member_line(app, &id_d).is_none());
+    assert!(!b.app.mesh.profile.held.contains_key(&id_d), "B isn't D's friend: no profile");
+
+    // 12. Remove from this device: the password, two presses; the helper
+    // restarts with no identity, and its keystore is gone.
+    let _ = update(
+        &mut a.app,
+        Message::MeshForm(Msg::RemovePassword(PASSWORD.into())),
+    );
+    let _ = update(&mut a.app, Message::MeshForm(Msg::RemoveIdentity));
+    assert!(
+        a.app
+            .mesh
+            .identity
+            .as_ref()
+            .is_some_and(|i| i.state == mesh::State::Unlocked),
+        "one press only arms it"
+    );
+    let _ = update(&mut a.app, Message::MeshForm(Msg::RemoveIdentity));
+    world.until(&mut a, "no identity", |app| {
+        app.mesh
+            .identity
+            .as_ref()
+            .is_some_and(|i| i.state == mesh::State::None)
+    });
+    assert!(
+        !root.join(a.name).join("identity.mks").exists(),
+        "the keystore is deleted"
+    );
 
     for copy in [a, b, c, d] {
         copy.helper.abort();

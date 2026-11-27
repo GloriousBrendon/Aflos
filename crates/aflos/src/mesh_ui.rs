@@ -18,6 +18,57 @@ pub(crate) enum Tab {
     Add,
 }
 
+/// What the mic goes through in calls (SPEC-audio A3), as `callAudio`
+/// takes it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct AudioPrefs {
+    pub gain: bool,
+    pub noise: bool,
+    pub echo: bool,
+    /// Manual sensitivity in dBFS; `None` is Automatic.
+    pub threshold: Option<f32>,
+    pub output: u32,
+}
+
+impl Default for AudioPrefs {
+    fn default() -> Self {
+        Self {
+            gain: true,
+            noise: true,
+            echo: true,
+            threshold: None,
+            output: 100,
+        }
+    }
+}
+
+impl AudioPrefs {
+    pub fn from_config(c: &crate::theme::Config) -> Self {
+        let d = Self::default();
+        Self {
+            gain: c.audio_gain.unwrap_or(d.gain),
+            noise: c.audio_noise.unwrap_or(d.noise),
+            echo: c.audio_echo.unwrap_or(d.echo),
+            threshold: c.audio_threshold.map(|t| t.clamp(-90.0, 0.0)),
+            output: c.output_volume.unwrap_or(d.output).min(200),
+        }
+    }
+
+    pub fn save(&self, c: &mut crate::theme::Config) {
+        (c.audio_gain, c.audio_noise, c.audio_echo) =
+            (Some(self.gain), Some(self.noise), Some(self.echo));
+        (c.audio_threshold, c.output_volume) = (self.threshold, Some(self.output));
+    }
+
+    pub fn json(&self) -> String {
+        serde_json::json!({
+            "gain": self.gain, "noise": self.noise, "echo": self.echo,
+            "threshold": self.threshold, "output": self.output,
+        })
+        .to_string()
+    }
+}
+
 /// Hide my IP as `mesh-node` should start with it: read at every start, so a
 /// restart after the switch changed keeps it.
 pub(crate) static HIDE_IP: std::sync::atomic::AtomicBool =
@@ -72,6 +123,14 @@ pub(crate) struct Mesh {
     pub hide_ip: bool,
     /// Calls' input volume in percent (config.toml's `input_volume`).
     pub input_volume: u32,
+    /// Calls' processing, as set in Voice & audio (SPEC-audio A3).
+    pub audio: AudioPrefs,
+    /// The mic's latest level and whether it went out (A5).
+    pub level: Option<(f32, bool)>,
+    /// The mic test while it runs: whether it plays back.
+    pub mic_test: Option<bool>,
+    /// Each person's volume in calls, by ID (A6).
+    pub person_volumes: std::collections::BTreeMap<String, u32>,
     /// Who's typing, by name, in which chat, and when it was heard.
     pub typing: Option<(String, Vec<String>, std::time::Instant)>,
     /// The last received file clicked, and what that did (`mesh_dm::on_click`).
@@ -80,6 +139,8 @@ pub(crate) struct Mesh {
     new_group: Option<(Vec<String>, String)>,
     /// The Friends page's open tab.
     pub tab: Tab,
+    /// Profiles, the Top 8 and Space cards (SPEC-profile).
+    pub profile: crate::profile_ui::Profiles,
     form: Form,
     settings: Settings,
 }
@@ -149,6 +210,9 @@ struct Settings {
     confirm: String,
     verdict: Option<(bool, String)>,
     export_password: String,
+    /// Remove from this device: the password, and whether it's been pressed once.
+    remove_password: String,
+    remove_armed: bool,
     /// Check an ID: what's pasted, and the safety number for it (with its QR).
     check: String,
     safety: Option<(mesh::Safety, Option<qr_code::Data>)>,
@@ -171,8 +235,6 @@ struct Settings {
     resolved: Option<String>,
     /// Check an ID's "Add by ID": the name to save them under (optional).
     nick: String,
-    /// Check an ID's friend request: the note to send with it (optional).
-    request_note: String,
     /// The last friend pinged by ID, and their answer.
     contact_pong: Option<(String, mesh::Pong)>,
     pinging: Option<String>,
@@ -220,6 +282,11 @@ pub(crate) enum Msg {
     ExportPassword(String),
     Export,
     ExportTo(Option<PathBuf>),
+    /// Locks the identity (and stops keeping it unlocked): Log out.
+    LogOut,
+    RemovePassword(String),
+    /// Remove from this device: the first press arms it, the second sends.
+    RemoveIdentity,
     CheckInput(String),
     Check,
     CopyTicket,
@@ -232,13 +299,13 @@ pub(crate) enum Msg {
     RevokeCode(String),
     Nick(String),
     AddById,
-    RequestNote(String),
+    /// Add friend with a resolved code (SPEC-social revision 3).
     SendRequest,
+    /// Add friend by ID, from a Space's member list (revision 3's R3-5).
+    AddFriend(String),
     PingContact(String),
     /// Removes a friend, or cancels a request we sent.
     Remove(String),
-    Accept(String),
-    Decline(String),
     Block(String),
     Unblock(String),
     Verify(String, bool),
@@ -272,6 +339,27 @@ pub(crate) fn started(state: &App) -> bool {
 }
 
 pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
+    match &event {
+        mesh::Event::Profile(_) | mesh::Event::Top8(_) => {
+            return crate::profile_ui::event(state, event);
+        }
+        mesh::Event::Error(e)
+            if ["profile", "top8", "card"]
+                .iter()
+                .any(|f| e.func.starts_with(f)) =>
+        {
+            return crate::profile_ui::event(state, event);
+        }
+        mesh::Event::DmFile(file) if crate::profile_ui::card_file(state, file) => {
+            return Task::none();
+        }
+        mesh::Event::Spaces(spaces) => crate::profile_ui::spaces_changed(state, &spaces.clone()),
+        mesh::Event::Social(_) => drop(crate::profile_ui::event(
+            state,
+            mesh::Event::Social(mesh::Social::default()),
+        )),
+        _ => {}
+    }
     if matches!(
         event,
         mesh::Event::DmChats(_)
@@ -320,6 +408,9 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             if !now_unlocked {
                 m.codes.clear();
                 m.social = mesh::Social::default();
+                // Profiles go with the identity; the setting stays.
+                let autoplay = m.profile.autoplay;
+                m.profile = crate::profile_ui::Profiles::keeping(autoplay);
                 (m.chats, m.spaces, m.typing, m.new_group, m.call) =
                     (Vec::new(), Vec::new(), None, None, None);
                 m.voice.clear();
@@ -370,6 +461,9 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             if error.func == "idChangePassword" {
                 s.old.clear();
             }
+            if error.func == "idRemove" {
+                (s.remove_password, s.remove_armed) = (String::new(), false);
+            }
             s.note = Some((error.func, false, error.message));
         }
         mesh::Event::Safety(safety) => {
@@ -397,6 +491,7 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             s.note = Some((func, true, message.to_string()));
         }
         mesh::Event::Net(net) => m.net = Some(net),
+        mesh::Event::AudioLevel { level, open } => m.level = Some((level, open)),
         mesh::Event::SpaceReports(r) => drop(m.reports.insert(r.space, r.reports)),
         mesh::Event::Ticket(ticket) => {
             m.settings.busy = None;
@@ -417,12 +512,11 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             if let Some(func) = social.answers.as_deref().filter(|f| s.busy == Some(*f)) {
                 s.busy = None;
                 let done = match func {
-                    "friendRequest" => Some("Request sent. They'll see it the next time they open Aflos."),
-                    "friendAdd" => Some("Added. You'll be friends once they add your ID too."),
+                    "friendRequest" | "friendAdd" => Some("Added. You'll be friends once they add you too, with your code or ID. Until then they see nothing."),
                     _ => None,
                 };
                 if let Some(done) = done {
-                    (s.nick, s.request_note) = Default::default();
+                    s.nick = String::new();
                     s.note = Some((func.to_owned(), true, done.to_owned()));
                 }
             }
@@ -474,8 +568,12 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
         | mesh::Event::SpaceNotify(_)
         | mesh::Event::SpaceTyping { .. }
         | mesh::Event::Call(_)
-        | mesh::Event::Voice { .. } => {}
+        | mesh::Event::Voice { .. }
+        | mesh::Event::Profile(_)
+        | mesh::Event::Top8(_) => {}
         mesh::Event::Disconnected => {
+            let autoplay = m.profile.autoplay;
+            m.profile = crate::profile_ui::Profiles::keeping(autoplay);
             m.node = None;
             m.identity = None;
             m.qr = None;
@@ -586,6 +684,28 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             s.note = None;
             node.keep_unlocked(on);
         }
+        Msg::LogOut => {
+            if s.busy.is_none() {
+                s.busy = Some("idLock");
+                // Logged out means the password next time, not opening by itself.
+                if identity.as_ref().is_some_and(|i| i.keep_unlocked) {
+                    node.keep_unlocked(false);
+                }
+                node.lock();
+            }
+        }
+        Msg::RemovePassword(value) => (s.remove_password, s.remove_armed) = (value, false),
+        Msg::RemoveIdentity => {
+            if s.busy.is_none() && !s.remove_password.is_empty() {
+                if s.remove_armed {
+                    s.busy = Some("idRemove");
+                    s.note = None;
+                    node.remove_identity(&s.remove_password);
+                } else {
+                    s.remove_armed = true;
+                }
+            }
+        }
         Msg::Old(value) => s.old = value,
         Msg::New(value) => {
             s.new = value;
@@ -675,14 +795,14 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
                 node.add_friend(&safety.id, s.nick.trim());
             }
         }
-        Msg::RequestNote(value) => s.request_note = value,
         Msg::SendRequest => {
             if let (None, Some(code)) = (s.busy, &s.resolved) {
                 s.busy = Some("friendRequest");
                 s.note = None;
-                node.request(code, s.request_note.trim());
+                node.add_by_code(code);
             }
         }
+        Msg::AddFriend(id) => node.add_friend(&id, ""),
         Msg::PingContact(id) => {
             if s.busy.is_none() {
                 s.busy = Some("netPingId");
@@ -696,14 +816,6 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             s.busy = Some("friendRemove");
             s.contact_pong = None;
             node.remove_friend(&id);
-        }
-        Msg::Accept(id) if s.busy.is_none() => {
-            s.busy = Some("friendAccept");
-            node.accept(&id);
-        }
-        Msg::Decline(id) if s.busy.is_none() => {
-            s.busy = Some("friendDecline");
-            node.decline(&id);
         }
         Msg::Block(id) if s.busy.is_none() => {
             s.busy = Some("block");
@@ -749,7 +861,7 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
             }
         }
         // Another command is still waiting for its answer.
-        Msg::Remove(_) | Msg::Accept(_) | Msg::Decline(_) | Msg::Block(_) | Msg::Unblock(_) | Msg::Verify(..) | Msg::Status(_) | Msg::RemoveDevice(_) => {}
+        Msg::Remove(_) | Msg::Block(_) | Msg::Unblock(_) | Msg::Verify(..) | Msg::Status(_) | Msg::RemoveDevice(_) => {}
         Msg::CopyTicket => {
             if s.busy.is_none() {
                 s.busy = Some("netTicket");
@@ -1126,7 +1238,7 @@ pub(crate) fn manage(state: &App) -> Element<'_, Message> {
     // Friends, codes and Check an ID live on Home → Friends now.
     let friends = column![
         heading("friends", p),
-        text("Friends, requests and friend codes are on Home, under Friends.")
+        text("Friends and friend codes are on Home, under Friends.")
             .size(12)
             .color(p.text()),
         button(ui::sans("Open Friends →", 13.0, Weight::Normal, p.accent()))
@@ -1232,13 +1344,60 @@ pub(crate) fn manage(state: &App) -> Element<'_, Message> {
     .spacing(8)
     .extend(note("idExport"));
 
+    let log_out = column![
+        heading("log out", p),
+        text("Locks Aflos on this device. Your username and password open it again.")
+            .size(12)
+            .color(p.text()),
+        action("Log out", "idLock", Some(Msg::LogOut)),
+    ]
+    .spacing(8)
+    .extend(note("idLock"));
+
+    let only_device = identity.devices.len() <= 1;
+    let remove_warning = if only_device {
+        "This is your only device. Unless you've exported a backup, your account, friends, Spaces and messages are gone for good."
+    } else {
+        "Your other devices keep your account. Afterwards, remove this device from the list on one of them."
+    };
+    let remove_label = match (s.busy == Some("idRemove"), s.remove_armed) {
+        (true, _) => "One moment…",
+        (false, true) => "Really remove it? Click again",
+        (false, false) => "Remove from this device",
+    };
+    let remove = column![
+        heading("remove from this device", p),
+        text(remove_warning)
+            .size(12)
+            .color(if only_device { p.danger() } else { p.text() }),
+        field(
+            "YOUR PASSWORD",
+            &s.remove_password,
+            Msg::RemovePassword,
+            true,
+            Msg::RemoveIdentity,
+            p
+        ),
+        button(ui::sans(remove_label, 13.0, Weight::Semibold, p.danger()))
+            .on_press_maybe(
+                (s.busy.is_none() && !s.remove_password.is_empty())
+                    .then_some(Message::MeshForm(Msg::RemoveIdentity))
+            )
+            .padding([6, 12])
+            .style(flat_button_style(p)),
+    ]
+    .spacing(8)
+    .extend(note("idRemove"));
+
     scrollable(
-        column![id, friends, network, devices, keep, password, backup]
-            .spacing(22)
-            .padding(iced::Padding {
-                right: 12.0,
-                ..iced::Padding::ZERO
-            }),
+        column![
+            id, friends, network, devices, keep, password, backup, log_out, remove
+        ]
+        .spacing(22)
+        .padding(iced::Padding {
+            right: 12.0,
+            ..iced::Padding::ZERO
+        }),
     )
     .height(Length::Fill)
     .into()
@@ -1308,21 +1467,18 @@ fn add_view(state: &App) -> Element<'_, Message> {
                     .padding([4, 10])
                     .style(flat_button_style(p)),
             );
-        } else if social.incoming.iter().any(|r| r.id == them) {
-            check = check.push(ui::sans("They've sent you a request: see Pending.", 12.0, Weight::Normal, p.text()));
         } else if social.blocked.iter().any(|b| b.id == them) {
             check = check.push(ui::sans("You've blocked them. Unblock them under Blocked first.", 12.0, Weight::Normal, p.warning()));
         } else if social.outgoing.iter().any(|o| o.id == them) {
-            check = check.push(ui::sans("Asked: you'll be friends once their device connects to yours.", 12.0, Weight::Normal, p.text()));
+            check = check.push(ui::sans("Added: you'll be friends once they add you too.", 12.0, Weight::Normal, p.text()));
         } else if identity.id.as_deref() != Some(them) {
+            // Either way you're friends once both have added the other (SPEC-social revision 3).
             check = match &s.resolved {
-                // A live code can carry a request (SPEC-social D1).
                 Some(_) => check
-                    .push(field("NOTE (OPTIONAL)", &s.request_note, Msg::RequestNote, false, Msg::SendRequest, p))
-                    .push(action("Send friend request", "friendRequest", Some(Msg::SendRequest))),
-                // An ID alone can't: both of you add the other (D2).
+                    .push(text("Adding them shows them nothing. Give them your code too: you're friends once both of you have added the other.").size(12).color(p.text()))
+                    .push(action("Add friend", "friendRequest", Some(Msg::SendRequest))),
                 None => check
-                    .push(text("An ID can't carry a request. Add theirs, and ask them to add yours: you're friends once both have.").size(12).color(p.text()))
+                    .push(text("Adding them shows them nothing. Ask them to add you too: you're friends once both have.").size(12).color(p.text()))
                     .push(field("SAVE THEM AS (OPTIONAL)", &s.nick, Msg::Nick, false, Msg::AddById, p))
                     .push(action("Add by ID", "friendAdd", Some(Msg::AddById))),
             };
@@ -1453,7 +1609,13 @@ fn friends_view(state: &App) -> Element<'_, Message> {
         let b = ui::row_button(label, Message::ShowFriends(t), on, p, &state.layout).width(Length::Shrink).padding([4, 12]);
         if t == Tab::Add { b.style(flat_button_style(p)) } else { b }
     };
-    let pending = if social.incoming.is_empty() { "Pending".to_string() } else { format!("Pending ({})", social.incoming.len()) };
+    // Pending: who we've added, and Top 8 asks waiting on us.
+    let asks = state.mesh.profile.top8.asks.len();
+    let pending = if asks == 0 {
+        "Pending".to_string()
+    } else {
+        format!("Pending ({asks})")
+    };
     let tabs = row![
         ui::sans("Friends", 15.0, Weight::Semibold, p.text_bright()),
         tab_button("Online".into(), Tab::Online),
@@ -1462,6 +1624,10 @@ fn friends_view(state: &App) -> Element<'_, Message> {
         tab_button("Blocked".into(), Tab::Blocked),
         ui::primary_button(ui::sans("Add friend", 13.0, Weight::Semibold, p.accent_text()), Some(Message::ShowFriends(Tab::Add)), p, &state.layout)
             .padding([4, 12]),
+        button(ui::sans("Your profile", 13.0, Weight::Normal, p.accent()))
+            .on_press(Message::Profile(crate::profile_ui::Msg::Edit))
+            .padding([4, 10])
+            .style(flat_button_style(p)),
         Space::new().width(Length::Fill),
         ui::mono("STATUS", 11.0, p.text_muted()),
         pick_list(STATUSES.map(|(l, _)| l).to_vec(), Some(status), |l| Message::MeshForm(Msg::Status(l))).padding(6),
@@ -1477,23 +1643,34 @@ fn friends_view(state: &App) -> Element<'_, Message> {
         col = col.push(text("Friends see you as offline, but can still reach you.").size(12).color(p.text_muted()));
     }
 
-    let incoming: &[_] = if tab == Tab::Pending { &social.incoming } else { &[] };
-    for r in incoming {
-        let name = if r.name.is_empty() { short_id(&r.id) } else { r.name.clone() };
-        let mut who = line(format!("{name} wants to be friends"), short_id(&r.id));
-        if !r.note.is_empty() {
-            who = who.push(ui::sans(format!("“{}”", r.note), 12.0, Weight::Normal, p.text()));
+    // No requests (SPEC-social revision 3): nobody can put anything here.
+
+    // Top 8 asks waiting on us (SPEC-profile PR11).
+    if tab == Tab::Pending {
+        for id in &state.mesh.profile.top8.asks {
+            let to = |m| Message::Profile(m);
+            col = col.push(
+                row![
+                    line(
+                        format!(
+                            "{} would like to show you in their Top 8",
+                            state.mesh.name_of(id)
+                        ),
+                        short_id(id)
+                    ),
+                    button(ui::sans("Allow", 12.0, Weight::Normal, p.success()))
+                        .on_press(to(crate::profile_ui::Msg::Answer(id.clone(), true)))
+                        .padding([4, 10])
+                        .style(flat_button_style(p)),
+                    button(ui::sans("Not now", 12.0, Weight::Normal, p.text_bright()))
+                        .on_press(to(crate::profile_ui::Msg::Answer(id.clone(), false)))
+                        .padding([4, 10])
+                        .style(flat_button_style(p)),
+                ]
+                .spacing(10)
+                .align_y(iced::Alignment::Center),
+            );
         }
-        col = col.push(
-            row![
-                who,
-                small("Accept", p.success(), Msg::Accept(r.id.clone())),
-                small("Decline", p.text_bright(), Msg::Decline(r.id.clone())),
-                small("Block", p.danger(), Msg::Block(r.id.clone())),
-            ]
-            .spacing(10)
-            .align_y(iced::Alignment::Center),
-        );
     }
 
     // A group needs at least two friends; up to nine with you (SPEC-dm D6).
@@ -1524,10 +1701,10 @@ fn friends_view(state: &App) -> Element<'_, Message> {
     }
     let shown: Vec<&mesh::Friend> = social.friends.iter().filter(|f| tab == Tab::All || (tab == Tab::Online && f.presence != "offline")).collect();
     let empty = match tab {
-        Tab::All if shown.is_empty() => Some("No friends yet. Under Add friend, make a code to give someone, or type theirs."),
-        Tab::Online if shown.is_empty() && social.friends.is_empty() => Some("No friends yet. Under Add friend, make a code to give someone, or type theirs."),
+        Tab::All if shown.is_empty() => Some("No friends yet. Under Add friend, swap codes with someone: you're friends once both of you have added the other."),
+        Tab::Online if shown.is_empty() && social.friends.is_empty() => Some("No friends yet. Under Add friend, swap codes with someone: you're friends once both of you have added the other."),
         Tab::Online if shown.is_empty() => Some("Nobody's online right now."),
-        Tab::Pending if social.incoming.is_empty() && social.outgoing.is_empty() => Some("No requests, either way."),
+        Tab::Pending if social.outgoing.is_empty() && state.mesh.profile.top8.asks.is_empty() => Some("Nobody you've added is waiting, and no Top 8 asks."),
         Tab::Blocked if social.blocked.is_empty() => Some("Nobody's blocked."),
         _ => None,
     };
@@ -1548,8 +1725,13 @@ fn friends_view(state: &App) -> Element<'_, Message> {
         }
         let call = state.mesh.call.is_none().then(|| Message::MeshCall(crate::mesh_calls::Msg::Start(f.id.clone())));
         col = col.push(row![
+            crate::profile_ui::face(state, &f.id, &friend_name(f), 36.0),
             line(friend_name(f), detail),
             row![
+                button(ui::sans("Profile", 12.0, Weight::Normal, p.accent()))
+                    .on_press(Message::Profile(crate::profile_ui::Msg::Open(f.id.clone())))
+                    .padding([4, 10])
+                    .style(flat_button_style(p)),
                 button(ui::sans("Message", 12.0, Weight::Normal, p.accent()))
                     .on_press(Message::WebChatSelected(WebChat {
                         network: Network::Mesh,
@@ -1579,7 +1761,7 @@ fn friends_view(state: &App) -> Element<'_, Message> {
         let name = if o.nick.is_empty() { short_id(&o.id) } else { o.nick.clone() };
         col = col.push(
             row![
-                line(name, format!("asked · {}", short_id(&o.id))),
+                line(name, format!("added · waiting for them to add you · {}", short_id(&o.id))),
                 small("Cancel", p.text_bright(), Msg::Remove(o.id.clone())),
             ]
             .spacing(10)
@@ -1656,6 +1838,37 @@ mod tests {
         assert!(describe(&c).ends_with(" · unlimited uses"));
         c.max_uses = Some(25);
         assert!(describe(&c).ends_with("up to 25 uses"));
+    }
+
+    #[test]
+    fn audio_settings_keep_and_send() {
+        let mut c = crate::theme::Config::default();
+        assert_eq!(
+            AudioPrefs::from_config(&c),
+            AudioPrefs::default(),
+            "all on, Automatic"
+        );
+        let set = AudioPrefs {
+            gain: false,
+            noise: true,
+            echo: false,
+            threshold: Some(-45.0),
+            output: 150,
+        };
+        set.save(&mut c);
+        assert_eq!(AudioPrefs::from_config(&c), set);
+        let v: serde_json::Value = serde_json::from_str(&set.json()).unwrap();
+        assert_eq!(
+            (
+                v["gain"].as_bool(),
+                v["echo"].as_bool(),
+                v["threshold"].as_f64(),
+                v["output"].as_u64()
+            ),
+            (Some(false), Some(false), Some(-45.0), Some(150))
+        );
+        let auto: serde_json::Value = serde_json::from_str(&AudioPrefs::default().json()).unwrap();
+        assert!(auto["threshold"].is_null(), "Automatic is null");
     }
 
     #[test]

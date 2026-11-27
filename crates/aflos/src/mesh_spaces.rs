@@ -251,7 +251,7 @@ pub(crate) fn pane<'a>(
     if may(space).admin {
         list = list.push(quick_channel(&mesh.space_form, &space.id, p, l));
     }
-    list = list.push(members(mesh, space, p));
+    list = list.push(members(session, mesh, space, p));
     column![
         header,
         ui::hline(p),
@@ -750,6 +750,7 @@ pub(crate) fn new_space(state: &App) -> Element<'_, Message> {
 /// The members under a Space's channels, owner and admins first: name,
 /// role, and presence for friends only (nobody else's reaches us).
 fn members<'a>(
+    session: &'a Session,
     mesh: &mesh_ui::Mesh,
     space: &mesh::Space,
     p: &theme::Palette,
@@ -766,7 +767,24 @@ fn members<'a>(
         .collect();
     people.sort_by_key(|(r, name, _)| (*r, name.to_lowercase()));
     for (_, name, m) in people {
-        let mut row = line(name, p);
+        // Their card (PR12): its avatar, else initials, and its one line.
+        let face = web_picture(
+            session,
+            Some(&crate::profile_ui::card_key(&space.id, &m.id)),
+        );
+        let mut row = row![ui::avatar(&name, face, 24.0, p.surface_alt(), p, None)]
+            .spacing(6)
+            .align_y(iced::Alignment::Center);
+        row = match &m.line {
+            Some(l) => row.push(
+                column![
+                    ui::sans(name, 13.0, Weight::Normal, p.text()),
+                    ui::mono(l.clone(), 10.0, p.text_muted())
+                ]
+                .width(Length::Fill),
+            ),
+            None => row.push(ui::sans(name, 13.0, Weight::Normal, p.text()).width(Length::Fill)),
+        };
         if m.role != "member" {
             row = row.push(ui::mono(m.role.clone(), 10.0, p.text_muted()));
         }
@@ -985,6 +1003,12 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
         );
     }
 
+    // Our card here (SPEC-profile PR12): what members who aren't friends see.
+    if space.role.is_some() && !space.ended {
+        col = col
+            .push(ui::section("your card", p))
+            .push(crate::profile_ui::card_form(space, state));
+    }
     col = col.push(ui::section("members", p));
     if may.add {
         let banned = |id: &str| space.bans.iter().any(|b| b == id);
@@ -1042,7 +1066,25 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
             if over(&may, &m.role) {
                 row = row
                     .push(act("Kick", p.text(), Some(Msg::Kick(m.id.clone())), p))
-                    .push(act("Ban", p.danger(), Some(Msg::Ban(m.id.clone())), p));
+                    .push(act("Ban", p.danger(), Some(Msg::Ban(m.id.clone())), p))
+                    .push(crate::profile_ui::hide_controls(&space.id, m, p));
+            }
+            // Add friend (SPEC-social revision 3): they see nothing unless
+            // they add us too.
+            let social = &mesh.social;
+            if social.outgoing.iter().any(|o| o.id == m.id) {
+                row = row.push(ui::mono("added", 11.0, p.text_muted()));
+            } else if !social.friends.iter().any(|f| f.id == m.id)
+                && !social.blocked.iter().any(|b| b.id == m.id)
+            {
+                row = row.push(
+                    button(ui::sans("Add friend", 12.0, Weight::Normal, p.accent()))
+                        .on_press(Message::MeshForm(crate::mesh_ui::Msg::AddFriend(
+                            m.id.clone(),
+                        )))
+                        .padding([4, 10])
+                        .style(flat_button_style(p)),
+                );
             }
             // A report goes to the owner, so not about them, nor by them.
             if !may.owner && m.role != "owner" && space.role.is_some() {

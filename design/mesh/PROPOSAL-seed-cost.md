@@ -5,6 +5,20 @@ finding 3, part 3. Parts 1 and 2 are done (seed D8). The decision waits for
 real numbers: the seed's hourly log now counts callers that arrived direct,
 relayed, or both ways (see the end).
 
+**Changed 2026-11-25.** Two things moved under this proposal:
+
+- **Every caller is relayed now** (the home seed is relay-only, SPEC-seed
+  D8c as changed). The relayed buckets are all there is, so "one script
+  can shut out everyone" is the normal case, not the relayed corner. That
+  makes this proposal more relevant, not less. The "Measuring first"
+  section below no longer applies: there are no direct callers to count.
+- **Friend codes and requests are going** (SPEC-social revision 2). The
+  services this would cover become `addr-put`/`addr-get`, the mail services,
+  `pair-claim`/`pair-join` and `mutual-put`. What an attacker can deny is
+  now "nobody can pair or be found for an hour", not "nobody can add a
+  friend by code". Guessing codes to learn strangers' IDs, the worst case
+  the stamp was weighed against, is gone with the codes.
+
 ## The problem left
 
 Callers use a throwaway key (seed D7b), and a new key is free. So the
@@ -21,8 +35,8 @@ can use the whole relayed bucket, and every real relayed caller gets
   starts with *D* zero bits. `hour` is `unix time / 3600`. Binding the seed
   key means a stamp works on one seed only. Binding the caller key means it
   can't be shared. blake3 is already a dependency: **nothing new**.
-- **Which calls.** All seven seed services (`code-hold/get/revoke`,
-  `addr-put/get`, `knock-put/get`). One new service, `stamp` (request:
+- **Which calls.** Every seed service (as of 2026-11-25: `addr-put/get`,
+  the mail services, `pair-claim/join`, `mutual-put`). One new service, `stamp` (request:
   `hour ‖ nonce`; answer: `ok` or `pay ‖ D`). A key without a stamp for this
   hour or the last one (clock skew) gets a new answer, `pay ‖ D`, from every
   other service. The seed keeps the stamped keys in memory for the hour, the
