@@ -358,10 +358,14 @@ async fn handle(
         // Camera and screen share settings (SPEC-voice-quality Q-d), within
         // the account's tier (Q-e); `dcVideoQuality` says what's in use.
         "videoQuality" => {
-            let asked: Value = arg(0).and_then(|j| serde_json::from_str(j).ok()).unwrap_or_default();
+            let asked: Value = arg(0)
+                .and_then(|j| serde_json::from_str(j).ok())
+                .unwrap_or_default();
             let premium = {
                 let s = state.lock().await;
-                s.me.as_ref().and_then(|m| m["premium_type"].as_u64()).unwrap_or(0)
+                s.me.as_ref()
+                    .and_then(|m| m["premium_type"].as_u64())
+                    .unwrap_or(0)
             };
             let wanted = voice::VideoQuality::default().with(&asked);
             let q = wanted.for_tier(premium);

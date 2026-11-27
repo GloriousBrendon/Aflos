@@ -6,12 +6,12 @@ mod accounts;
 mod cache;
 #[cfg(test)]
 mod checkpoint;
+mod fx_ui;
 mod mesh_calls;
 mod mesh_dm;
 mod mesh_spaces;
 mod mesh_ui;
 mod migrate;
-mod fx_ui;
 mod profile_ui;
 mod rain;
 mod sounds;
@@ -503,7 +503,9 @@ impl Session {
             selected_input: DEFAULT_DEVICE.to_string(),
             selected_output: DEFAULT_DEVICE.to_string(),
             discord_voice: theme::load_discord_voice(&config_path()),
-            dc_video_want: theme::load_config(&config_path()).discord_video.unwrap_or_else(default_dc_video),
+            dc_video_want: theme::load_config(&config_path())
+                .discord_video
+                .unwrap_or_else(default_dc_video),
             dc_video_used: None,
             focused: Pane::Chat,
             show_members: true,
@@ -2011,7 +2013,9 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 if let Some(engine) = &state.discord {
                     engine.video_quality(&want.to_string());
                 }
-                if let Err(err) = theme::update_config(&config_path(), move |c| c.discord_video = Some(want)) {
+                if let Err(err) =
+                    theme::update_config(&config_path(), move |c| c.discord_video = Some(want))
+                {
                     tracing::warn!("config: {err}");
                 }
             }
@@ -9553,7 +9557,15 @@ fn dc_choices(kind: &str, field: &str) -> &'static [(&'static str, u64)] {
         ("screen", "height") => &[("480p", 480), ("720p", 720), ("1080p", 1080), ("Source", 0)],
         ("camera", "fps") => &[("15 fps", 15), ("30 fps", 30)],
         ("screen", "fps") => &[("5 fps", 5), ("15 fps", 15), ("30 fps", 30), ("60 fps", 60)],
-        _ => &[("Auto", 0), ("0.5 Mb/s", 500_000), ("1 Mb/s", 1_000_000), ("2 Mb/s", 2_000_000), ("2.5 Mb/s", 2_500_000), ("4 Mb/s", 4_000_000), ("8 Mb/s", 8_000_000)],
+        _ => &[
+            ("Auto", 0),
+            ("0.5 Mb/s", 500_000),
+            ("1 Mb/s", 1_000_000),
+            ("2 Mb/s", 2_000_000),
+            ("2.5 Mb/s", 2_500_000),
+            ("4 Mb/s", 4_000_000),
+            ("8 Mb/s", 8_000_000),
+        ],
     }
 }
 
@@ -9562,15 +9574,23 @@ fn dc_choices(kind: &str, field: &str) -> &'static [(&'static str, u64)] {
 fn discord_video<'a>(session: &'a Session, p: &'a theme::Palette) -> Element<'a, Message> {
     let mut col = column![text("Discord video").size(14).color(p.text_bright())].spacing(8);
     for (kind, title) in [("camera", "Camera"), ("screen", "Screen share")] {
-        let mut r = row![text(title).size(13).width(120)].spacing(8).align_y(iced::Alignment::Center);
+        let mut r = row![text(title).size(13).width(120)]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
         for field in ["height", "fps", "bitrate"] {
             let choices = dc_choices(kind, field);
             let now = session.dc_video_want[kind][field].as_u64();
             let labels: Vec<&'static str> = choices.iter().map(|(l, _)| *l).collect();
-            let at = choices.iter().find(|(_, v)| Some(*v) == now).map(|(l, _)| *l);
+            let at = choices
+                .iter()
+                .find(|(_, v)| Some(*v) == now)
+                .map(|(l, _)| *l);
             r = r.push(
                 pick_list(labels, at, move |label| {
-                    let v = choices.iter().find(|(l, _)| *l == label).map_or(0, |(_, v)| *v);
+                    let v = choices
+                        .iter()
+                        .find(|(l, _)| *l == label)
+                        .map_or(0, |(_, v)| *v);
                     Message::DcVideo(kind, field, v)
                 })
                 .padding(4),
@@ -9598,19 +9618,30 @@ fn discord_video<'a>(session: &'a Session, p: &'a theme::Palette) -> Element<'a,
 /// SPEC-voice-quality: Low to Studio, and what it costs to send.
 fn voice_quality<'a>(prefs: mesh_ui::AudioPrefs, p: &'a theme::Palette) -> Element<'a, Message> {
     let labels: Vec<&'static str> = fx_ui::QUALITIES.iter().map(|(l, _, _)| *l).collect();
-    let now = fx_ui::QUALITIES.iter().find(|(_, q, _)| *q == prefs.quality).copied().unwrap_or(fx_ui::QUALITIES[1]);
+    let now = fx_ui::QUALITIES
+        .iter()
+        .find(|(_, q, _)| *q == prefs.quality)
+        .copied()
+        .unwrap_or(fx_ui::QUALITIES[1]);
     let pick = pick_list(labels, Some(now.0), move |label| {
         let mut next = prefs;
-        next.quality = fx_ui::QUALITIES.iter().find(|(l, _, _)| *l == label).map_or("standard", |(_, q, _)| q);
+        next.quality = fx_ui::QUALITIES
+            .iter()
+            .find(|(l, _, _)| *l == label)
+            .map_or("standard", |(_, q, _)| q);
         Message::MeshCall(mesh_calls::Msg::Audio(next, true))
     })
     .padding(4);
     row![
         text("Voice quality in Aflos calls").size(13).width(260),
         pick,
-        text(format!("{} kb/s · about {} kb/s up in a call of 5", now.2, fx_ui::upload(now.2, 5)))
-            .size(12)
-            .color(p.text_muted()),
+        text(format!(
+            "{} kb/s · about {} kb/s up in a call of 5",
+            now.2,
+            fx_ui::upload(now.2, 5)
+        ))
+        .size(12)
+        .color(p.text_muted()),
     ]
     .spacing(12)
     .align_y(iced::Alignment::Center)
