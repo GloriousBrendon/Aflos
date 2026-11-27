@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.6.2
+
+- Voice quality for Aflos calls (Settings, Voice & audio): Low, Standard,
+  High or Studio (16 to 128 kb/s), with what a call of five sends.
+- Your own voice plugins, for enthusiasts (Voice & audio → Advanced:
+  plugins): VST3 and CLAP effects after echo cancellation and noise
+  suppression, in the order you set, with their own editor windows (Linux)
+  and parameter sliders while the mic test or a call runs; each one's
+  settings are kept. The built-in tools stay on either way, nothing extra
+  runs without plugins, and a plugin that crashes or is too slow is
+  bypassed at once, so your voice keeps going.
+- Discord camera and screen share settings: resolution, frame rate and
+  bitrate, within what your Discord account allows (without Nitro, screen
+  share stays at 720p 30 fps).
+
 ## 0.6.1
 
 The first release with everything below. (0.6.0 was tagged by mistake
