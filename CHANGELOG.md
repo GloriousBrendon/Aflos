@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.6.0
+
+- Profiles you can rice, MySpace style, free for everyone: an avatar, a
+  banner, a background, a bio, links, a gallery of up to 12 pictures, a
+  profile song and a status, in the order you set, in your own colors
+  (Follow my rice takes Aflos's current ones). Friends → Your profile edits
+  it, with a live preview; Publish sends it. Only your friends get it.
+- A Top 8: ask a friend from their profile; they show only once they say
+  yes (Friends → Pending), and they can stop it whenever they like.
+  Viewers see the name they gave and their avatar, never their ID.
+- Friends' avatars in the Friends list, chats, DM headers and calls.
+- Space cards: a name, a still avatar and one line for each Space, which is
+  all members who aren't your friends see. An owner or admin can hide a
+  member's avatar or line.
+- A friend's pictures and song are checked by a capped decoder before
+  they're shown; anything too big or damaged shows as a placeholder. Links
+  open only after you confirm, and nothing is fetched from the internet.
+- Autoplay profile songs (Settings, Sounds), off by default.
+
 ## 0.5.3
 
 - Log out (Your ID): locks your account on this device; your username and

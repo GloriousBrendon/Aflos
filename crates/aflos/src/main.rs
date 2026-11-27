@@ -11,6 +11,7 @@ mod mesh_dm;
 mod mesh_spaces;
 mod mesh_ui;
 mod migrate;
+mod profile_ui;
 mod rain;
 mod sounds;
 mod theme;
@@ -1436,6 +1437,7 @@ enum Message {
     MeshForm(mesh_ui::Msg),
     MeshSpace(mesh_spaces::Msg),
     MeshCall(mesh_calls::Msg),
+    Profile(profile_ui::Msg),
     /// The Hide my IP switch (SPEC-connection-privacy P6).
     MeshHideIp(bool),
     /// Join a Discord voice channel, or call a Discord DM.
@@ -1706,6 +1708,7 @@ fn boot() -> (App, Task<Message>) {
     app.mesh.hide_ip = config.hide_ip;
     app.mesh.input_volume = config.input_volume.unwrap_or(100).min(200);
     app.mesh.audio = mesh_ui::AudioPrefs::from_config(&config);
+    app.mesh.profile.autoplay = config.autoplay_songs;
     app.mesh.person_volumes = config.person_volumes.clone();
     mesh_ui::HIDE_IP.store(config.hide_ip, std::sync::atomic::Ordering::Relaxed);
     // With mesh-node, everything else waits until the Aflos identity is open.
@@ -1987,6 +1990,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         Message::MeshForm(msg) => mesh_ui::update(state, msg),
         Message::MeshSpace(msg) => mesh_spaces::update(state, msg),
         Message::MeshCall(msg) => mesh_calls::update(state, msg),
+        Message::Profile(msg) => profile_ui::update(state, msg),
         Message::MeshHideIp(on) => {
             state.mesh.hide_ip = on;
             mesh_ui::HIDE_IP.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -6582,11 +6586,15 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
     if let Some(settings) = mesh_spaces::settings(session, state) {
         return settings;
     }
+    if let Some(profile) = profile_ui::page(session, state) {
+        return profile;
+    }
     let (p, l) = (&state.palette, &state.layout);
     let room = selected_room(session);
     let mut col = column![];
     if let Some(channel) = &session.web_chat {
         let face_url = match channel.network {
+            Network::Mesh => channel.dm.then(|| profile_ui::avatar_key(&channel.id)),
             Network::WhatsApp => state
                 .whatsapp_state
                 .as_ref()
@@ -8701,7 +8709,7 @@ fn settings_page<'a>(session: &'a Session, state: &'a App, width: f32) -> Elemen
         .spacing(20)
         .into(),
         SettingsPage::Voice => voice_page(session, &state.mesh, p),
-        SettingsPage::Sounds => sounds_page(&state.sounds, p),
+        SettingsPage::Sounds => sounds_page(&state.sounds, state.mesh.profile.autoplay, p),
         SettingsPage::Keybinds => keybinds_page(p),
     };
     scrollable(container(page).padding([24, 28]).width(Length::Fill))
@@ -9562,7 +9570,7 @@ fn audio_processing<'a>(
     .into()
 }
 
-fn sounds_page<'a>(settings: &'a sounds::Settings, p: &'a theme::Palette) -> Element<'a, Message> {
+fn sounds_page<'a>(settings: &'a sounds::Settings, autoplay: bool, p: &'a theme::Palette) -> Element<'a, Message> {
     use sounds::Sound;
     let row_of = |sound: Sound| -> Element<'a, Message> {
         let file = settings.files.get(&sound.key());
@@ -9600,6 +9608,13 @@ fn sounds_page<'a>(settings: &'a sounds::Settings, p: &'a theme::Palette) -> Ele
         page_header("Sounds", "Built-in sounds, or your own: WAV, MP3, OGG or FLAC. Each network rings its own way.", p),
         switch_row("Play sounds", "Message chirps, call rings and voice channel cues", settings.enabled, Some(Message::SoundsEnabled(!settings.enabled)), p),
         volume,
+        switch_row(
+            "Autoplay profile songs",
+            "Play a friend's profile song when you open their profile. Off, it waits for its play button.",
+            autoplay,
+            Some(Message::Profile(profile_ui::Msg::Autoplay(!autoplay))),
+            p
+        ),
         group("Messages", &Sound::ALL[0..3]),
         group("Calls", &Sound::ALL[3..7]),
         group("Voice channels", &Sound::ALL[7..9]),

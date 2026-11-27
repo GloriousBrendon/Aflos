@@ -225,8 +225,47 @@ fn silence(out: &mut Vec<i16>, ms: u32) {
 /// ponytail: a long file is cut here; a ring or chirp is seconds long anyway.
 const MAX_SECONDS: usize = 30;
 
+/// A profile song (SPEC-profile PR10), until it ends or this is dropped. The
+/// helper already decoded it within its caps and wrote it as a WAV.
+pub fn play_file(path: &str, settings: &Settings, device: Option<String>) -> Ringer {
+    let stop = Arc::new(AtomicBool::new(false));
+    let (path, volume, stopped) = (
+        path.to_owned(),
+        settings.volume.clamp(0.0, 1.0),
+        stop.clone(),
+    );
+    std::thread::spawn(move || {
+        let pcm = match decode_up_to(&path, SONG_SECONDS) {
+            Ok(pcm) => pcm,
+            Err(err) => return tracing::warn!("profile song: {err}"),
+        };
+        let (_stream, left) = match aflos_core::start_playback(device) {
+            Ok(out) => out,
+            Err(err) => return tracing::warn!("profile song: {err}"),
+        };
+        if let Ok(mut left) = left.lock() {
+            left.extend(pcm.iter().map(|&s| (s as f32 * volume) as i16));
+        }
+        while left.lock().is_ok_and(|l| !l.is_empty()) && !stopped.load(Ordering::Relaxed) {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        if let Ok(mut left) = left.lock() {
+            left.clear();
+        }
+    });
+    Ringer(stop)
+}
+
+/// A profile song's longest (PR7's 6 minutes, and a little over).
+const SONG_SECONDS: usize = 6 * 60 + 2;
+
 /// A sound file as Aflos's playback wants it: 48 kHz mono.
 pub fn decode(path: &str) -> Result<Vec<i16>, String> {
+    decode_up_to(path, MAX_SECONDS)
+}
+
+/// `decode`, cut at `max_seconds`.
+fn decode_up_to(path: &str, max_seconds: usize) -> Result<Vec<i16>, String> {
     use symphonia::core::{audio::SampleBuffer, codecs::DecoderOptions, formats::FormatOptions, io::MediaSourceStream, meta::MetadataOptions, probe::Hint};
     let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let stream = MediaSourceStream::new(Box::new(file), Default::default());
@@ -253,7 +292,7 @@ pub fn decode(path: &str) -> Result<Vec<i16>, String> {
         let mut buf = SampleBuffer::<f32>::new(decoded.capacity() as u64, spec);
         buf.copy_interleaved_ref(decoded);
         mono.extend(buf.samples().chunks(channels).map(|f| f.iter().sum::<f32>() / channels as f32));
-        if mono.len() > rate as usize * MAX_SECONDS {
+        if mono.len() > rate as usize * max_seconds {
             break;
         }
     }

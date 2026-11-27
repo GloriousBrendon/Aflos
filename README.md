@@ -34,6 +34,9 @@ Mesh-Node's current `main`, which is what the release builds bundle.
 - **Spaces.** Discord-style servers with up to 50 members and 100 channels,
   plus categories, roles (owner, admin, member), admin-only channels,
   mentions, replies, files, kicks and bans.
+- **Profiles.** A profile you can rice (avatar, banner, background, bio,
+  links, gallery, song, status, your colors) that only friends get, a Top 8
+  friends agree to be in, and a card per Space for everyone else.
 - **Voice calls.** 1:1 calls in DMs, and voice channels in Spaces for up to
   10 people. Push to talk, echo cancellation, automatic gain and noise
   suppression are built in, with a mic test and per-person volume. Calls are

@@ -156,7 +156,7 @@ const FULL_MAX_SIDE: u32 = 10_000;
 /// Whether a picture's stated size, read from its header before anything
 /// decodes it, is at most `side` pixels each way. A picture is shown
 /// without a click, and its header is the sender's to write.
-fn fits(bytes: &[u8], side: u32) -> bool {
+pub(crate) fn fits(bytes: &[u8], side: u32) -> bool {
     let reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format();
     match reader.ok().and_then(|r| r.into_dimensions().ok()) {
         Some((w, h)) => w <= side && h <= side,
@@ -333,7 +333,7 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             let me = state.mesh.my_id().unwrap_or_default();
             let space = mesh_spaces::space_of(&state.mesh, &page.id);
             let Rows {
-                timeline,
+                mut timeline,
                 mut mine,
                 editable,
                 marks,
@@ -368,6 +368,18 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
                 for (key, bytes) in previews {
                     if !session.images.contains_key(&key) {
                         show_image(&mut session.images, &mut session.animations, &key, bytes);
+                    }
+                }
+                // Faces (SPEC-profile): a Space shows its cards, a chat friends' profile avatars.
+                let in_space = mesh_spaces::split(&page.id).map(|(s, _)| s.to_owned());
+                for t in &mut timeline {
+                    let id = t.sender.localpart();
+                    let key = match &in_space {
+                        Some(space) => crate::profile_ui::card_key(space, id),
+                        None => crate::profile_ui::avatar_key(id),
+                    };
+                    if session.avatars.get(&key).is_some_and(Option::is_some) {
+                        t.sender_avatar = Some(aflos_core::MediaRef::web(key));
                     }
                 }
                 (session.timeline, session.mesh_mine, session.mesh_editable, session.web_marks) = (timeline, mine, editable, marks);
