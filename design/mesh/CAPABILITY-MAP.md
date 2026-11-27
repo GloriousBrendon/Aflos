@@ -35,12 +35,16 @@ other.
 | `spaces` | Servers: channels and categories, roles and permissions, invites, signed append-only logs replicated among members, moderation (kick, ban, delete), attachments | e2ee, mailbox, routing | SPACE_ARCHITECTURE §1–5 |
 | `calls` | Voice, video and screen share in DMs and voice channels: a direct link 1:1, a relay tree of the nearest members in groups, SFrame E2EE so relays carry only ciphertext. Reuses `mesh-media` and Opus | social, spaces, transport | VOICE_VIDEO_ARCHITECTURE §3–7 (without mediasoup) |
 | `client` | Mesh as a native network in Mesh-Voice: the helper protocol, onboarding (create an ID, set a password), add friend, the friends page, Spaces UI, and the Discord-style screens Mesh-Voice already has | each of the above, in step | FRONTEND_BACKEND_NOTES |
+| `profile` | Profiles you can rice (added 2026-11-27, see ROADMAP.md): a `profile.toml` on the Rice tokens, avatar, banner, blocks, per-Space profiles; sent only to friends as one encrypted, versioned bundle | social, dm (files), spaces | new |
 | `packaging` | Windows setup and Linux installer bundle `mesh-node`; a seed image; release CI producing signed artifacts | client, seed | ONBOARDING_GUIDE |
 
 ## Build order
 
 **identity → transport → seed → routing → social (+ client) → e2ee → dm →
 mailbox → spaces → calls → packaging**
+
+*Added 2026-11-27:* `profile` comes after `calls`, before 1.0. See
+[ROADMAP.md](../../ROADMAP.md).
 
 Each module ends with a check you can run between two real machines, for
 example your PC and the Linux box on different networks with the homelab as
