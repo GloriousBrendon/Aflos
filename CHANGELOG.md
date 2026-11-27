@@ -1,6 +1,9 @@
 # Changelog
 
-## 0.6.0
+## 0.6.1
+
+The first release with everything below. (0.6.0 was tagged by mistake
+before its last change and never released.)
 
 - Friends are consent first: no more friend requests. Give someone your
   code (or ID) and use theirs; you're friends once both of you have added
