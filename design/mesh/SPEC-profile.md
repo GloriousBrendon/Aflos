@@ -45,9 +45,9 @@ widgets, built on the Rice token system (`theme.rs`: `Palette`, `Layout`,
 | PR8 | **Decoding a friend's files is untrusted input.** Memory-safe Rust decoders only (`image`, `symphonia`), in the helper or a worker thread, with limits applied before allocating: at most 4096×4096 pixels a frame, 300 frames and 30 s an animation, 64 MB decoded; anything over is shown as a placeholder. | No decompression bombs, and a bad file can't take the app down. |
 | PR9 | **Fonts come from a bundled set** (Inter, Michroma, JetBrains Mono, plus a few display fonts chosen in the plan). A profile names one; it never ships a font file. | Font parsers have a long history of security bugs, and bundled fonts keep the app small. |
 | PR10 | **The song never autoplays.** A play button on the profile; a setting *Autoplay profile songs* (off by default). | MySpace's autoplay is the part nobody misses. |
-| PR11 | **Top 8 needs consent.** A friend appears in your Top 8 only after they accept a signed "you may show me" from you, which they can withdraw. Viewers see a shown friend's display name and avatar, not their ID. | A Top 8 reveals who your friends are to other people. |
-| PR12 | **Per-Space card.** By default a Space shows your display name and an initials circle. You can set a card per Space: display name, a still avatar (up to 1 MB) and one line (up to 190 characters). It's a signed `card` change in the Space log (spaces S1), so every member gets it, through relays like any Space event. No banner, theme or blocks. | Space members who aren't friends get only what you chose, and it rides the existing log. |
-| PR13 | **Owner moderation in a Space:** an owner or admin can hide a member's card avatar or line in that Space with a signed change; clients honour it. Reports (connection-privacy P11) can point at a card. | The owner is the only moderator there is (P11). |
+| PR11 | **Top 8 needs consent.** A friend appears in your Top 8 only after they accept a signed "you may show me" from you, which they can withdraw. Viewers see a shown friend's display name and avatar, not their ID. *Settled while building (Mesh-Node, Task 5): the ask, the yes and the withdrawal ride a `top8` stream on the device connection, as PR3's manifest does, so they're authenticated by the friend's device key rather than signed separately (nobody else ever checks them, since viewers never see the ID); they wait in a saved outbox until the friend's device takes them. A no is never sent, as social's silent decline. The yes carries the name the friend wants shown (their username by default). You choose who's shown, in order, with `top8Set`, from those who said yes. Your signed manifest carries a `top8` list of {name, avatar}: the avatar is the friend's own profile avatar, passed on as they sealed it, within the avatar's caps and outside the 25 MB bundle cap. A withdrawal, an unfriend or a new avatar of theirs re-signs your profile as the next version. The lists live on the device that made them, for now; own-device sync comes later.* | A Top 8 reveals who your friends are to other people. |
+| PR12 | **Per-Space card.** By default a Space shows your display name and an initials circle. You can set a card per Space: display name, a still avatar (up to 1 MB) and one line (up to 190 characters). It's a signed `card` change in the Space log (spaces S1), so every member gets it, through relays like any Space event. No banner, theme or blocks. *Settled while building (Mesh-Node, Task 4): "still" means PNG, JPEG or WebP; the avatar is kept and fetched as Space files are (`cardFetch`), so only members can fetch it; a new card replaces the whole last one.* | Space members who aren't friends get only what you chose, and it rides the existing log. |
+| PR13 | **Owner moderation in a Space:** an owner or admin can hide a member's card avatar or line in that Space with a signed change; clients honour it. Reports (connection-privacy P11) can point at a card. *Settled while building (Task 4): only over a member they could kick (an admin can't hide another admin's or the owner's card); a hide outlasts the member's next card until it's lifted; a hidden avatar or line isn't passed to Aflos at all.* | The owner is the only moderator there is (P11). |
 | PR14 | **Your devices share one profile** through account sync (social D11): the latest manifest wins by `(version, device)`. | Every device publishes the same profile. |
 | PR15 | **Unfriend or block removes their cached profile** from your devices. | Their profile was given to a friend, not to a former friend. |
 | PR16 | **The editor is Rice settings aimed at your profile**, with a live preview of how friends will see it, and **Publish** to send a new version. | The screens and controls already exist. |
@@ -59,11 +59,16 @@ New calls on the `mesh-node` helper (stdin `{"fn":..,"args":[..]}`):
 - `profileSet(path_to_profile_dir)`: validate, re-encode, seal, sign and
   publish a new version. Returns the version or the cap that failed.
 - `profileGet(id)`: the cached manifest and asset paths for a friend.
-- `cardSet(space, card)` and `cardHide(space, member, what)`.
-- `top8Ask(id)`, `top8Answer(id, yes)`.
+- `cardSet(space, display, line, avatar_path)` (`""` for no avatar),
+  `cardHide(space, member, avatar|line|both|none)` and
+  `cardFetch(space, member)` (the avatar, as `meshDmFile`).
+- `top8Ask(id)`, `top8Answer(id, yes, [name])`, `top8Withdraw(id)`,
+  `top8Set(ids…)` (who's shown, in order) and `top8List()`.
 
 New bindings on stdout: `meshProfile` (a friend's profile arrived or
-changed), `meshTop8` (a request or answer).
+changed), `meshTop8` (a request, an answer or a withdrawal, with every list). A card
+shows in `meshSpaces` (each member's `avatar`, `line` and `hidden`); a Top 8
+in `profileGet`'s `top8` (each name and avatar path).
 
 ## Structure
 
