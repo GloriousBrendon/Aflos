@@ -75,6 +75,7 @@ Source: "{#AppExe}"; DestDir: "{app}"; DestName: "Aflos.exe"; Flags: ignoreversi
 Source: "{#Root}\aflos-wa{#Bin}aflos-wa.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\aflos-dc{#Bin}aflos-dc.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Node}{#Bin}mesh-node.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Node}{#Bin}mesh-fx.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Root}\crates\aflos\assets\aflos.png"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -96,7 +97,7 @@ Filename: "{app}\Aflos.exe"; Description: "Start Aflos"; Flags: nowait postinsta
 Filename: "{app}\Aflos.exe"; Flags: nowait; Check: WizardSilent
 
 [UninstallRun]
-Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Aflos.exe /IM aflos-wa.exe /IM aflos-dc.exe /IM mesh-node.exe"; Flags: runhidden; RunOnceId: "StopAflos"
+Filename: "{sys}\taskkill.exe"; Parameters: "/F /IM Aflos.exe /IM aflos-wa.exe /IM aflos-dc.exe /IM mesh-node.exe /IM mesh-fx.exe"; Flags: runhidden; RunOnceId: "StopAflos"
 
 [Code]
 // Restart Manager only closes programs whose files this setup replaces, and

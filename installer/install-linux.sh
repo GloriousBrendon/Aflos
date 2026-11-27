@@ -31,7 +31,7 @@ sizes="16 32 48 64 128 256 512"
 ours_mesh_link() { [[ -L "$bin/mesh" && "$(readlink "$bin/mesh")" == aflos ]]; }
 
 if [[ "${1:-}" == --uninstall ]]; then
-  rm -fv "$bin/aflos" "$bin/aflos-wa" "$bin/aflos-dc" "$bin/mesh-node" "$apps/aflos.desktop" "$icons/scalable/apps/aflos.svg"
+  rm -fv "$bin/aflos" "$bin/aflos-wa" "$bin/aflos-dc" "$bin/mesh-node" "$bin/mesh-fx" "$apps/aflos.desktop" "$icons/scalable/apps/aflos.svg"
   for s in $sizes; do rm -fv "$icons/${s}x${s}/apps/aflos.png"; done
   if ours_mesh_link; then rm -fv "$bin/mesh"; fi
   exit 0
@@ -40,15 +40,15 @@ fi
 here=$(cd "$(dirname "$0")" && pwd)
 if [[ -x "$here/aflos" ]]; then
   # An unpacked release download: the binaries sit beside this script.
-  app="$here/aflos" wa="$here/aflos-wa" dc="$here/aflos-dc" engine="$here/mesh-node" hicolor="$here/hicolor"
+  app="$here/aflos" wa="$here/aflos-wa" dc="$here/aflos-dc" engine="$here/mesh-node" fx="$here/mesh-fx" hicolor="$here/hicolor"
 else
   (cd "$root" && cargo build --release -p aflos)
   (cd "$root/aflos-wa" && cargo build --release)
   (cd "$root/aflos-dc" && cargo build --release)
   node="${MESH_NODE:-$root/../Mesh-Node}"
-  engine="$node/target/release/mesh-node"
+  engine="$node/target/release/mesh-node" fx="$node/target/release/mesh-fx"
   if [[ -f "$node/Cargo.toml" ]]; then
-    (cd "$node" && cargo build --release -p mesh-node)
+    (cd "$node" && cargo build --release -p mesh-node -p mesh-fx)
   fi
   app="$root/target/release/aflos" wa="$root/aflos-wa/target/release/aflos-wa"
   dc="$root/aflos-dc/target/release/aflos-dc" hicolor="$root/crates/aflos/assets/hicolor"
@@ -71,6 +71,10 @@ else
 fi
 if [[ -x "$engine" ]]; then
   install -m755 "$engine" "$bin/mesh-node"
+  # Voice plugins' host, found beside mesh-node (SPEC-voice-quality).
+  if [[ -x "$fx" ]]; then
+    install -m755 "$fx" "$bin/mesh-fx"
+  fi
 else
   echo "mesh-node not installed: no Mesh-Node checkout (set MESH_NODE)" >&2
 fi
