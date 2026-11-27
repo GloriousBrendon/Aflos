@@ -39,6 +39,9 @@ pub enum Event {
     Video(Video),
     /// How an `Engine::sign_in` is going (native helper only).
     SignIn(SignIn),
+    /// The video settings in use, after the tier's caps: `{camera, screen,
+    /// capped, premium}`.
+    VideoQuality(serde_json::Value),
     /// Our DM with someone is ready (`Engine::open_dm`): its channel id.
     DmOpened {
         id: String,
@@ -79,6 +82,13 @@ impl Engine {
     /// Turns our camera on or off, in the call or for the next one.
     pub fn set_video(&self, on: bool) {
         self.call("setVideo", &[if on { "true" } else { "false" }]);
+    }
+    /// Camera and screen share settings (SPEC-voice-quality Q-d): `{camera,
+    /// screen}`, each `{height, fps, bitrate}` (height 0: the source; bitrate
+    /// 0: Auto). The helper keeps them within the account's tier and answers
+    /// with `Event::VideoQuality` (native helper only).
+    pub fn video_quality(&self, json: &str) {
+        self.call("videoQuality", &[json]);
     }
     /// Starts or stops watching someone's screen share.
     pub fn watch_stream(&self, owner_id: &str, watch: bool) {
@@ -473,6 +483,7 @@ fn binding_event(name: &str, payload: &str) -> Option<Event> {
         "meshMedia" => engine::media(payload).map(|(url, bytes)| Event::Media { url, bytes }),
         "meshQr" => engine::qr(payload).map(Event::Qr),
         "meshVideo" => engine::video(payload).map(Event::Video),
+        "dcVideoQuality" => serde_json::from_str(payload).ok().map(Event::VideoQuality),
         "meshLogin" => serde_json::from_str(payload).ok().map(Event::SignIn),
         "meshDmOpened" => {
             let v: serde_json::Value = serde_json::from_str(payload).ok()?;

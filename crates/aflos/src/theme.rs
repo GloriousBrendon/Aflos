@@ -409,6 +409,9 @@ pub struct Config {
     /// Aflos calls' voice quality: `low`, `standard` (unset), `high`, `studio`.
     #[serde(default)]
     pub audio_quality: Option<String>,
+    /// Discord camera and screen share settings, as `videoQuality` takes them.
+    #[serde(default)]
+    pub discord_video: Option<serde_json::Value>,
 }
 
 /// The animated backgrounds (see rain.rs).
