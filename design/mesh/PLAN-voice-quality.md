@@ -2,7 +2,7 @@
 
 Status: **APPROVED 2026-11-26** ("approved, start the spike"). Built from
 [SPEC-voice-quality.md](SPEC-voice-quality.md) (approved 2026-11-26).
-Ships as **0.5.4** (compatible: nothing on the wire changes that 0.5.1 or
+Ships as **0.6.2** (planned as 0.5.4; 0.5.3 took Log out, and 0.6.x the profiles) (compatible: nothing on the wire changes that 0.5.1 or
 0.5.2 can't decode). 0.5.2 ships first, as built.
 
 ## The spike (done 2026-11-26, Mesh-Node PR #8)
@@ -52,6 +52,18 @@ need; Task 5 adds it for plugins that do.
   hand in the mic test: LSP's compressor took a loud tone from −3.9 to
   −10.0 dBFS and back once removed (automatic gain off; with it on, AGC
   settling hides the change).
+
+- **Task 5:** editors open without blocking: `mesh-fx serve` reads stdin on
+  its own thread and pumps open editors every 5 ms; closing the window
+  (WM_DELETE_WINDOW) saves state and says `editorClosed`. Parameters and the
+  editor work while the plugins run (the mic test or a call); answers come
+  as `meshFx {answer}`. A chain that stops asks mesh-fx to save and lets it
+  exit off the audio thread. VST3 editors and embedded CLAP editors are
+  Linux-only for now; Windows gets the parameter sliders.
+- **Task 7:** the old-engine Studio check is left to the codec unit test (an
+  old build isn't at hand in tests); killing mesh-fx bypasses within 500 ms.
+- **Task 12:** no checkpoint step: `tests/fx.rs` drives the plugins end to
+  end with real test plugins instead.
 
 ## Decisions taken while planning
 
@@ -126,16 +138,16 @@ need; Task 5 adds it for plugins that do.
   `fxRestart`, `meshFx {state, plugin, latency}` events. **Accept:**
   unit tests with a fake client: late frames go dry; 3 in a row bypass;
   restart restores.
-- [ ] **Task 5: state, editors, parameters.** `save`, state files,
+- [x] **Task 5: state, editors, parameters.** `save`, state files,
   `fxEdit <index>`, `fxParams <index>` / `fxParam <index> <id>
   <value>`. **Accept:** a test plugin's gain set by `fxParam` survives a
   restart of `mesh-fx` through its state file; a corrupt state file is
   ignored.
-- [ ] **Task 6: voice quality.** `callAudio {"quality"}`, live, with the
+- [x] **Task 6: voice quality.** `callAudio {"quality"}`, live, with the
   encoder rebuild across modes. **Accept:** unit test: Studio's packets
   average about 4× Standard's; switching modes mid-stream decodes with no
   error.
-- [ ] **Task 7: process tests** (`tests/fx.rs`, spec Testing): a +6 dB
+- [x] **Task 7: process tests** (`tests/fx.rs`, spec Testing): a +6 dB
   plugin heard 6 dB louder (±1); a 50 ms-per-block plugin leaves the call
   going dry and reports bypass; killing `mesh-fx` mid-call bypasses
   within 100 ms; the mic test plays the processed voice; an old engine
@@ -144,21 +156,21 @@ need; Task 5 adds it for plugins that do.
 
 ### Phase 2: the app (Aflos) and Discord
 
-- [ ] **Task 8: Plugins in Voice & audio** (F0: a collapsed "Advanced:
+- [x] **Task 8: Plugins in Voice & audio** (F0: a collapsed "Advanced:
   plugins" section below the built-in controls, empty by default). A list (name, format,
   latency, on/off, up/down, Edit, remove), Add from the scan list, Add
   folder, Rescan; the bypass notice with Restart plugins; the chain in
   `config.toml`, sent at start. **Accept:** unit tests: the chain
   survives a `config.toml` round trip and produces the right `fxChain`
   JSON.
-- [ ] **Task 9: Voice quality** choice with "about N kb/s up in a call of
+- [x] **Task 9: Voice quality** choice with "about N kb/s up in a call of
   5" (Q-b). **Accept:** unit test on the estimate; `callAudio` JSON
   carries `quality`.
-- [ ] **Task 10: Discord video quality.** `aflos-dc` `videoQuality`, the
+- [x] **Task 10: Discord video quality.** `aflos-dc` `videoQuality`, the
   tier clamp, `send_video` reads its settings; the app's camera and
   screen settings. **Accept:** unit tests: each tier's clamp; the
   defaults equal today's constants.
-- [ ] **Task 11: shipping `mesh-fx`.** release.yml builds it beside
+- [x] **Task 11: shipping `mesh-fx`.** release.yml builds it beside
   `mesh-node` on both OSes; the Windows installer, Linux tarball, AUR
   PKGBUILD and the self-updater include it; Aflos finds it beside
   `mesh-node`. **Accept:** a release dry run (workflow on a branch, no
