@@ -543,7 +543,8 @@ pub struct Social {
     #[serde(rename = "fn")]
     pub answers: Option<String>,
     pub friends: Vec<Friend>,
-    /// Requests to us, waiting for Accept or Decline.
+    /// Requests to us: always empty since SPEC-social revision 3 (kept so
+    /// an older helper's list still parses).
     pub incoming: Vec<Request>,
     /// People we asked, or added by ID, who haven't connected yet.
     pub outgoing: Vec<Known>,
@@ -677,12 +678,11 @@ impl Node {
         self.call("netPing", &[ticket]);
     }
 
-    /// Sends a friend request through someone's live friend code (it uses
-    /// one of the code's uses). Answers with `Social` once a seed has it, or
-    /// an `Error` (`not-found`, `self`, `blocked`, `already-friend`,
-    /// `slow-down`, `offline`, `bad-note`).
-    pub fn request(&self, code: &str, note: &str) {
-        self.call("friendRequest", &[code, note]);
+    /// Adds the owner of a friend code on our side only (SPEC-social
+    /// revision 3): friends once they've added us too. Answers with
+    /// `Social`, or an `Error` (`not-found`, `self`, `blocked`, `offline`).
+    pub fn add_by_code(&self, code: &str) {
+        self.call("friendRequest", &[code]);
     }
     /// Adds someone by ID: they're a friend once they've added yours too.
     /// Answers with `Social`, or an `Error` (`self`, `already-contact`,
@@ -690,14 +690,7 @@ impl Node {
     pub fn add_friend(&self, id: &str, nick: &str) {
         self.call("friendAdd", &[id, nick]);
     }
-    /// Each answers with `Social`, or an `Error`.
-    pub fn accept(&self, id: &str) {
-        self.call("friendAccept", &[id]);
-    }
-    /// Nothing tells them.
-    pub fn decline(&self, id: &str) {
-        self.call("friendDecline", &[id]);
-    }
+
     /// Removes a friend, or cancels a request we sent.
     pub fn remove_friend(&self, id: &str) {
         self.call("friendRemove", &[id]);

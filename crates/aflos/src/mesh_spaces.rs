@@ -1069,6 +1069,23 @@ pub(crate) fn settings<'a>(session: &'a Session, state: &'a App) -> Option<Eleme
                     .push(act("Ban", p.danger(), Some(Msg::Ban(m.id.clone())), p))
                     .push(crate::profile_ui::hide_controls(&space.id, m, p));
             }
+            // Add friend (SPEC-social revision 3): they see nothing unless
+            // they add us too.
+            let social = &mesh.social;
+            if social.outgoing.iter().any(|o| o.id == m.id) {
+                row = row.push(ui::mono("added", 11.0, p.text_muted()));
+            } else if !social.friends.iter().any(|f| f.id == m.id)
+                && !social.blocked.iter().any(|b| b.id == m.id)
+            {
+                row = row.push(
+                    button(ui::sans("Add friend", 12.0, Weight::Normal, p.accent()))
+                        .on_press(Message::MeshForm(crate::mesh_ui::Msg::AddFriend(
+                            m.id.clone(),
+                        )))
+                        .padding([4, 10])
+                        .style(flat_button_style(p)),
+                );
+            }
             // A report goes to the owner, so not about them, nor by them.
             if !may.owner && m.role != "owner" && space.role.is_some() {
                 row = row.push(act(

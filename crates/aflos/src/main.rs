@@ -5971,7 +5971,7 @@ fn channel_pane<'a>(
     // Aflos's friends, as Discord's Home has them: the page shows with nothing open.
     if home && state.mesh_node.is_some() && mesh_ui::open(state) {
         let open = session.selected_room.is_none() && session.web_chat.is_none();
-        let asks = state.mesh.social.incoming.len() as u64;
+        let asks = state.mesh.profile.top8.asks.len() as u64;
         let line = row![
             ui::icon(ui::Icon::Users, 16.0, p.text_bright()),
             ui::sans("Friends", 14.0, Weight::Normal, p.text_bright()).width(Length::Fill),
