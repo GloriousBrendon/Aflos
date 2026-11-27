@@ -36,17 +36,17 @@ and the Top 8 ask, accept and withdraw) and `tests/spaces.rs` (28, with
 needed one rerun on #13 for an unrelated timeout in
 `e2ee::notes_reach_every_device_even_after_a_wait`.
 
-- [ ] **Task 6: The profile screen** (`profile_ui.rs`; PR4, PR5, PR6,
+- [x] **Task 6: The profile screen** (Aflos #29, Mesh-Node #15) (`profile_ui.rs`; PR4, PR5, PR6,
   PR9, PR10). Theme, background, avatar, banner, then the blocks, drawn
   with the existing widgets; links confirm before opening; the song's play
   button.
-- [ ] **Task 7: The editor** (PR16). Rice settings aimed at the profile,
+- [x] **Task 7: The editor** (Aflos #29) (PR16). Rice settings aimed at the profile,
   Follow my rice, block order, live preview, Publish. Sender-side
   re-encoding to fit the caps, with a clear message when it can't.
-- [ ] **Task 8: Cards and avatars across the app.** Friends' avatars in the
+- [x] **Task 8: Cards and avatars across the app.** (Aflos #29) Friends' avatars in the
   sidebar, chats, calls and member lists; Space cards in Spaces; the
   owner's hide controls; Autoplay profile songs in Settings.
-- [ ] **Task 9: Release.** CHANGELOG, README ("What works today"), version
+- [x] **Task 9: Release.** (Aflos 0.6.1, 2026-11-27: 0.6.0 was tagged early by mistake and never released) CHANGELOG, README ("What works today"), version
   bump.
 
 **Checkpoint B (by hand, stop for your look):** the checks in the spec's
