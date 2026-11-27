@@ -76,7 +76,7 @@ jobs:
           (cd Aflos && cargo build --release -p aflos)
           (cd Aflos/aflos-wa && cargo build --release)
           (cd Aflos/aflos-dc && cargo build --release)
-          (cd Mesh-Node && cargo build --release -p mesh-node)
+          (cd Mesh-Node && cargo build --release -p mesh-node -p mesh-fx)
       - name: Pack
         run: |
           v=$(grep -m1 '^version' Aflos/crates/aflos/Cargo.toml | cut -d'"' -f2)
@@ -84,7 +84,8 @@ jobs:
           mkdir $d
           cp Aflos/target/release/aflos $d/aflos
           cp Aflos/aflos-wa/target/release/aflos-wa Aflos/aflos-dc/target/release/aflos-dc \
-             Mesh-Node/target/release/mesh-node Aflos/installer/install-linux.sh \
+             Mesh-Node/target/release/mesh-node Mesh-Node/target/release/mesh-fx \
+             Aflos/installer/install-linux.sh \
              $d/
           cp -r Aflos/crates/aflos/assets/hicolor $d/
           tar czf $d.tar.gz $d

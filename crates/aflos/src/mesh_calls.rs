@@ -81,6 +81,7 @@ pub(crate) fn update(state: &mut App, msg: Msg) -> Task<Message> {
         node.call_ptt(ptt_mode(&state.mesh));
         node.call_gain(state.mesh.input_volume);
         node.call_audio(&state.mesh.audio.json());
+        crate::fx_ui::send(state);
         for (id, percent) in &state.mesh.person_volumes {
             node.call_volume(id, *percent);
         }

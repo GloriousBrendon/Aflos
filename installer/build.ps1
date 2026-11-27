@@ -27,7 +27,8 @@ try {
         Push-Location $dir
         try {
             if ($dir -eq $root) { cargo build --release --target $target -p aflos }
-            elseif ($dir -eq $node) { cargo build --release --target $target -p mesh-node }
+            # mesh-fx hosts a person's own voice plugins beside mesh-node (SPEC-voice-quality).
+            elseif ($dir -eq $node) { cargo build --release --target $target -p mesh-node -p mesh-fx }
             elseif ($dir -in "$root\aflos-wa", "$root\aflos-dc") {
                 # The bundled Opus in opusic-sys (aflos-wa) and libopus_sys (aflos-dc) links the DLL runtime unless OPUS_STATIC_RUNTIME is on, which neither build.rs sets (Task 1, fallback a).
                 $opus = if ($dir -eq "$root\aflos-wa") { 'opusic-sys' } else { 'libopus_sys' }

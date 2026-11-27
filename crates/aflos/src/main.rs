@@ -6,6 +6,7 @@ mod accounts;
 mod cache;
 #[cfg(test)]
 mod checkpoint;
+mod fx_ui;
 mod mesh_calls;
 mod mesh_dm;
 mod mesh_spaces;
@@ -299,6 +300,10 @@ struct Session {
     selected_output: String,
     /// From config.toml; shows the 🎧 Discord voice button when set.
     discord_voice: Option<theme::DiscordVoice>,
+    /// Discord camera and screen share settings as chosen (config.toml), and
+    /// as the helper uses them within the account's tier (SPEC-voice-quality).
+    dc_video_want: serde_json::Value,
+    dc_video_used: Option<serde_json::Value>,
     /// The pane with the accent border.
     focused: Pane,
     show_members: bool,
@@ -498,6 +503,10 @@ impl Session {
             selected_input: DEFAULT_DEVICE.to_string(),
             selected_output: DEFAULT_DEVICE.to_string(),
             discord_voice: theme::load_discord_voice(&config_path()),
+            dc_video_want: theme::load_config(&config_path())
+                .discord_video
+                .unwrap_or_else(default_dc_video),
+            dc_video_used: None,
             focused: Pane::Chat,
             show_members: true,
             groups: Vec::new(),
@@ -1438,6 +1447,10 @@ enum Message {
     MeshSpace(mesh_spaces::Msg),
     MeshCall(mesh_calls::Msg),
     Profile(profile_ui::Msg),
+    Fx(fx_ui::Msg),
+    /// A Discord video setting: `camera` or `screen`, `height`, `fps` or
+    /// `bitrate`, and its value.
+    DcVideo(&'static str, &'static str, u64),
     /// The Hide my IP switch (SPEC-connection-privacy P6).
     MeshHideIp(bool),
     /// Join a Discord voice channel, or call a Discord DM.
@@ -1709,6 +1722,7 @@ fn boot() -> (App, Task<Message>) {
     app.mesh.input_volume = config.input_volume.unwrap_or(100).min(200);
     app.mesh.audio = mesh_ui::AudioPrefs::from_config(&config);
     app.mesh.profile.autoplay = config.autoplay_songs;
+    (app.mesh.fx.chain, app.mesh.fx.dirs) = (config.fx_plugins.clone(), config.fx_dirs.clone());
     app.mesh.person_volumes = config.person_volumes.clone();
     mesh_ui::HIDE_IP.store(config.hide_ip, std::sync::atomic::Ordering::Relaxed);
     // With mesh-node, everything else waits until the Aflos identity is open.
@@ -1991,6 +2005,22 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         Message::MeshSpace(msg) => mesh_spaces::update(state, msg),
         Message::MeshCall(msg) => mesh_calls::update(state, msg),
         Message::Profile(msg) => profile_ui::update(state, msg),
+        Message::Fx(msg) => fx_ui::update(state, msg),
+        Message::DcVideo(kind, field, value) => {
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                session.dc_video_want[kind][field] = value.into();
+                let want = session.dc_video_want.clone();
+                if let Some(engine) = &state.discord {
+                    engine.video_quality(&want.to_string());
+                }
+                if let Err(err) =
+                    theme::update_config(&config_path(), move |c| c.discord_video = Some(want))
+                {
+                    tracing::warn!("config: {err}");
+                }
+            }
+            Task::none()
+        }
         Message::MeshHideIp(on) => {
             state.mesh.hide_ip = on;
             mesh_ui::HIDE_IP.store(on, std::sync::atomic::Ordering::Relaxed);
@@ -2769,6 +2799,9 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     {
                         engine.open_channel(&chat.id);
                     }
+                    if let Screen::LoggedIn(session) = &state.screen {
+                        engine.video_quality(&session.dc_video_want.to_string());
+                    }
                     state.discord = Some(engine);
                 }
                 aflos_discord::Event::Snapshot(snapshot) => {
@@ -2804,6 +2837,11 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 }
                 aflos_discord::Event::Video(aflos_discord::Video::Ended { id }) => {
                     state.video.remove(&id);
+                }
+                aflos_discord::Event::VideoQuality(used) => {
+                    if let Screen::LoggedIn(session) = &mut state.screen {
+                        session.dc_video_used = Some(used);
+                    }
                 }
                 aflos_discord::Event::Disconnected => {
                     state.video.retain(|id, _| id.starts_with("wa-"));
@@ -9466,7 +9504,7 @@ fn rice_export<'a>(state: &'a App) -> Element<'a, Message> {
 
 fn voice_page<'a>(
     session: &'a Session,
-    mesh: &mesh_ui::Mesh,
+    mesh: &'a mesh_ui::Mesh,
     p: &'a theme::Palette,
 ) -> Element<'a, Message> {
     let (ptt, gain, prefs) = (mesh.ptt, mesh.input_volume, mesh.audio);
@@ -9488,6 +9526,9 @@ fn voice_page<'a>(
         .spacing(12)
         .align_y(iced::Alignment::Center),
         audio_processing(mesh, prefs, p),
+        voice_quality(prefs, p),
+        fx_ui::view(mesh, p),
+        discord_video(session, p),
         button(text(format!("{} Push to talk in Aflos calls: hold Right Ctrl while Aflos is focused", if ptt { "☑" } else { "☐" })).size(13))
             .on_press(Message::MeshCall(mesh_calls::Msg::PttSetting(!ptt)))
             .padding([4, 0])
@@ -9498,6 +9539,112 @@ fn voice_page<'a>(
             .color(p.text_muted()),
     ]
     .spacing(20)
+    .into()
+}
+
+/// What Discord video sent before it had settings (SPEC-voice-quality Q-d).
+fn default_dc_video() -> serde_json::Value {
+    serde_json::json!({
+        "camera": { "height": 720, "fps": 30, "bitrate": 2_000_000 },
+        "screen": { "height": 1080, "fps": 15, "bitrate": 2_500_000 },
+    })
+}
+
+/// A picker's labels and values for one Discord video setting.
+fn dc_choices(kind: &str, field: &str) -> &'static [(&'static str, u64)] {
+    match (kind, field) {
+        ("camera", "height") => &[("480p", 480), ("720p", 720), ("1080p", 1080)],
+        ("screen", "height") => &[("480p", 480), ("720p", 720), ("1080p", 1080), ("Source", 0)],
+        ("camera", "fps") => &[("15 fps", 15), ("30 fps", 30)],
+        ("screen", "fps") => &[("5 fps", 5), ("15 fps", 15), ("30 fps", 30), ("60 fps", 60)],
+        _ => &[
+            ("Auto", 0),
+            ("0.5 Mb/s", 500_000),
+            ("1 Mb/s", 1_000_000),
+            ("2 Mb/s", 2_000_000),
+            ("2.5 Mb/s", 2_500_000),
+            ("4 Mb/s", 4_000_000),
+            ("8 Mb/s", 8_000_000),
+        ],
+    }
+}
+
+/// Discord camera and screen share settings (Q-d), with what the account's
+/// tier lets through (Q-e).
+fn discord_video<'a>(session: &'a Session, p: &'a theme::Palette) -> Element<'a, Message> {
+    let mut col = column![text("Discord video").size(14).color(p.text_bright())].spacing(8);
+    for (kind, title) in [("camera", "Camera"), ("screen", "Screen share")] {
+        let mut r = row![text(title).size(13).width(120)]
+            .spacing(8)
+            .align_y(iced::Alignment::Center);
+        for field in ["height", "fps", "bitrate"] {
+            let choices = dc_choices(kind, field);
+            let now = session.dc_video_want[kind][field].as_u64();
+            let labels: Vec<&'static str> = choices.iter().map(|(l, _)| *l).collect();
+            let at = choices
+                .iter()
+                .find(|(_, v)| Some(*v) == now)
+                .map(|(l, _)| *l);
+            r = r.push(
+                pick_list(labels, at, move |label| {
+                    let v = choices
+                        .iter()
+                        .find(|(l, _)| *l == label)
+                        .map_or(0, |(_, v)| *v);
+                    Message::DcVideo(kind, field, v)
+                })
+                .padding(4),
+            );
+        }
+        if let Some(used) = &session.dc_video_used
+            && used[kind] != session.dc_video_want[kind]
+        {
+            let u = &used[kind];
+            r = r.push(
+                text(format!(
+                    "sent as {}p {} fps: more needs Nitro",
+                    u["height"].as_u64().unwrap_or(0),
+                    u["fps"].as_u64().unwrap_or(0)
+                ))
+                .size(12)
+                .color(p.text_muted()),
+            );
+        }
+        col = col.push(r);
+    }
+    col.into()
+}
+
+/// SPEC-voice-quality: Low to Studio, and what it costs to send.
+fn voice_quality<'a>(prefs: mesh_ui::AudioPrefs, p: &'a theme::Palette) -> Element<'a, Message> {
+    let labels: Vec<&'static str> = fx_ui::QUALITIES.iter().map(|(l, _, _)| *l).collect();
+    let now = fx_ui::QUALITIES
+        .iter()
+        .find(|(_, q, _)| *q == prefs.quality)
+        .copied()
+        .unwrap_or(fx_ui::QUALITIES[1]);
+    let pick = pick_list(labels, Some(now.0), move |label| {
+        let mut next = prefs;
+        next.quality = fx_ui::QUALITIES
+            .iter()
+            .find(|(l, _, _)| *l == label)
+            .map_or("standard", |(_, q, _)| q);
+        Message::MeshCall(mesh_calls::Msg::Audio(next, true))
+    })
+    .padding(4);
+    row![
+        text("Voice quality in Aflos calls").size(13).width(260),
+        pick,
+        text(format!(
+            "{} kb/s · about {} kb/s up in a call of 5",
+            now.2,
+            fx_ui::upload(now.2, 5)
+        ))
+        .size(12)
+        .color(p.text_muted()),
+    ]
+    .spacing(12)
+    .align_y(iced::Alignment::Center)
     .into()
 }
 
@@ -10345,6 +10492,19 @@ fn main() -> iced::Result {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Discord video's defaults are what it sent before, and each shows in its picker.
+    #[test]
+    fn discord_video_defaults_show_in_their_pickers() {
+        let d = default_dc_video();
+        for kind in ["camera", "screen"] {
+            for field in ["height", "fps", "bitrate"] {
+                let v = d[kind][field].as_u64().unwrap();
+                assert!(dc_choices(kind, field).iter().any(|(_, c)| *c == v), "{kind} {field} {v}");
+            }
+        }
+        assert_eq!(d["screen"]["fps"], 15);
+    }
 
     #[test]
     fn fences_split_prose_and_code() {

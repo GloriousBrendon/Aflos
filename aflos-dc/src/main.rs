@@ -355,6 +355,27 @@ async fn handle(
         "setVideo" | "watchStream" | "stopWatching" | "shareScreen" if !voice::video_on() => {
             log::info!("{}: video is off (AFLOS_DC_VIDEO=1 turns it on)", cmd.func);
         }
+        // Camera and screen share settings (SPEC-voice-quality Q-d), within
+        // the account's tier (Q-e); `dcVideoQuality` says what's in use.
+        "videoQuality" => {
+            let asked: Value = arg(0)
+                .and_then(|j| serde_json::from_str(j).ok())
+                .unwrap_or_default();
+            let premium = {
+                let s = state.lock().await;
+                s.me.as_ref()
+                    .and_then(|m| m["premium_type"].as_u64())
+                    .unwrap_or(0)
+            };
+            let wanted = voice::VideoQuality::default().with(&asked);
+            let q = wanted.for_tier(premium);
+            *voice::QUALITY.lock().unwrap() = q;
+            let part = |v: voice::Video| serde_json::json!({ "height": v.height, "fps": v.fps, "bitrate": v.bitrate });
+            emit(
+                "dcVideoQuality",
+                &serde_json::json!({ "camera": part(q.camera), "screen": part(q.screen), "capped": q != wanted, "premium": premium }),
+            );
+        }
         "setVideo" => {
             let on = arg(0) == Some("true");
             let (m, d) = {

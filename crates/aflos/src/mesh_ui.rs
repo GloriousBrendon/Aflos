@@ -28,6 +28,8 @@ pub(crate) struct AudioPrefs {
     /// Manual sensitivity in dBFS; `None` is Automatic.
     pub threshold: Option<f32>,
     pub output: u32,
+    /// `low`, `standard`, `high` or `studio` (SPEC-voice-quality).
+    pub quality: &'static str,
 }
 
 impl Default for AudioPrefs {
@@ -38,6 +40,7 @@ impl Default for AudioPrefs {
             echo: true,
             threshold: None,
             output: 100,
+            quality: "standard",
         }
     }
 }
@@ -51,6 +54,9 @@ impl AudioPrefs {
             echo: c.audio_echo.unwrap_or(d.echo),
             threshold: c.audio_threshold.map(|t| t.clamp(-90.0, 0.0)),
             output: c.output_volume.unwrap_or(d.output).min(200),
+            quality: (crate::fx_ui::QUALITIES.iter())
+                .find(|(_, q, _)| c.audio_quality.as_deref() == Some(*q))
+                .map_or(d.quality, |(_, q, _)| q),
         }
     }
 
@@ -58,12 +64,13 @@ impl AudioPrefs {
         (c.audio_gain, c.audio_noise, c.audio_echo) =
             (Some(self.gain), Some(self.noise), Some(self.echo));
         (c.audio_threshold, c.output_volume) = (self.threshold, Some(self.output));
+        c.audio_quality = (self.quality != "standard").then(|| self.quality.to_owned());
     }
 
     pub fn json(&self) -> String {
         serde_json::json!({
             "gain": self.gain, "noise": self.noise, "echo": self.echo,
-            "threshold": self.threshold, "output": self.output,
+            "threshold": self.threshold, "output": self.output, "quality": self.quality,
         })
         .to_string()
     }
@@ -141,6 +148,8 @@ pub(crate) struct Mesh {
     pub tab: Tab,
     /// Profiles, the Top 8 and Space cards (SPEC-profile).
     pub profile: crate::profile_ui::Profiles,
+    /// A person's own voice plugins (SPEC-voice-quality).
+    pub fx: crate::fx_ui::FxUi,
     form: Form,
     settings: Settings,
 }
@@ -354,6 +363,10 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             return Task::none();
         }
         mesh::Event::Spaces(spaces) => crate::profile_ui::spaces_changed(state, &spaces.clone()),
+        mesh::Event::FxPlugins(_) | mesh::Event::Fx(_) => {
+            crate::fx_ui::event(state, event);
+            return Task::none();
+        }
         mesh::Event::Social(_) => drop(crate::profile_ui::event(
             state,
             mesh::Event::Social(mesh::Social::default()),
@@ -570,7 +583,9 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
         | mesh::Event::Call(_)
         | mesh::Event::Voice { .. }
         | mesh::Event::Profile(_)
-        | mesh::Event::Top8(_) => {}
+        | mesh::Event::Top8(_)
+        | mesh::Event::FxPlugins(_)
+        | mesh::Event::Fx(_) => {}
         mesh::Event::Disconnected => {
             let autoplay = m.profile.autoplay;
             m.profile = crate::profile_ui::Profiles::keeping(autoplay);
@@ -1854,10 +1869,12 @@ mod tests {
             echo: false,
             threshold: Some(-45.0),
             output: 150,
+            quality: "studio",
         };
         set.save(&mut c);
         assert_eq!(AudioPrefs::from_config(&c), set);
         let v: serde_json::Value = serde_json::from_str(&set.json()).unwrap();
+        assert_eq!(v["quality"], "studio", "callAudio carries the quality");
         assert_eq!(
             (
                 v["gain"].as_bool(),

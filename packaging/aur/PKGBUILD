@@ -6,7 +6,7 @@
 # Not published to the AUR yet: run `updpkgsums` once v$pkgver is released.
 
 pkgname=aflos-chat
-pkgver=0.6.1
+pkgver=0.6.2
 pkgrel=1
 pkgdesc="Encrypted, decentralized chat on its own peer-to-peer network, plus Matrix, Discord and WhatsApp (for adults, 18+)"
 arch=('x86_64')
@@ -40,7 +40,7 @@ build() {
   cargo build --frozen --release -p aflos
   (cd aflos-wa && cargo build --frozen --release)
   (cd aflos-dc && cargo build --frozen --release)
-  (cd ../Mesh-Node && cargo build --frozen --release -p mesh-node)
+  (cd ../Mesh-Node && cargo build --frozen --release -p mesh-node -p mesh-fx)
 }
 
 package() {
@@ -49,6 +49,7 @@ package() {
   install -Dm755 target/release/aflos "$pkgdir/usr/lib/aflos/aflos"
   install -Dm755 aflos-wa/target/release/aflos-wa "$pkgdir/usr/lib/aflos/aflos-wa"
   install -Dm755 ../Mesh-Node/target/release/mesh-node "$pkgdir/usr/lib/aflos/mesh-node"
+  install -Dm755 ../Mesh-Node/target/release/mesh-fx "$pkgdir/usr/lib/aflos/mesh-fx"
   # Not beside aflos on purpose: with it there, Discord would connect from
   # your own IP. aflos-chat.install says how to turn it on.
   install -Dm755 aflos-dc/target/release/aflos-dc "$pkgdir/usr/lib/aflos/optional/aflos-dc"

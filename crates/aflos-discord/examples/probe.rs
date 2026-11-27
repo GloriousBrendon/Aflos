@@ -29,6 +29,7 @@ async fn main() {
             aflos_discord::Event::Qr(_) => println!("logged out: showing a QR code"),
             aflos_discord::Event::Video(_) => {}
             aflos_discord::Event::SignIn(result) => println!("sign-in: {result:?}"),
+            aflos_discord::Event::VideoQuality(q) => println!("video quality: {q}"),
             aflos_discord::Event::DmOpened { id, .. } => println!("DM opened: {id}"),
             aflos_discord::Event::Invite(result) => {
                 println!("invite: {result:?}");
