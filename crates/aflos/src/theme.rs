@@ -397,6 +397,9 @@ pub struct Config {
     /// Each person's volume in Aflos calls, by `mesh1…` ID, in percent.
     #[serde(default)]
     pub person_volumes: std::collections::BTreeMap<String, u32>,
+    /// Play a friend's profile song when their profile opens (off: SPEC-profile PR10).
+    #[serde(default)]
+    pub autoplay_songs: bool,
 }
 
 /// The animated backgrounds (see rain.rs).

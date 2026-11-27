@@ -89,8 +89,79 @@ pub enum Event {
         channel: String,
         people: Vec<String>,
     },
+    /// A profile (SPEC-profile): ours published, a friend's arrived or
+    /// completed, or `profileGet`'s answer with its files.
+    Profile(Profile),
+    /// Top 8 asks, answers and who's shown (PR11).
+    Top8(Top8),
     /// The helper exited; it's restarted by itself.
     Disconnected,
+}
+
+/// A `meshProfile`. `func` is `profileSet`, `top8` (republished) or
+/// `profileGet` (with `toml`, `assets` and `top8`); without it, a friend's
+/// profile `changed` or is `complete` (every file kept).
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+pub struct Profile {
+    #[serde(rename = "fn", default)]
+    pub func: Option<String>,
+    pub id: String,
+    pub version: u64,
+    #[serde(default)]
+    pub changed: bool,
+    #[serde(default)]
+    pub complete: bool,
+    #[serde(default)]
+    pub toml: Option<String>,
+    #[serde(default)]
+    pub assets: Vec<ProfileAsset>,
+    #[serde(default)]
+    pub top8: Vec<ShownFriend>,
+}
+
+/// One of a profile's files, opened to `path` (none while it's coming, or
+/// when it failed the decoder's checks).
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ProfileAsset {
+    /// `avatar`, `banner`, `background`, `gallery` or `song`.
+    pub slot: String,
+    pub mime: String,
+    pub size: u64,
+    pub seconds: Option<u32>,
+    pub path: Option<String>,
+}
+
+/// A friend in a profile's Top 8: the name they gave, their avatar's path.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct ShownFriend {
+    pub name: String,
+    pub avatar: Option<String>,
+}
+
+/// A `meshTop8`: every list, and what just happened.
+#[derive(Debug, Clone, PartialEq, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct Top8 {
+    /// `{fn, id}` for a command's answer, `{event, id}` for a friend's
+    /// message (`ask`, `yes`, `withdrawn`).
+    #[serde(default)]
+    pub event: serde_json::Value,
+    /// Friends we asked, waiting.
+    pub asked: Vec<String>,
+    /// Friends who asked us, waiting for our answer.
+    pub asks: Vec<String>,
+    /// Friends who said yes, with the name they gave.
+    pub may_show: Vec<MayShow>,
+    /// Friends we said yes to (we can withdraw).
+    pub let_show: Vec<String>,
+    /// Who our profile shows, in order.
+    pub shown: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct MayShow {
+    pub id: String,
+    pub name: String,
 }
 
 /// A `meshCall`.
@@ -268,6 +339,27 @@ pub struct SpaceMember {
     pub id: String,
     pub name: String,
     pub role: String,
+    /// Their Space card (SPEC-profile PR12): a still avatar to fetch
+    /// (`Node::card_fetch`) and one line; neither when an owner hid it.
+    #[serde(default)]
+    pub avatar: Option<CardAvatar>,
+    #[serde(default)]
+    pub line: Option<String>,
+    #[serde(default)]
+    pub hidden: CardHidden,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct CardAvatar {
+    pub size: u64,
+    pub mime: String,
+}
+
+/// What an owner or admin hid of a card (PR13).
+#[derive(Debug, Clone, Copy, PartialEq, Default, Deserialize)]
+pub struct CardHidden {
+    pub avatar: bool,
+    pub line: bool,
 }
 
 /// A `meshSpaceMessages`: one channel's page, oldest first, its lines as a
@@ -792,6 +884,36 @@ impl Node {
         self.call("spaceFetch", &[space, channel, message, &index.to_string()]);
     }
 
+    /// Publishes the profile in `folder` (`profile.toml` and its files) as
+    /// the next version; answers with `Profile` (`profileSet`) or `Error`.
+    pub fn profile_set(&self, folder: &str) {
+        self.call("profileSet", &[folder]);
+    }
+    /// A friend's profile (or ours) with its files opened; answers with
+    /// `Profile` (`profileGet`) or `Error` (`not-found`).
+    pub fn profile_get(&self, id: &str) {
+        self.call("profileGet", &[id]);
+    }
+    /// Our card in a Space; `avatar` is a picture's path or empty. Answers
+    /// with `Spaces` or `Error`.
+    pub fn card_set(&self, space: &str, display: &str, line: &str, avatar: &str) {
+        self.call("cardSet", &[space, display, line, avatar]);
+    }
+    /// Hides a member's card `avatar`, `line`, `both`, or `none` to show it.
+    pub fn card_hide(&self, space: &str, member: &str, what: &str) {
+        self.call("cardHide", &[space, member, what]);
+    }
+    /// A member's card avatar; answers with `DmFile` (`message` their ID).
+    pub fn card_fetch(&self, space: &str, member: &str) {
+        self.call("cardFetch", &[space, member]);
+    }
+    /// The Top 8's commands: `top8Ask(id)`, `top8Answer(id, yes, [name])`,
+    /// `top8Withdraw(id)`, `top8Set(ids…)`, `top8List()`. Answers with `Top8`.
+    pub fn top8(&self, func: &str, args: &[&str]) {
+        debug_assert!(func.starts_with("top8"));
+        self.call(func, args);
+    }
+
     /// Calls a friend (SPEC-calls); answers with `Call` events.
     pub fn call_start(&self, friend: &str) {
         self.call("callStart", &[friend]);
@@ -998,6 +1120,8 @@ fn line_event(line: &str) -> Option<Event> {
             })
         }
         "meshSpaceNotify" => serde_json::from_str(payload).ok().map(Event::SpaceNotify),
+        "meshProfile" => serde_json::from_str(payload).ok().map(Event::Profile),
+        "meshTop8" => serde_json::from_str(payload).ok().map(Event::Top8),
         "meshSpaceTyping" => {
             let v: serde_json::Value = serde_json::from_str(payload).ok()?;
             let who = v["who"].as_array()?.iter().filter_map(|w| w.as_str().map(str::to_owned)).collect();
@@ -1014,6 +1138,37 @@ fn line_event(line: &str) -> Option<Event> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SPEC-profile: a profile, the Top 8's lists, and a member's card.
+    #[test]
+    fn profiles_and_cards_parse() {
+        let p = r#"{"fn":"profileGet","id":"mesh1a","version":2,"toml":"x","assets":[{"slot":"avatar","mime":"image/png","size":3,"seconds":null,"path":null,"placeholder":true}],"top8":[{"name":"Bobby","avatar":"/a.png"}]}"#;
+        let Some(Event::Profile(p)) = line_event(&line("meshProfile", p)) else {
+            panic!()
+        };
+        assert_eq!(
+            (p.func.as_deref(), p.version, p.top8[0].name.as_str()),
+            (Some("profileGet"), 2, "Bobby")
+        );
+        assert!(p.assets[0].path.is_none());
+        let t = r#"{"event":{"event":"ask","id":"mesh1b"},"asked":[],"asks":["mesh1b"],"mayShow":[{"id":"mesh1c","name":"C"}],"letShow":[],"shown":["mesh1c"]}"#;
+        let Some(Event::Top8(t)) = line_event(&line("meshTop8", t)) else {
+            panic!()
+        };
+        assert_eq!(
+            (t.asks.len(), t.may_show[0].name.as_str(), t.shown.len()),
+            (1, "C", 1)
+        );
+        let s = r#"{"spaces":[{"id":"s","name":"club","role":"member","channels":[],"members":[{"id":"mesh1b","name":"Bea","role":"member","avatar":{"size":9,"mime":"image/png"},"line":null,"hidden":{"avatar":false,"line":true}}]}]}"#;
+        let Some(Event::Spaces(s)) = line_event(&line("meshSpaces", s)) else {
+            panic!()
+        };
+        let m = &s[0].members[0];
+        assert_eq!(
+            (m.avatar.as_ref().map(|a| a.size), m.line.as_deref(), m.hidden.line),
+            (Some(9), None, true)
+        );
+    }
 
     fn line(binding: &str, payload: &str) -> String {
         serde_json::json!({ "binding": binding, "payload": payload }).to_string()

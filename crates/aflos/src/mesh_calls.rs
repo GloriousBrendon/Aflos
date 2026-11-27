@@ -287,9 +287,14 @@ pub(crate) fn bar(state: &App) -> Option<Element<'_, Message>> {
                 l,
             ));
     }
+    // A DM call shows the friend's face (SPEC-profile); a voice channel the phone.
+    let lead: Element<'_, Message> = match voice {
+        None => crate::profile_ui::face(state, &call.with, &title, 24.0),
+        Some(_) => ui::icon(ui::Icon::Phone, 17.0, p.accent()),
+    };
     let bar = container(
         row![
-            ui::icon(ui::Icon::Phone, 17.0, p.accent()),
+            lead,
             ui::mono_bold(Network::Mesh.tag(), 12.0, net_color(Network::Mesh, p)),
             text(title).size(15).color(p.text_bright()),
             text(status)

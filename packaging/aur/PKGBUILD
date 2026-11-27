@@ -6,7 +6,7 @@
 # Not published to the AUR yet: run `updpkgsums` once v$pkgver is released.
 
 pkgname=aflos-chat
-pkgver=0.5.3
+pkgver=0.6.0
 pkgrel=1
 pkgdesc="Encrypted, decentralized chat on its own peer-to-peer network, plus Matrix, Discord and WhatsApp (for adults, 18+)"
 arch=('x86_64')

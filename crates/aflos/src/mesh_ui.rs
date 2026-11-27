@@ -139,6 +139,8 @@ pub(crate) struct Mesh {
     new_group: Option<(Vec<String>, String)>,
     /// The Friends page's open tab.
     pub tab: Tab,
+    /// Profiles, the Top 8 and Space cards (SPEC-profile).
+    pub profile: crate::profile_ui::Profiles,
     form: Form,
     settings: Settings,
 }
@@ -339,6 +341,27 @@ pub(crate) fn started(state: &App) -> bool {
 }
 
 pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
+    match &event {
+        mesh::Event::Profile(_) | mesh::Event::Top8(_) => {
+            return crate::profile_ui::event(state, event);
+        }
+        mesh::Event::Error(e)
+            if ["profile", "top8", "card"]
+                .iter()
+                .any(|f| e.func.starts_with(f)) =>
+        {
+            return crate::profile_ui::event(state, event);
+        }
+        mesh::Event::DmFile(file) if crate::profile_ui::card_file(state, file) => {
+            return Task::none();
+        }
+        mesh::Event::Spaces(spaces) => crate::profile_ui::spaces_changed(state, &spaces.clone()),
+        mesh::Event::Social(_) => drop(crate::profile_ui::event(
+            state,
+            mesh::Event::Social(mesh::Social::default()),
+        )),
+        _ => {}
+    }
     if matches!(
         event,
         mesh::Event::DmChats(_)
@@ -387,6 +410,9 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
             if !now_unlocked {
                 m.codes.clear();
                 m.social = mesh::Social::default();
+                // Profiles go with the identity; the setting stays.
+                let autoplay = m.profile.autoplay;
+                m.profile = crate::profile_ui::Profiles::keeping(autoplay);
                 (m.chats, m.spaces, m.typing, m.new_group, m.call) =
                     (Vec::new(), Vec::new(), None, None, None);
                 m.voice.clear();
@@ -545,8 +571,12 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
         | mesh::Event::SpaceNotify(_)
         | mesh::Event::SpaceTyping { .. }
         | mesh::Event::Call(_)
-        | mesh::Event::Voice { .. } => {}
+        | mesh::Event::Voice { .. }
+        | mesh::Event::Profile(_)
+        | mesh::Event::Top8(_) => {}
         mesh::Event::Disconnected => {
+            let autoplay = m.profile.autoplay;
+            m.profile = crate::profile_ui::Profiles::keeping(autoplay);
             m.node = None;
             m.identity = None;
             m.qr = None;
@@ -1602,6 +1632,10 @@ fn friends_view(state: &App) -> Element<'_, Message> {
         tab_button("Blocked".into(), Tab::Blocked),
         ui::primary_button(ui::sans("Add friend", 13.0, Weight::Semibold, p.accent_text()), Some(Message::ShowFriends(Tab::Add)), p, &state.layout)
             .padding([4, 12]),
+        button(ui::sans("Your profile", 13.0, Weight::Normal, p.accent()))
+            .on_press(Message::Profile(crate::profile_ui::Msg::Edit))
+            .padding([4, 10])
+            .style(flat_button_style(p)),
         Space::new().width(Length::Fill),
         ui::mono("STATUS", 11.0, p.text_muted()),
         pick_list(STATUSES.map(|(l, _)| l).to_vec(), Some(status), |l| Message::MeshForm(Msg::Status(l))).padding(6),
@@ -1634,6 +1668,34 @@ fn friends_view(state: &App) -> Element<'_, Message> {
             .spacing(10)
             .align_y(iced::Alignment::Center),
         );
+    }
+
+    // Top 8 asks waiting on us (SPEC-profile PR11).
+    if tab == Tab::Pending {
+        for id in &state.mesh.profile.top8.asks {
+            let to = |m| Message::Profile(m);
+            col = col.push(
+                row![
+                    line(
+                        format!(
+                            "{} would like to show you in their Top 8",
+                            state.mesh.name_of(id)
+                        ),
+                        short_id(id)
+                    ),
+                    button(ui::sans("Allow", 12.0, Weight::Normal, p.success()))
+                        .on_press(to(crate::profile_ui::Msg::Answer(id.clone(), true)))
+                        .padding([4, 10])
+                        .style(flat_button_style(p)),
+                    button(ui::sans("Not now", 12.0, Weight::Normal, p.text_bright()))
+                        .on_press(to(crate::profile_ui::Msg::Answer(id.clone(), false)))
+                        .padding([4, 10])
+                        .style(flat_button_style(p)),
+                ]
+                .spacing(10)
+                .align_y(iced::Alignment::Center),
+            );
+        }
     }
 
     // A group needs at least two friends; up to nine with you (SPEC-dm D6).
@@ -1688,8 +1750,13 @@ fn friends_view(state: &App) -> Element<'_, Message> {
         }
         let call = state.mesh.call.is_none().then(|| Message::MeshCall(crate::mesh_calls::Msg::Start(f.id.clone())));
         col = col.push(row![
+            crate::profile_ui::face(state, &f.id, &friend_name(f), 36.0),
             line(friend_name(f), detail),
             row![
+                button(ui::sans("Profile", 12.0, Weight::Normal, p.accent()))
+                    .on_press(Message::Profile(crate::profile_ui::Msg::Open(f.id.clone())))
+                    .padding([4, 10])
+                    .style(flat_button_style(p)),
                 button(ui::sans("Message", 12.0, Weight::Normal, p.accent()))
                     .on_press(Message::WebChatSelected(WebChat {
                         network: Network::Mesh,
