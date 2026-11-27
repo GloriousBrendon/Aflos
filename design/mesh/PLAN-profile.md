@@ -1,7 +1,6 @@
 # Plan: `profile` (Aflos)
 
-Status: **DRAFT 2026-11-27, waiting on [SPEC-profile](SPEC-profile.md)
-approval.** Code goes in `GloriousBrendon/Mesh-Node` (Tasks 1 to 5) and
+Status: **APPROVED 2026-11-27** with [SPEC-profile](SPEC-profile.md). Code goes in `GloriousBrendon/Mesh-Node` (Tasks 1 to 5) and
 Aflos (Tasks 6 to 9). Each task is one commit with its tests; the checks
 are the same as for the modules before it (`cargo test`, `cargo clippy`).
 

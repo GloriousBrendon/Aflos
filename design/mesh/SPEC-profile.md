@@ -1,7 +1,7 @@
 # Spec: `profile` (Aflos)
 
-Status: **DRAFT 2026-11-27, for review.** Recommended answers are filled in;
-"go" approves them as written. Depends on `social` (friends, account sync
+Status: **APPROVED 2026-11-27**, with the recommended answers to Q1 to Q5
+as written. Depends on `social` (friends, account sync
 D11), `dm` (files, D12), `spaces` (the Space log, S1) and `e2ee` (1:1
 sessions), all built in Mesh-Node as of Aflos 0.5.3. See
 [ROADMAP.md](../../ROADMAP.md).
@@ -11,8 +11,8 @@ sessions), all built in Mesh-Node as of Aflos 0.5.3. See
 People can make their profile look however they like: MySpace style, a
 rice for your profile. It's free for everyone; nothing that Discord Nitro
 charges for (animated avatar, banner, profile theme, per-server profiles) is
-paywalled. Today an Aflos user is only a display name, from their friend
-request or from joining a Space, drawn as an initials circle.
+paywalled. Today an Aflos user is only a display name, from adding them
+as a friend or from joining a Space, drawn as an initials circle.
 
 The constraint is the engine: **no new rendering engine and no code from
 other people.** A profile is data that Aflos draws with its own iced
@@ -35,7 +35,7 @@ widgets, built on the Rice token system (`theme.rs`: `Palette`, `Layout`,
 
 | # | Decision | Why |
 |---|---|---|
-| PR1 | **Friends only.** The full profile goes to current friends and your own devices, nobody else, whether the connection is direct or relayed. | Relays carry only ciphertext either way, so the path doesn't matter; who receives it does. Tying it to "direct" would blank your profile for friends behind CGNAT or mobile data, and for anyone using Hide my IP. |
+| PR1 | **Friends only.** The full profile goes to current friends and your own devices, nobody else, whether the connection is direct or relayed. "Friends" is whatever SPEC-social says it is: today mutual friend requests; with consent-first friendship (revision 2, PR #9), people you've paired with. Neither a request nor a pairing carries a picture: the profile follows once you're friends. | Relays carry only ciphertext either way, so the path doesn't matter; who receives it does. Tying it to "direct" would blank your profile for friends behind CGNAT or mobile data, and for anyone using Hide my IP. |
 | PR2 | **A profile is a signed, versioned bundle.** A manifest (`profile.toml` plus, for each asset, its hash, size, type and file key) signed by the device key under domain `mesh/v1/profile`, with a version that only goes up. Assets are sealed with the existing per-file encryption (`blob.rs`, D12) and fetched by hash like message files. | Reuses what's built and tested. A signed manifest means a friend can't be shown a faked profile, and the version means they fetch only when it changes. |
 | PR3 | **Delivery: the version on connect, the bundle on demand.** When friends' devices connect, each sends its profile version on the existing account stream. A friend whose cached version is older fetches the manifest (sent in the 1:1 e2ee session) and any assets it doesn't already hold. No seed and no mailbox: an offline friend gets it the next time you're both online. | No new infrastructure. Profiles change rarely, so on connect is enough. |
 | PR4 | **`profile.toml`: the theme section uses `theme.toml`'s keys.** `[theme]` takes `Palette`, `Layout` and `Extras` (animation, background image as an asset, translucent panes, density), exactly as Rice settings writes them. `follow_rice = true` snapshots your current theme when you publish. Values a viewer can't use are dropped, not errors. | One token system, and every rice preset already works as a profile theme. |
