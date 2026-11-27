@@ -39,6 +39,88 @@ pub fn video_on() -> bool {
         || std::env::var_os("AFLOS_DC_VIDEO").is_some_and(|v| v == "1")
 }
 
+/// One kind of video's settings (SPEC-voice-quality Q-d): a height (0 for
+/// the source's own, screens only), frames a second, and bits a second
+/// (0 for Auto).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Video {
+    pub height: u32,
+    pub fps: u32,
+    pub bitrate: u32,
+}
+
+/// The camera's and the screen's settings.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VideoQuality {
+    pub camera: Video,
+    pub screen: Video,
+}
+
+impl Default for VideoQuality {
+    /// What 0.5.x always sent.
+    fn default() -> Self {
+        Self {
+            camera: Video { height: 720, fps: 30, bitrate: 2_000_000 },
+            screen: Video { height: 1080, fps: 15, bitrate: 2_500_000 },
+        }
+    }
+}
+
+impl VideoQuality {
+    /// From `videoQuality`'s JSON (`{camera, screen}`, each `{height, fps,
+    /// bitrate}`); what's left out stays as it was.
+    pub fn with(mut self, v: &serde_json::Value) -> Self {
+        for (k, part) in [("camera", &mut self.camera), ("screen", &mut self.screen)] {
+            let n = |f: &str| v[k][f].as_u64().map(|x| x.min(u64::from(u32::MAX)) as u32);
+            part.height = n("height").unwrap_or(part.height);
+            part.fps = n("fps").unwrap_or(part.fps).clamp(1, 60);
+            part.bitrate = n("bitrate").unwrap_or(part.bitrate).min(8_000_000);
+        }
+        self
+    }
+
+    /// Within what the account pays for (Q-e, Q5), from READY's
+    /// `premium_type`: none caps screen share at 720p 30 fps, Nitro Classic
+    /// and Basic at 1080p 60, full Nitro lets it go to the source.
+    pub fn for_tier(mut self, premium: u64) -> Self {
+        let (max_h, max_fps) = match premium {
+            2 => (0, 60),
+            1 | 3 => (1080, 60),
+            _ => (720, 30),
+        };
+        let s = &mut self.screen;
+        if max_h != 0 && (s.height == 0 || s.height > max_h) {
+            s.height = max_h;
+        }
+        s.fps = s.fps.min(max_fps);
+        self.camera.height = self.camera.height.clamp(240, 1080);
+        self.camera.fps = self.camera.fps.min(30);
+        self
+    }
+}
+
+/// The settings `send_video` uses, set by `videoQuality`.
+pub static QUALITY: std::sync::Mutex<VideoQuality> = std::sync::Mutex::new(VideoQuality {
+    camera: Video { height: 720, fps: 30, bitrate: 2_000_000 },
+    screen: Video { height: 1080, fps: 15, bitrate: 2_500_000 },
+});
+
+/// The widest a picture of `height` may be (16:9); the source's own for 0.
+fn max_width(height: u32) -> u32 {
+    if height == 0 { 7680 } else { height * 16 / 9 }
+}
+
+/// Auto's bitrate for a picture this tall at this rate.
+fn auto_bitrate(height: u32, fps: u32) -> u32 {
+    let base: u32 = match height {
+        0 => 6_000_000,
+        h if h <= 480 => 1_000_000,
+        h if h <= 720 => 2_000_000,
+        _ => 3_500_000,
+    };
+    (u64::from(base) * u64::from(fps.max(15)) / 30) as u32
+}
+
 /// What our video shows.
 #[derive(Clone, Copy, PartialEq)]
 enum Source {
@@ -54,10 +136,13 @@ fn send_video(slot: songbird::driver::VideoTxSlot, source: Source) -> Arc<Atomic
     let stop = Arc::new(AtomicBool::new(false));
     let stopped = stop.clone();
     std::thread::spawn(move || {
-        let (fps, max_width, bitrate) = match source {
-            Source::Camera => (30, 1280, 2_000_000),
-            Source::Screen => (15, 1920, 2_500_000),
+        let q = *QUALITY.lock().unwrap();
+        let v = match source {
+            Source::Camera => q.camera,
+            Source::Screen => q.screen,
         };
+        let (fps, max_width) = (v.fps, max_width(v.height));
+        let bitrate = if v.bitrate == 0 { auto_bitrate(v.height, v.fps) } else { v.bitrate };
         let opts = aflos_media::Opts { fps, max_width };
         let capture = match source {
             Source::Camera => aflos_media::Capture::camera("", opts),
@@ -529,5 +614,31 @@ mod tests {
         mix_into(&mut mix, &[100, -200, 30_000]);
         mix_into(&mut mix, &[1, 2, 30_000]);
         assert_eq!(mix, vec![101, -198, i16::MAX]); // same length, summed, clamped
+    }
+}
+
+#[cfg(test)]
+mod quality_tests {
+    use super::*;
+
+    #[test]
+    fn the_defaults_are_what_was_sent_before() {
+        let d = VideoQuality::default();
+        assert_eq!((d.camera.fps, max_width(d.camera.height), d.camera.bitrate), (30, 1280, 2_000_000));
+        assert_eq!((d.screen.fps, max_width(d.screen.height), d.screen.bitrate), (15, 1920, 2_500_000));
+        assert_eq!(*QUALITY.lock().unwrap(), d);
+    }
+
+    #[test]
+    fn each_tier_caps_screen_share() {
+        let want = VideoQuality::default().with(&serde_json::json!({"screen": {"height": 0, "fps": 60}}));
+        let free = want.for_tier(0).screen;
+        assert_eq!((free.height, free.fps), (720, 30), "no Nitro: 720p 30");
+        let basic = want.for_tier(3).screen;
+        assert_eq!((basic.height, basic.fps), (1080, 60), "Nitro Basic: 1080p 60");
+        let nitro = want.for_tier(2).screen;
+        assert_eq!((nitro.height, nitro.fps), (0, 60), "Nitro: the source");
+        let low = VideoQuality::default().with(&serde_json::json!({"screen": {"height": 480, "fps": 5}}));
+        assert_eq!(low.for_tier(0).screen, low.screen, "under the cap: as asked");
     }
 }
