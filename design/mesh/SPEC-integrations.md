@@ -55,7 +55,7 @@ what an integration declares instead of from a fixed list.
 | I1 | **A separate program** Aflos starts and talks to over its stdin and stdout, one JSON object per line: the protocol below. Any language. | It's how `aflos-wa` and `aflos-dc` already work. A crash stays in the integration. No Rust needed to build one. |
 | I2 | **Aflos draws everything**, from a fixed set of building blocks the integration fills in (the next table). An integration can't draw its own widgets. | Aflos is native (iced): another process can't put widgets in its window. The building blocks keep every integration in the user's theme and keyboard habits. |
 | I3 | **Prebuilt, not built from source.** A release carries one program per platform (`linux-x86_64`, `windows-x86_64`, later macOS and ARM) and a manifest, `aflos-integration.toml`, listing each file's SHA-256. | Building from source needs a toolchain most Windows users don't have. Containers aren't practical on a desktop. |
-| I4 | **Built in: Mesh and Matrix.** Everything else is an integration. | They're Aflos's own and open. Nothing else needs to be in the release. |
+| I4 | **Built in: Mesh and Matrix** (M4). Everything else is an integration. | They're Aflos's own and open. Nothing else needs to be in the release. |
 
 ### Building blocks (extension points)
 
@@ -108,6 +108,8 @@ layer; see Later.
 |---|---|---|
 | M1 | **0.7.0 ships without WhatsApp and Discord.** On first start after the update, Aflos says so once and links to Settings → Integrations, where installing one carries its sign-in over (the helper's data folder moves into the integration's). | Nobody is signed out without being told how to get it back. |
 | M2 | **Before that, the app goes generic with WhatsApp and Discord still built in**, speaking the new protocol. One release (0.6.x) proves the protocol with the two real integrations before anything is removed. | Swapping the engine and removing the parts in one release would leave nothing to compare against. |
+| M3 | **Today's WhatsApp and Discord code leaves the Aflos repos and isn't published.** The maintainer keeps it privately on their own machine, outside any repo, converted into integrations: the first real ones, used to test the protocol, the installer and every building block. *Decided 2026-11-28.* | Aflos stops distributing it, and the protocol still gets tested against the two most demanding integrations there are. |
+| M4 | **Matrix stays built in**, a native part of Aflos, not an integration. *Decided 2026-11-28.* | It's an open protocol; nothing in its terms stops Aflos shipping it. |
 
 ### For people building integrations
 
@@ -119,18 +121,17 @@ layer; see Later.
 
 ## Open questions
 
-1. **Where do today's WhatsApp and Discord helpers go?** *Recommendation*:
-   they leave the Aflos repos and aren't published under Aflos's name. If
-   Aflos keeps publishing them, Aflos is still distributing them, and the
-   point of the change is lost. Whether someone else picks them up is up to
-   them. (Not legal advice: if terms of service are the main reason, a
-   lawyer's read is worth it.)
+1. ~~Where do today's WhatsApp and Discord helpers go?~~ **Decided
+   (M3)**: out of the repos, kept privately on the maintainer's machine as
+   test integrations. (Not legal advice: if terms of service are the main
+   reason, a lawyer's read is worth it.)
 2. **Does Aflos list any integrations?** *Recommendation*: only official
    ones, in Settings → Integrations; community ones are installed by link.
    A directory of community integrations comes later, if ever.
 3. **Matrix bridges** (mautrix-discord and similar on a homeserver): leave
    them working as Matrix rooms, as now? *Recommendation*: yes; they're the
-   homeserver owner's choice, not Aflos's.
+   homeserver owner's choice, not Aflos's. (Matrix itself stays built in:
+   decided, M4.)
 4. **First official integrations**: which service and API first?
    *Recommendation*: WhatsApp Business Platform (Cloud API), since that's
    where a business would ask first; a separate spec.
@@ -148,7 +149,8 @@ layer; see Later.
 
 ## Done when
 
-- Aflos 0.7.0's release contains no WhatsApp or Discord code.
+- Aflos 0.7.0's release, and the Aflos and Mesh-Node repos, contain no
+  WhatsApp or Discord code (their history aside).
 - The WhatsApp and Discord integrations, installed by link, do everything
   0.6.x did: sign-in, chats, media, voice notes, calls, video, settings.
 - The template's echo integration installs from its GitHub release, passes
