@@ -79,6 +79,8 @@ pub(crate) struct Integrations {
     pub opening: std::collections::HashSet<String>,
     /// The invite link being typed into a section's Join by link.
     pub join_link: String,
+    /// Each one's settings (its settings page), by id: kept in its folder.
+    pub settings: HashMap<String, BTreeMap<String, serde_json::Value>>,
 }
 
 impl Integrations {
@@ -151,7 +153,7 @@ fn events((entry, _): &(Entry, u32)) -> impl iced::futures::Stream<Item = Messag
                 data_dir: dir.join("data"),
                 files_dir: dir.join("files"),
                 granted: Vec::new(),
-                settings: BTreeMap::new(),
+                settings: load_settings(&dir),
             };
             let _ = std::fs::create_dir_all(&hello.files_dir);
             let mut spec = Spec::new(entry.id.clone(), entry.program.clone(), hello);
@@ -255,6 +257,9 @@ impl Integrations {
         match update {
             Update::Started(handle) => live.handle = Some(handle),
             Update::Report(Report::Ready(back)) => {
+                self.settings
+                    .entry(id.clone())
+                    .or_insert_with(|| load_settings(&dir(&id)));
                 let slot = aflos_core::networks::register_integration(
                     &id,
                     &back.name,
@@ -344,6 +349,10 @@ pub(crate) enum Act {
     JoinLink(String),
     /// Join by the link typed.
     Join(Network),
+    /// A setting changed (by id and key): kept and sent to it.
+    Setting(String, String, serde_json::Value),
+    /// A text setting being typed: kept, sent when it's submitted.
+    SettingDraft(String, String, String),
 }
 
 pub(crate) fn act(state: &mut App, act: Act) -> Task<Message> {
@@ -355,6 +364,26 @@ pub(crate) fn act(state: &mut App, act: Act) -> Task<Message> {
         Act::Field(name, value) => drop(all.form.insert(name, value)),
         Act::Code(code) => all.code = code,
         Act::JoinLink(link) => all.join_link = link,
+        Act::SettingDraft(id, key, text) => {
+            let map = all
+                .settings
+                .entry(id)
+                .or_insert_with_key(|id| load_settings(&dir(id)));
+            map.insert(key, text.into());
+        }
+        Act::Setting(id, key, value) => {
+            let map = all
+                .settings
+                .entry(id.clone())
+                .or_insert_with_key(|id| load_settings(&dir(id)));
+            map.insert(key.clone(), value.clone());
+            if let Err(e) = save_settings(&dir(&id), map) {
+                tracing::warn!("saving {id}'s settings: {e}");
+            }
+            if let Some(network) = all.live.get(&id).and_then(|l| l.network) {
+                all.send(network, Cmd::Setting { key, value });
+            }
+        }
         Act::Join(network) => {
             let link = std::mem::take(&mut all.join_link);
             if !link.trim().is_empty() {
@@ -413,6 +442,41 @@ impl Integrations {
         self.entries.retain(|e| e.id != id);
         self.live.remove(id);
         self.confirm_remove = None;
+    }
+}
+
+/// Its stored settings (`settings.json` in its folder); none if there are
+/// none or they can't be read.
+pub(crate) fn load_settings(dir: &std::path::Path) -> BTreeMap<String, serde_json::Value> {
+    std::fs::read(dir.join("settings.json"))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+pub(crate) fn save_settings(
+    dir: &std::path::Path,
+    settings: &BTreeMap<String, serde_json::Value>,
+) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let json = serde_json::to_vec_pretty(settings).map_err(std::io::Error::other)?;
+    std::fs::write(dir.join("settings.json"), json)
+}
+
+/// A setting's value: the stored one, else its default.
+pub(crate) fn setting_value(
+    stored: Option<&BTreeMap<String, serde_json::Value>>,
+    setting: &aflos_integration::Setting,
+) -> serde_json::Value {
+    use aflos_integration::SettingKind;
+    if let Some(v) = stored.and_then(|m| m.get(&setting.key)) {
+        return v.clone();
+    }
+    match &setting.kind {
+        SettingKind::Switch { default } => (*default).into(),
+        SettingKind::Choice { default, .. } | SettingKind::Text { default } => {
+            default.clone().into()
+        }
     }
 }
 
