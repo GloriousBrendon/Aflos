@@ -21,3 +21,8 @@ tokio = { version = "1.52.3", features = ["process", "io-util", "sync", "time", 
 name = "aflos-echo"
 path = "src/bin/echo.rs"
 required-features = ["host"]
+
+[[bin]]
+name = "aflos-integration-test"
+path = "src/bin/harness.rs"
+required-features = ["host"]
