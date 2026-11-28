@@ -86,7 +86,7 @@ Mesh-Node has no WhatsApp or Discord code.
   declared actions, typing and presence, notifications, search, Join by
   link. **Accept:** echo's chat works end to end; unit tests map each
   block to what the panes draw.
-- [ ] **Task 7: calls.** Ringing and answer, mute, camera, screen with its
+- [x] **Task 7: calls.** Ringing and answer, mute, camera, screen with its
   source picker, video frames both ways (including Bigger video), voice
   channels with members, Watch a stream. **Accept:** unit tests with a
   stand-in that rings, sends frames and ends; the call bar and voice
@@ -212,6 +212,14 @@ the parity list passes again.
   (the new-chat picker), and archived chats' row in Home (archived chats
   are left out of Home until then). "Echo's chat end to end" is the
   harness's send check (Task 3); the app's side is unit-tested.
+- **Task 7:** an integration's call and voice room bars sit with the
+  others above the chat (Bigger video fills the pane with any of them);
+  its video tracks are `int-<slot>-<track>` in the call video, kept up to
+  10 s without a frame as WhatsApp's are, since integrations say when a
+  video ends. Its rings join the ringer (a call or room ringing us, else
+  ringback for ours), a room's ringing can be dismissed here, and a DM
+  header gets call buttons when it declares calls. The share picker is
+  shared with WhatsApp's (it now takes its pick and cancel messages).
 
 ## Changes while planning
 

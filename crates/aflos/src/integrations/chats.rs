@@ -215,6 +215,7 @@ pub(crate) fn marks(
 
 /// What an event changes on screen, beyond what `Integrations::apply` keeps.
 pub(crate) fn on_event(state: &mut App, network: Network, event: &Event) -> Task<Message> {
+    super::calls::on_event(state, network, event);
     let name = network.spec().name;
     match event {
         Event::Messages { chat, messages } => {

@@ -139,6 +139,18 @@ pub(crate) fn section_pane<'a>(
             }
         }
     }
+    if let (Some(section), Some(live)) = (found, live)
+        && !section.rooms.is_empty()
+    {
+        let here = live.voice.room.as_deref().filter(|_| live.voice.connected);
+        list = list.push(ui::section("voice", p)).push(super::calls::rooms(
+            &section.rooms,
+            network,
+            here,
+            p,
+            l,
+        ));
+    }
     let joins = live
         .and_then(|l| l.hello.as_ref())
         .is_some_and(|h| h.supports.actions.contains(&Action::JoinByLink));

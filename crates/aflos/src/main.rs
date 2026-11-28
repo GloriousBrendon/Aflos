@@ -234,7 +234,7 @@ const WA_VIDEO_STALE: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Whether a video tile is still showing (WhatsApp's ids start `wa-`).
 fn video_live(id: &str, tile: &VideoTile) -> bool {
-    let stale = if id.starts_with("wa-") {
+    let stale = if id.starts_with("wa-") || id.starts_with("int-") {
         WA_VIDEO_STALE
     } else {
         VIDEO_STALE
@@ -1566,6 +1566,8 @@ enum Message {
     IntegrationSection(Network, String),
     /// The Accounts panel's sign-in, restart, turn off and remove.
     Integrations(integrations::Act),
+    /// A call or voice room button for an integration.
+    IntegrationCall(Network, integrations::calls::CallAct),
     /// The call's video fills the chat pane, or goes back above the chat.
     VideoBig(bool),
     /// Show a Discord server (by id) from the hidden client.
@@ -2060,15 +2062,21 @@ fn wanted_ring(state: &App) -> Option<sounds::Sound> {
     };
     let whatsapp = state.wa_call.as_ref().map(|c| c.phase.as_str());
     let discord = state.discord_state.as_ref().is_some_and(|d| d.ringing.iter().any(|r| !state.dc_ring_dismissed.contains(&r.channel_id)));
+    let integration = integrations::calls::ring(&state.integrations);
     if let Some(mesh) = mesh_calls::ring(state) {
         Some(mesh)
+    } else if let Some(ring @ Sound::Ring(_)) = integration {
+        Some(ring)
     } else if matrix == Some(&CallUiState::IncomingRinging) {
         Some(Sound::Ring(Network::Matrix))
     } else if discord {
         Some(Sound::Ring(Network::Discord))
     } else if whatsapp == Some("incoming") {
         Some(Sound::Ring(Network::WhatsApp))
-    } else if matrix == Some(&CallUiState::OutgoingRinging) || whatsapp == Some("outgoing") {
+    } else if matrix == Some(&CallUiState::OutgoingRinging)
+        || whatsapp == Some("outgoing")
+        || integration.is_some()
+    {
         Some(Sound::Ringback)
     } else {
         None
@@ -2868,6 +2876,10 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::Integration(id, update) => integrations::update(state, id, update),
         Message::Integrations(a) => integrations::act(state, a),
+        Message::IntegrationCall(network, a) => {
+            integrations::calls::act(state, network, a);
+            Task::none()
+        }
         Message::IntegrationSection(network, section) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
                 session.active_space = None;
@@ -7032,6 +7044,33 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
             let call = Message::MeshCall(mesh_calls::Msg::Start(channel.id.clone()));
             header = header.push(ui::icon_button(ui::Icon::Phone, Some(call), false, p, l));
         }
+        if channel.dm
+            && let Some(calls) = integrations::calls::can_call(state, channel.network)
+        {
+            let start = |video| {
+                let a = integrations::calls::CallAct::Start {
+                    chat: channel.id.clone(),
+                    video,
+                };
+                Message::IntegrationCall(channel.network, a)
+            };
+            header = header.push(ui::icon_button(
+                ui::Icon::Phone,
+                Some(start(false)),
+                false,
+                p,
+                l,
+            ));
+            if calls.video {
+                header = header.push(ui::icon_button(
+                    ui::Icon::Video,
+                    Some(start(true)),
+                    false,
+                    p,
+                    l,
+                ));
+            }
+        }
         if channel.dm && channel.network == Network::WhatsApp && state.wa_call.is_none() {
             header = header
                 .push(ui::icon_button(ui::Icon::Phone, Some(Message::WaCallStart(false)), false, p, l))
@@ -7118,6 +7157,10 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
         let fill = state.video_big && live(true).next().is_some();
         big |= fill;
         let bar = wa_call_bar(call, live(true), fill, state.wa_share.as_deref(), p, l);
+        col = col.push(container(bar).padding([8, 16]).height(fill_if(fill)));
+    }
+    for (bar, fill) in integrations::calls::bars(state, p, l) {
+        big |= fill;
         col = col.push(container(bar).padding([8, 16]).height(fill_if(fill)));
     }
     if big {
@@ -7618,10 +7661,16 @@ impl From<&whatsapp::ShareSource> for ShareChoice {
 }
 
 /// The share picker: screens, then windows, as thumbnails.
-fn share_picker<'a>(choices: &'a [ShareChoice], p: &'a theme::Palette, l: &theme::Layout) -> Element<'a, Message> {
+fn share_picker<'a>(
+    choices: &'a [ShareChoice],
+    pick: impl Fn(String) -> Message + 'a,
+    cancel: Message,
+    p: &'a theme::Palette,
+    l: &theme::Layout,
+) -> Element<'a, Message> {
     let head = row![
         ui::sans("Share your screen", 13.0, Weight::Semibold, p.text_bright()).width(Length::Fill),
-        button(text("Cancel").size(12)).on_press(Message::WaShareCancel).padding([4, 10]).style(flat_button_style(p)),
+        button(text("Cancel").size(12)).on_press(cancel).padding([4, 10]).style(flat_button_style(p)),
     ]
     .align_y(iced::Alignment::Center);
     if choices.is_empty() {
@@ -7635,7 +7684,7 @@ fn share_picker<'a>(choices: &'a [ShareChoice], p: &'a theme::Palette, l: &theme
             None => Space::new().width(160).height(90).into(),
         };
         button(column![picture, text(&c.name).size(11).color(p.text()).width(160).wrapping(iced::widget::text::Wrapping::None)].spacing(4))
-            .on_press(Message::WaSharePick(c.id.clone()))
+            .on_press(pick(c.id.clone()))
             .padding(6)
             .style(move |_, status| button::Style {
                 background: matches!(status, button::Status::Hovered).then_some(hover.into()),
@@ -7710,7 +7759,13 @@ fn wa_call_bar<'a>(
     ]
     .spacing(8);
     if let Some(choices) = share.filter(|_| !call.screen) {
-        body = body.push(share_picker(choices, p, l));
+        body = body.push(share_picker(
+            choices,
+            Message::WaSharePick,
+            Message::WaShareCancel,
+            p,
+            l,
+        ));
     }
     if let Some(tiles) = video_tiles(video, big, p) {
         body = body.push(tiles);

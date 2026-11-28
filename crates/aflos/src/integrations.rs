@@ -47,6 +47,14 @@ pub(crate) struct Live {
     pub typing: HashMap<String, Vec<String>>,
     /// People's online state and last seen (ms), from `presence`.
     pub presence: HashMap<String, (bool, Option<u64>)>,
+    /// Its call, while there is one.
+    pub call: Option<aflos_integration::Call>,
+    /// Where we are in its voice rooms, and what's ringing.
+    pub voice: aflos_integration::Voice,
+    /// Rooms whose ringing was dismissed here.
+    pub dismissed: Vec<String>,
+    /// The share picker: `Some(empty)` while its screens are asked for.
+    pub sources: Option<Vec<crate::ShareChoice>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +106,10 @@ impl Integrations {
 
     /// Sends a command to the integration behind `network`; its id, or
     /// `None` if it isn't running.
+    pub fn live_mut(&mut self, network: Network) -> Option<&mut Live> {
+        self.live.values_mut().find(|l| l.network == Some(network))
+    }
+
     pub fn send(&self, network: Network, cmd: Cmd) -> Option<u64> {
         let (_, live) = self.by_network(network)?;
         live.handle.as_ref().map(|h| h.send(cmd))
@@ -294,6 +306,18 @@ impl Integrations {
                 }
                 // Their message ends their "typing…".
                 Event::Notify { chat, .. } => drop(live.typing.remove(&chat)),
+                Event::Call { call } => {
+                    live.call = call.filter(|c| c.phase != aflos_integration::Phase::Ended)
+                }
+                Event::Voice(voice) => {
+                    live.dismissed
+                        .retain(|r| voice.ringing.iter().any(|x| x.room == *r));
+                    live.voice = voice;
+                }
+                // Only while the picker's open: a late answer after Cancel is dropped.
+                Event::Sources { screens, .. } if live.sources.is_some() => {
+                    live.sources = Some(screens.iter().map(calls::choice).collect());
+                }
                 // The rest arrive with the panes that show them (PLAN Tasks 5 to 8).
                 _ => {}
             },
@@ -522,6 +546,7 @@ pub(crate) fn rail_tiles<'a>(
         .collect()
 }
 
+pub(crate) mod calls;
 pub(crate) mod chats;
 mod panel;
 pub(crate) mod panes;
