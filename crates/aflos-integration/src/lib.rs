@@ -355,6 +355,8 @@ pub enum Event {
         cameras: Vec<Source>,
         screens: Vec<Source>,
     },
+    /// Show this chat: one it just started or joined for the person.
+    Show { chat: String },
 }
 
 /// What [`Event::Hello`] tells Aflos.

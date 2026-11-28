@@ -9,7 +9,6 @@
 
 mod engine;
 pub mod mesh;
-pub mod whatsapp;
 
 pub use engine::{Qr, Video, is_running, open, show};
 use serde::Deserialize;

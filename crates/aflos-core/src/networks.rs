@@ -168,27 +168,6 @@ pub const NETWORKS: &[NetworkSpec] = &[
         ..BASE
     },
     NetworkSpec {
-        id: "wa",
-        code: "wa",
-        name: "WhatsApp",
-        color: "#9fd88b",
-        auth: Auth::Qr,
-        availability: Availability::Ready,
-        engine: Some("web.whatsapp.com"),
-        login_url: Some("https://web.whatsapp.com/"),
-        unofficial: true,
-        how: &[
-            "Open WhatsApp on your phone",
-            "Settings → Linked devices → Link a device",
-            "Point it at this code",
-        ],
-        sync: &[sync("chats", "Chats"), sync("groups", "Groups")],
-        ghost_prefix: Some("whatsapp_"),
-        bot_prefix: Some("whatsappbot"),
-        protocols: &["whatsapp"],
-        ..BASE
-    },
-    NetworkSpec {
         id: "tm",
         code: "tm",
         name: "Teams",
@@ -248,7 +227,7 @@ pub const NETWORKS: &[NetworkSpec] = &[
     },
 ];
 
-/// The entry with this id (`"wa"`).
+/// The entry with this id (`"dc"`).
 pub fn spec(id: &str) -> Option<&'static NetworkSpec> {
     NETWORKS.iter().find(|n| n.id == id)
 }
@@ -336,8 +315,8 @@ mod tests {
 
     #[test]
     fn registry_lookups() {
-        assert_eq!(NETWORKS.len(), 9);
-        assert_eq!(spec("wa").map(|n| n.name), Some("WhatsApp"));
+        assert_eq!(NETWORKS.len(), 8);
+        assert_eq!(spec("dc").map(|n| n.name), Some("Discord"));
         assert_eq!(spec("nope"), None);
         let ids: std::collections::HashSet<_> = NETWORKS.iter().map(|n| n.id).collect();
         assert_eq!(ids.len(), NETWORKS.len(), "ids are unique");
@@ -348,18 +327,16 @@ mod tests {
             assert!(n.auth != Auth::Qr || !n.how.is_empty(), "{} QR needs phone steps", n.id);
         }
         let ready: Vec<_> = NETWORKS.iter().filter(|n| !n.soon()).map(|n| n.id).collect();
-        assert_eq!(ready, ["mesh", "mx", "dc", "wa"]);
+        assert_eq!(ready, ["mesh", "mx", "dc"]);
         assert_eq!(protocol_network("discordgo").map(|n| n.id), Some("dc"));
         assert_eq!(protocol_network("irc"), None);
         assert_eq!(spec("mx").map(NetworkSpec::via).as_deref(), Some("native, no bridge"));
-        assert_eq!(spec("wa").map(NetworkSpec::via).as_deref(), Some("hidden web.whatsapp.com tab"));
         assert_eq!(spec("tg").map(NetworkSpec::via).as_deref(), Some("mautrix-telegram"));
     }
 
     #[test]
     fn ghost_prefixes() {
         assert_eq!(ghost_network("discord_123456789").map(|n| n.id), Some("dc"));
-        assert_eq!(ghost_network("whatsapp_27821234567").map(|n| n.id), Some("wa"));
         assert_eq!(ghost_network("telegram_42").map(|n| n.id), Some("tg"));
         // Bots and people aren't ghosts.
         assert_eq!(ghost_network("discordbot"), None);

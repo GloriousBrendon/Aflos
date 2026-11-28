@@ -15,8 +15,6 @@ pub enum Network {
     Matrix,
     /// Bridged in from Discord.
     Discord,
-    /// WhatsApp, through the engine's WhatsApp Web tab (never a Matrix room).
-    WhatsApp,
     /// Aflos's own chats, through `mesh-node` (SPEC-dm).
     Mesh,
     /// An integration (SPEC-integrations), by its slot in
@@ -26,14 +24,13 @@ pub enum Network {
 
 impl Network {
     /// Every network Aflos can show chats from.
-    pub const ALL: [Network; 4] = [Network::Matrix, Network::Discord, Network::WhatsApp, Network::Mesh];
+    pub const ALL: [Network; 3] = [Network::Matrix, Network::Discord, Network::Mesh];
 
     /// Its registry entry: tag, name, colour, sign-in.
     pub fn spec(self) -> &'static NetworkSpec {
         let id = match self {
             Network::Matrix => "mx",
             Network::Discord => "dc",
-            Network::WhatsApp => "wa",
             Network::Mesh => "mesh",
             Network::Integration(slot) => {
                 return networks::integration(slot).unwrap_or(&networks::NETWORKS[0]);

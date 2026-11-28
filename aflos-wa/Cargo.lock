@@ -65,6 +65,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "aflos-integration"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aflos-media"
 version = "0.1.0"
 dependencies = [
@@ -83,6 +91,7 @@ dependencies = [
 name = "aflos-wa"
 version = "0.1.0"
 dependencies = [
+ "aflos-integration",
  "aflos-media",
  "anyhow",
  "async-channel",

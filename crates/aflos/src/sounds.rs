@@ -26,14 +26,12 @@ pub enum Sound {
 }
 
 impl Sound {
-    pub const ALL: [Sound; 10] = [
+    pub const ALL: [Sound; 8] = [
         Sound::Message(Network::Mesh),
         Sound::Message(Network::Matrix),
         Sound::Message(Network::Discord),
-        Sound::Message(Network::WhatsApp),
         Sound::Ring(Network::Matrix),
         Sound::Ring(Network::Discord),
-        Sound::Ring(Network::WhatsApp),
         Sound::Ringback,
         Sound::VoiceJoin,
         Sound::VoiceLeave,
@@ -153,9 +151,9 @@ fn builtin(sound: Sound) -> Vec<i16> {
             let f = match n {
                 Network::Matrix => 1046.5,
                 Network::Discord => 880.0,
-                Network::WhatsApp => 1318.5,
                 Network::Mesh => 987.8,
-                Network::Integration(_) => 1174.7,
+                // WhatsApp's, from before it was an integration.
+                Network::Integration(_) => 1318.5,
             };
             tone(&mut out, &[f], 70, 0.35);
             silence(&mut out, 35);
@@ -163,7 +161,7 @@ fn builtin(sound: Sound) -> Vec<i16> {
         }
         // Each network rings its own way.
         // Aflos calls come with `calls`; until then it rings as Matrix does.
-        Sound::Ring(Network::Matrix | Network::Mesh | Network::Integration(_)) => {
+        Sound::Ring(Network::Matrix | Network::Mesh) => {
             tone(&mut out, &[440.0, 480.0], 1000, 0.3);
             silence(&mut out, 2000);
         }
@@ -174,7 +172,8 @@ fn builtin(sound: Sound) -> Vec<i16> {
             }
             silence(&mut out, 1600);
         }
-        Sound::Ring(Network::WhatsApp) => {
+        // Integrations ring as WhatsApp did before it was one.
+        Sound::Ring(Network::Integration(_)) => {
             for _ in 0..2 {
                 for f in [523.3, 659.3, 784.0, 1046.5] {
                     tone(&mut out, &[f], 120, 0.3);
@@ -330,7 +329,10 @@ mod tests {
             assert!(!builtin(s).is_empty(), "{s:?}");
         }
         // Rings differ per network, so you can tell who's calling from where.
-        assert_ne!(builtin(Sound::Ring(Network::Discord)), builtin(Sound::Ring(Network::WhatsApp)));
+        assert_ne!(
+            builtin(Sound::Ring(Network::Discord)),
+            builtin(Sound::Ring(Network::Integration(0)))
+        );
         assert_ne!(builtin(Sound::Message(Network::Discord)), builtin(Sound::Message(Network::Matrix)));
     }
 

@@ -1,15 +1,16 @@
 //! aflos-wa: WhatsApp for Aflos, natively through whatsapp-rust.
 //!
-//! `aflos-wa --data <dir>`. Commands arrive on stdin as `{"fn":..,"args":[..]}` lines; reports go
-//! out on stdout as `{"binding":..,"payload":"<json string>"}` lines. Logs go to stderr.
+//! An Aflos integration (SPEC-integrations): it speaks the integration
+//! protocol on stdin and stdout (`proto`), its data in the folder Aflos's
+//! hello names (or `--data <dir>`). Logs go to stderr.
 
 mod audio;
 mod calls;
 mod media;
+mod proto;
 mod store;
 
 use std::collections::{HashMap, HashSet};
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -17,7 +18,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as B64;
 use log::{debug, info, warn};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::json;
 use tokio::sync::mpsc::{self, UnboundedSender};
 use whatsapp_rust::buffa::MessageField;
@@ -35,31 +36,21 @@ use whatsapp_rust::wacore::types::call::{CallAction, IncomingCall, VideoState};
 use calls::{Call, Update};
 use store::{Message, Quote, Store};
 
-// ---------- the line protocol ----------
+// ---------- commands and reports ----------
 
-#[derive(Debug, Deserialize, PartialEq)]
+/// One of this helper's own calls (`proto` turns protocol commands into these).
+#[derive(Debug, PartialEq)]
 struct Cmd {
-    #[serde(rename = "fn")]
     func: String,
-    #[serde(default)]
     args: Vec<String>,
 }
 
-fn parse_cmd(line: &str) -> Option<Cmd> {
-    serde_json::from_str(line.trim()).ok()
-}
-
-/// One stdout line: the payload travels as a JSON string inside the frame.
-fn frame(binding: &str, payload: &impl Serialize) -> String {
-    let payload = serde_json::to_string(payload).unwrap_or_else(|_| "null".into());
-    json!({ "binding": binding, "payload": payload }).to_string()
-}
-
+/// A report: `proto` sends it to Aflos as protocol events.
 fn emit(binding: &str, payload: &impl Serialize) {
-    let line = frame(binding, payload);
-    let mut out = std::io::stdout().lock();
-    let _ = writeln!(out, "{line}");
-    let _ = out.flush();
+    proto::emit(
+        binding,
+        &serde_json::to_value(payload).unwrap_or(serde_json::Value::Null),
+    );
 }
 
 fn now_ms() -> u64 {
@@ -86,10 +77,13 @@ fn qr_svg(code: &str) -> Option<String> {
 
 // ---------- startup ----------
 
-fn data_dir() -> PathBuf {
+/// `--data <dir>` if given (Aflos 0.6's folder, kept while it's bundled),
+/// else the folder Aflos's hello names.
+fn data_dir(hello: Option<&aflos_integration::Hello>) -> PathBuf {
     let args: Vec<String> = std::env::args().collect();
     let dir = args.iter().position(|a| a == "--data").and_then(|i| args.get(i + 1)).map(PathBuf::from);
-    dir.unwrap_or_else(|| PathBuf::from("."))
+    dir.or_else(|| hello.map(|h| h.data_dir.clone()))
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 const SIGNED_OUT: &str = "signed-out";
@@ -127,7 +121,9 @@ async fn main() -> anyhow::Result<()> {
         unsafe { timeBeginPeriod(1) };
     }
 
-    let dir = data_dir();
+    // Aflos says hello first; nothing else runs until it has.
+    let hello = proto::handshake();
+    let dir = data_dir(hello.as_ref());
     std::fs::create_dir_all(&dir)?;
     wipe_if_signed_out(&dir);
 
@@ -176,8 +172,10 @@ async fn main() -> anyhow::Result<()> {
                 Err(_) => break,
             },
             line = cmds.recv() => match line {
-                Some(line) => match parse_cmd(&line) {
-                    Some(cmd) => app.on_command(cmd).await,
+                Some(line) => match proto::turn(&line) {
+                    Some(proto::Turned::Call { func, args }) => app.on_command(Cmd { func, args }).await,
+                    Some(proto::Turned::Done) => {}
+                    Some(proto::Turned::Quit) => break,
                     None => warn!("unreadable command line"),
                 },
                 None => break, // Aflos closed stdin
@@ -1402,23 +1400,6 @@ fn hang_up(client: Arc<Client>, call: Call) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reads_commands_and_frames_reports() {
-        let cmd = parse_cmd(r#"{"fn":"send","args":["1@s.whatsapp.net","hi \"there\"",""]}"#).unwrap();
-        assert_eq!(cmd, Cmd { func: "send".into(), args: vec!["1@s.whatsapp.net".into(), "hi \"there\"".into(), "".into()] });
-        assert_eq!(parse_cmd(r#"{"fn":"open"}"#).unwrap().args, Vec::<String>::new());
-        assert!(parse_cmd("not json").is_none());
-
-        // The payload is itself JSON, carried as a string.
-        let line = frame("waSent", &json!({ "chat_id": "1@s.whatsapp.net", "ok": true }));
-        assert!(!line.contains('\n'));
-        let outer: serde_json::Value = serde_json::from_str(&line).unwrap();
-        assert_eq!(outer["binding"], "waSent");
-        let inner: serde_json::Value = serde_json::from_str(outer["payload"].as_str().unwrap()).unwrap();
-        assert_eq!(inner["ok"], true);
-        assert_eq!(frame("waCall", &None::<calls::Info>), r#"{"binding":"waCall","payload":"null"}"#);
-    }
 
     #[test]
     fn snapshot_is_most_recent_first_and_splits_archived() {
