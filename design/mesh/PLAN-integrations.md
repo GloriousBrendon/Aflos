@@ -56,17 +56,17 @@ Mesh-Node has no WhatsApp or Discord code.
 
 ### Phase 1: the protocol
 
-- [ ] **Task 1: `aflos-integration`**: the protocol types and their JSON,
+- [x] **Task 1: `aflos-integration`**: the protocol types and their JSON,
   the handshake, the building blocks, protocol version 1. **Accept:** unit
   tests: every message round-trips; an unknown field or event is ignored,
   never fatal; a version mismatch is reported.
-- [ ] **Task 2: the host** in the app: start, handshake, read and write
+- [x] **Task 2: the host** in the app: start, handshake, read and write
   lines, the files folder for media (P3), restart up to three times then
   stop with its error (T7), a hang (no answer to `ping` in 10 s) treated as
   a crash. **Accept:** tests with stand-in programs that answer, crash,
   hang, and send garbage: Aflos never panics or blocks; each ends in the
   right state.
-- [ ] **Task 3: the echo integration and `aflos-integration-test`.** Echo:
+- [x] **Task 3: the echo integration and `aflos-integration-test`.** Echo:
   a rail tile, a form sign-in, one chat that repeats what you send.
   The harness runs any integration through the handshake and each block it
   claims. **Accept:** echo passes the harness; a deliberately broken echo
@@ -74,7 +74,7 @@ Mesh-Node has no WhatsApp or Discord code.
 
 ### Phase 2: the app goes generic (WhatsApp and Discord still bundled)
 
-- [ ] **Task 4: networks as data.** `Network::Integration(id)`, the rail
+- [x] **Task 4: networks as data.** `Network::Integration(id)`, the rail
   tile, status dot and badge from the integration. **Accept:** echo's tile
   appears with its icon and colour; the existing tiles look as before.
 - [ ] **Task 5: sign-in and Accounts.** QR, code, form and web-page
@@ -178,6 +178,23 @@ the parity list passes again.
   for installs and update checks once a day.
 - **Public templates.** Task 17's template repository is new and public:
   the maintainer creates it, or says to.
+
+## Changes while building
+
+- **Task 2:** the host lives in `aflos-integration` behind its `host`
+  feature (not in the app), so its tests run against the real echo
+  program; the app depends on it with `host` on. Restarts are forgiven
+  after a minute's stable running. Lines over 16 MB are skipped.
+- **Task 3:** echo is also the host's stand-in: `AFLOS_ECHO_MODE` makes it
+  crash, hang, stay silent, write garbage, speak a newer protocol, or
+  break sending.
+- **Task 4:** `Network::Discord` stays for Discord rooms bridged into
+  Matrix (decided: bridges keep working); integrations are
+  `Network::Integration(slot)`, the slot from a registry in `aflos-core`
+  so tags and colours read like any network's. Sections gained `home`:
+  a home section's chats go in Home, the others get rail tiles (a server,
+  "Groups"). Until Task 11, integrations to run are listed in config.toml
+  as `[[integrations]]` (`id`, `program`, `args`).
 
 ## Changes while planning
 

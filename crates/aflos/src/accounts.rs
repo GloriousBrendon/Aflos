@@ -92,6 +92,24 @@ pub(crate) fn link(state: &App, network: Network) -> Link {
             (None, Some(_)) => Link::Connecting,
             (None, None) => Link::Offline,
         },
+        Network::Integration(_) => match state.integrations.by_network(network) {
+            Some((_, live)) => match live.state {
+                Some(aflos_integration::State::Online) => Link::Linked {
+                    name: live
+                        .hello
+                        .as_ref()
+                        .map_or_else(String::new, |h| h.name.clone()),
+                    meta: count(
+                        live.chats.sections.iter().map(|s| s.chats.len()).sum(),
+                        "chat",
+                    ),
+                },
+                Some(aflos_integration::State::SignedOut) => Link::SignedOut,
+                Some(aflos_integration::State::Connecting | aflos_integration::State::Offline)
+                | None => Link::Connecting,
+            },
+            None => Link::Offline,
+        },
         // Not listed here: its identity has its own screens (mesh_ui).
         Network::Mesh => match state.mesh.identity.as_ref().and_then(|i| i.username.clone()) {
             Some(name) => Link::Linked {

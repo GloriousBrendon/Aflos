@@ -7,6 +7,7 @@ mod cache;
 #[cfg(test)]
 mod checkpoint;
 mod fx_ui;
+mod integrations;
 mod mesh_calls;
 mod mesh_dm;
 mod mesh_spaces;
@@ -150,6 +151,8 @@ struct App {
     video: HashMap<String, VideoTile>,
     /// The call's video fills the chat pane (else a strip above the chat).
     video_big: bool,
+    /// The integrations Aflos runs, and what each has said.
+    integrations: integrations::Integrations,
     /// Check for updates: where it's got to.
     update: Updating,
     /// WhatsApp's call, while there is one.
@@ -341,8 +344,13 @@ struct Session {
     /// Showing the WhatsApp groups list (its own pane, off the rail) instead
     /// of Home/a space/a guild.
     active_wa_groups: bool,
+    /// An integration's section open in the channel pane (a server, its
+    /// groups): its network and the section's id.
+    active_section: Option<(Network, String)>,
     /// Which rail folders are expanded, by `folder_index`.
     folders_open: [bool; 4],
+    /// Integrations' rail folders that are closed (they start open).
+    folders_closed: Vec<Network>,
     /// Home's network chip; `None` is All.
     home_filter: Option<Network>,
     /// The emoji picker is open under the composer.
@@ -537,7 +545,9 @@ impl Session {
             active_guild: None,
             active_mesh_space: None,
             active_wa_groups: false,
+            active_section: None,
             folders_open: [true; 4],
+            folders_closed: Vec::new(),
             home_filter: None,
             emoji_open: false,
             pending_attachment: None,
@@ -777,7 +787,13 @@ struct WebChat {
 /// `Clients` from `App`'s fields (a macro, so it can sit beside a `&mut` session).
 macro_rules! clients {
     ($state:expr) => {
-        Clients { discord: $state.discord.as_ref(), whatsapp: $state.whatsapp.as_ref(), mesh: $state.mesh.node.as_ref(), spaces: &$state.mesh.spaces }
+        Clients {
+            discord: $state.discord.as_ref(),
+            whatsapp: $state.whatsapp.as_ref(),
+            mesh: $state.mesh.node.as_ref(),
+            spaces: &$state.mesh.spaces,
+            integrations: &$state.integrations,
+        }
     };
 }
 
@@ -789,6 +805,7 @@ struct Clients<'a> {
     mesh: Option<&'a mesh::Node>,
     /// For a channel's mentions.
     spaces: &'a [mesh::Space],
+    integrations: &'a integrations::Integrations,
 }
 
 impl Clients<'_> {
@@ -799,6 +816,12 @@ impl Clients<'_> {
             Network::Discord => self.discord.map(|e| e.open_channel(&chat.id)).is_some(),
             Network::WhatsApp => self.whatsapp.map(|e| e.open_chat(&chat.id)).is_some(),
             Network::Mesh => self.mesh.map(|n| mesh_spaces::open(n, &chat.id)).is_some(),
+            Network::Integration(_) => {
+                let open = aflos_integration::Cmd::Open {
+                    chat: Some(chat.id.clone()),
+                };
+                self.integrations.send(chat.network, open).is_some()
+            }
             Network::Matrix => false,
         }
     }
@@ -806,6 +829,10 @@ impl Clients<'_> {
         match chat.network {
             Network::Discord => self.discord.map(aflos_discord::Engine::close_channel),
             Network::WhatsApp => self.whatsapp.map(whatsapp::Engine::close_chat),
+            Network::Integration(_) => self
+                .integrations
+                .send(chat.network, aflos_integration::Cmd::Open { chat: None })
+                .map(drop),
             // Opening another chat is enough for mesh-node.
             Network::Mesh | Network::Matrix => None,
         };
@@ -816,6 +843,14 @@ impl Clients<'_> {
             Network::Discord => self.discord.map(|e| e.send_message(&chat.id, text)).is_some(),
             Network::WhatsApp => self.whatsapp.map(|e| e.send_message(&chat.id, text, reply_to)).is_some(),
             Network::Mesh => self.mesh.map(|n| mesh_spaces::send(n, self.spaces, &chat.id, text, reply_to)).is_some(),
+            Network::Integration(_) => {
+                let send = aflos_integration::Cmd::Send {
+                    chat: chat.id.clone(),
+                    text: text.to_owned(),
+                    reply_to: reply_to.map(str::to_owned),
+                };
+                self.integrations.send(chat.network, send).is_some()
+            }
             Network::Matrix => false,
         }
     }
@@ -1509,6 +1544,10 @@ enum Message {
     WaShareCancel,
     /// Drop video from cameras that stopped sending.
     VideoPrune,
+    /// An integration started, or reported something.
+    Integration(String, integrations::Update),
+    /// Open an integration's section (a server, its groups) in the channel pane.
+    IntegrationSection(Network, String),
     /// The call's video fills the chat pane, or goes back above the chat.
     VideoBig(bool),
     /// Show a Discord server (by id) from the hidden client.
@@ -1727,6 +1766,7 @@ fn boot() -> (App, Task<Message>) {
         accounts: accounts::Panel::default(),
         video: HashMap::new(),
         video_big: false,
+        integrations: integrations::Integrations::new(config.integrations.clone()),
         update: Updating::Idle,
         wa_call: None,
         wa_typing: HashMap::new(),
@@ -2788,6 +2828,17 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             state.video_big = big;
             Task::none()
         }
+        Message::Integration(id, update) => integrations::update(state, id, update),
+        Message::IntegrationSection(network, section) => {
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                session.active_space = None;
+                session.active_guild = None;
+                session.active_mesh_space = None;
+                session.active_wa_groups = false;
+                session.active_section = Some((network, section));
+            }
+            Task::none()
+        }
         // In Discord voice, mute/deafen act on that call.
         Message::ToggleMute if in_discord_voice(state) => {
             if let Some(engine) = &state.discord {
@@ -3730,6 +3781,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_guild = None;
                 session.active_mesh_space = None;
                 session.active_wa_groups = false;
+                session.active_section = None;
                 session.focused = Pane::Channels;
             }
             Task::none()
@@ -3742,6 +3794,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_guild = None;
                 session.active_mesh_space = None;
                 session.active_wa_groups = false;
+                session.active_section = None;
                 session.focused = Pane::Channels;
             }
             Task::none()
@@ -3785,6 +3838,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_guild = Some(guild);
                 session.active_mesh_space = None;
                 session.active_wa_groups = false;
+                session.active_section = None;
                 session.focused = Pane::Channels;
             }
             Task::none()
@@ -3794,6 +3848,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_space = None;
                 session.active_guild = None;
                 session.active_wa_groups = false;
+                session.active_section = None;
                 session.active_mesh_space = Some(space);
                 session.focused = Pane::Channels;
             }
@@ -3811,8 +3866,16 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::ToggleFolder(network) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
-                let open = &mut session.folders_open[folder_index(network)];
-                *open = !*open;
+                if let Network::Integration(_) = network {
+                    let closed = &mut session.folders_closed;
+                    match closed.iter().position(|n| *n == network) {
+                        Some(at) => drop(closed.remove(at)),
+                        None => closed.push(network),
+                    }
+                } else {
+                    let open = &mut session.folders_open[folder_index(network)];
+                    *open = !*open;
+                }
             }
             Task::none()
         }
@@ -3822,6 +3885,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_guild = None;
                 session.active_mesh_space = None;
                 session.active_wa_groups = true;
+                session.active_section = None;
                 session.focused = Pane::Channels;
             }
             Task::none()
@@ -3921,6 +3985,11 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                         engine.sign_out();
                     }
                 }
+                Network::Integration(_) => {
+                    state
+                        .integrations
+                        .send(network, aflos_integration::Cmd::SignOut);
+                }
                 // Not in the accounts panel: its identity has its own screens.
                 Network::Mesh => {}
             }
@@ -3974,6 +4043,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             session.active_guild = None;
             session.active_mesh_space = None;
             session.active_wa_groups = false;
+            session.active_section = None;
             if session.groups.iter().any(|g| g.id() == Some(&room_id)) {
                 session.active_space = Some(room_id);
                 session.focused = Pane::Channels;
@@ -4445,6 +4515,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_mesh_space,
             ) = (None, None, None);
             session.active_wa_groups = false;
+            session.active_section = None;
             session.focused = Pane::Chat;
             if tab == mesh_ui::Tab::Add {
                 return iced::widget::operation::focus(iced::widget::Id::new(mesh_ui::CHECK_FIELD));
@@ -4545,6 +4616,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     session.active_guild = None;
                     session.active_mesh_space = None;
                     session.active_wa_groups = false;
+                    session.active_section = None;
                     let Some(client) = session.client.clone() else { return Task::none() };
                     Task::batch([
                         Task::perform(async move { client.rooms().await }, Message::RoomsLoaded),
@@ -4688,6 +4760,11 @@ fn subscription(state: &App) -> Subscription<Message> {
             (Some(exe), _) => Subscription::run_with(exe.clone(), whatsapp_native_events),
             (None, Some(socket)) => Subscription::run_with(socket.clone(), whatsapp_events),
             (None, None) => Subscription::none(),
+        },
+        if mesh_ui::started(state) {
+            integrations::subscription(state)
+        } else {
+            Subscription::none()
         },
         // Drive the animated background at ~15 fps, on every screen alike:
         // only while it's on and the window is in front, shown and not
@@ -5645,6 +5722,8 @@ fn net_icon(network: Network) -> ui::Icon {
         Network::Matrix => ui::Icon::Matrix,
         Network::WhatsApp => ui::Icon::WhatsApp,
         Network::Mesh => ui::Icon::At,
+        // Its own logo is an SVG it sent (`integrations::logo`); this is the stand-in.
+        Network::Integration(_) => ui::Icon::Hash,
     }
 }
 
@@ -5701,7 +5780,8 @@ fn rail_view<'a>(
             session.active_space.is_none()
                 && session.active_guild.is_none()
                 && session.active_mesh_space.is_none()
-                && !session.active_wa_groups,
+                && !session.active_wa_groups
+                && session.active_section.is_none(),
             Some(Message::SpaceSelected(None)),
             p,
             l,
@@ -5799,13 +5879,31 @@ fn rail_view<'a>(
     ] {
         if !tiles.is_empty() {
             let open = session.folders_open[folder_index(network)];
-            let folder = rail_folder(network, open, tiles, p, l);
+            let icon = ui::icon(net_icon(network), 22.0, net_color(network, p));
+            let folder = rail_folder(network, icon, open, tiles, p, l);
             folders = folders.push(if open {
                 folder
             } else {
                 rail_badge(folder, count, p)
             });
         }
+    }
+    // Each integration's folder: its logo in its colour, a dot for how it's
+    // doing, and its sections' tiles.
+    for (_, live, network) in state.integrations.ready() {
+        let active = session
+            .active_section
+            .as_ref()
+            .map(|(n, s)| (*n, s.as_str()));
+        let tiles = integrations::rail_tiles(active, live, network, p, l);
+        let open = !session.folders_closed.contains(&network);
+        let icon = integrations::logo(live, 22.0, net_color(network, p));
+        let folder = rail_folder(network, icon, open, tiles, p, l);
+        folders = folders.push(if open {
+            folder
+        } else {
+            rail_badge(folder, integrations::unread(live), p)
+        });
     }
     let add = iced::widget::tooltip(
         rail_tile(
@@ -5859,10 +5957,11 @@ fn guild_mentions(guild: &aflos_discord::Guild) -> u64 {
     guild.text_channels.iter().map(|c| c.mentions).sum()
 }
 
-/// Each rail folder's place in `folders_open`.
+/// Each built-in rail folder's place in `folders_open` (integrations'
+/// are in `folders_closed`).
 fn folder_index(network: Network) -> usize {
     match network {
-        Network::Discord => 0,
+        Network::Discord | Network::Integration(_) => 0,
         Network::Matrix => 1,
         Network::WhatsApp => 2,
         Network::Mesh => 3,
@@ -5873,14 +5972,14 @@ fn folder_index(network: Network) -> usize {
 /// a tinted strip.
 fn rail_folder<'a>(
     network: Network,
+    icon: Element<'a, Message>,
     open: bool,
     tiles: Vec<Element<'a, Message>>,
     p: &theme::Palette,
     l: &theme::Layout,
 ) -> Element<'a, Message> {
-    let (icon, color) = (net_icon(network), net_color(network, p));
     let head = column![
-        rail_tile(ui::icon(icon, 22.0, color), false, Some(Message::ToggleFolder(network)), p, l),
+        rail_tile(icon, false, Some(Message::ToggleFolder(network)), p, l),
         ui::mono(format!("{} {}", network.tag(), if open { "▾" } else { "▸" }), 10.0, p.text_muted()),
     ]
     .spacing(2)
@@ -6675,6 +6774,7 @@ fn web_presence(state: &App, chat: &WebChat) -> Option<(String, bool)> {
             .find(|dm| dm.id == chat.id)?
             .status
             .clone()?,
+        Network::Integration(_) => integrations::chat(state, chat.network, &chat.id)?.status.clone()?,
         Network::Mesh => {
             let members = &state.mesh.chats.iter().find(|c| c.id == chat.id)?.members;
             state
@@ -6921,6 +7021,9 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
             Network::Discord => discord_typing(state, &channel.id),
+            Network::Integration(_) => integrations::chat(state, channel.network, &channel.id)
+                .map(|c| c.typing.as_slice())
+                .unwrap_or_default(),
             Network::Matrix => &[],
         };
         return body(col, placeholder, typing).into();
@@ -6956,7 +7059,7 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
 
     let placeholder = match room.network {
         Network::Discord => format!("message {}  —  sends to discord via bridge", room_label(room)),
-        Network::Matrix | Network::WhatsApp | Network::Mesh => format!("message {}", room_label(room)),
+        Network::Matrix | Network::WhatsApp | Network::Mesh | Network::Integration(_) => format!("message {}", room_label(room)),
     };
     body(col, placeholder, session.typing.get(&room.id).map(Vec::as_slice).unwrap_or_default()).into()
 }
