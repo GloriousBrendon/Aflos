@@ -148,6 +148,8 @@ struct App {
     /// The call's video, by track: the latest frame of each camera
     /// (WhatsApp's ids start `wa-`).
     video: HashMap<String, VideoTile>,
+    /// The call's video fills the chat pane (else a strip above the chat).
+    video_big: bool,
     /// Check for updates: where it's got to.
     update: Updating,
     /// WhatsApp's call, while there is one.
@@ -223,6 +225,24 @@ struct VideoTile {
 
 /// A camera that sent nothing for this long is off (or the call ended).
 const VIDEO_STALE: std::time::Duration = std::time::Duration::from_millis(1500);
+/// WhatsApp says when a video stops, and sends few frames of a still or
+/// weak picture: its last frame stays up this long without a new one.
+const WA_VIDEO_STALE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Whether a video tile is still showing (WhatsApp's ids start `wa-`).
+fn video_live(id: &str, tile: &VideoTile) -> bool {
+    let stale = if id.starts_with("wa-") {
+        WA_VIDEO_STALE
+    } else {
+        VIDEO_STALE
+    };
+    tile.at.elapsed() < stale
+}
+
+/// `Fill` when `on`, else `Shrink`.
+fn fill_if(on: bool) -> Length {
+    if on { Length::Fill } else { Length::Shrink }
+}
 
 /// A GIF as one sprite sheet (its frames in a grid), drawn a frame at a time
 /// by cropping. One image rather than one per frame, because iced evicts
@@ -290,6 +310,8 @@ struct Session {
     my_profile: Option<MyProfile>,
     /// Your Aflos username, for the user panel when Matrix isn't signed in.
     mesh_name: Option<String>,
+    /// Your Aflos ID: the user panel shows the picture you published.
+    mesh_id: Option<String>,
     self_muted: bool,
     self_deafened: bool,
     backup: BackupUi,
@@ -495,6 +517,7 @@ impl Session {
             members: Vec::new(),
             my_profile: None,
             mesh_name: None,
+            mesh_id: None,
             self_muted: false,
             self_deafened: false,
             backup: BackupUi::default(),
@@ -1486,6 +1509,8 @@ enum Message {
     WaShareCancel,
     /// Drop video from cameras that stopped sending.
     VideoPrune,
+    /// The call's video fills the chat pane, or goes back above the chat.
+    VideoBig(bool),
     /// Show a Discord server (by id) from the hidden client.
     GuildSelected(String),
     /// The text chat of the Discord voice channel we're in, from anywhere:
@@ -1557,6 +1582,8 @@ enum Message {
     OpenUrl(String),
     /// The mouse entered / left a message (by web id).
     HoverMessage(String),
+    /// The timeline scrolled: nothing is hovered until the mouse moves.
+    TimelineScrolled,
     UnhoverMessage(String),
     /// Open or close a message's quick-reaction strip.
     ToggleReactPicker(String),
@@ -1699,6 +1726,7 @@ fn boot() -> (App, Task<Message>) {
         sync_off: config.sync_off.clone(),
         accounts: accounts::Panel::default(),
         video: HashMap::new(),
+        video_big: false,
         update: Updating::Idle,
         wa_call: None,
         wa_typing: HashMap::new(),
@@ -1823,6 +1851,7 @@ fn window_settings() -> iced::window::Settings {
 fn enter_session(state: &mut App) {
     let mut session = Session::new(None);
     session.mesh_name = state.mesh.identity.as_ref().and_then(|i| i.username.clone());
+    session.mesh_id = state.mesh.my_id();
     session.paste_tip = paste_tip_due();
     state.screen = Screen::LoggedIn(session);
     // Discord often connects before the session exists; catch up on its pictures.
@@ -2000,7 +2029,15 @@ fn sync_ringer(state: &mut App) {
 fn handle(state: &mut App, message: Message) -> Task<Message> {
     match message {
         Message::RestoreFinished(Ok(client)) => attach_matrix(state, client),
-        Message::Mesh(event) => mesh_ui::event(state, event),
+        Message::Mesh(event) => {
+            let task = mesh_ui::event(state, event);
+            // The user panel shows your Aflos picture by this ID.
+            let id = state.mesh.my_id();
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                session.mesh_id = id;
+            }
+            task
+        }
         Message::MeshForm(msg) => mesh_ui::update(state, msg),
         Message::MeshSpace(msg) => mesh_spaces::update(state, msg),
         Message::MeshCall(msg) => mesh_calls::update(state, msg),
@@ -2741,7 +2778,14 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::VideoPrune => {
-            state.video.retain(|_, tile| tile.at.elapsed() < VIDEO_STALE);
+            state.video.retain(|id, tile| video_live(id, tile));
+            if state.video.is_empty() {
+                state.video_big = false;
+            }
+            Task::none()
+        }
+        Message::VideoBig(big) => {
+            state.video_big = big;
             Task::none()
         }
         // In Discord voice, mute/deafen act on that call.
@@ -4053,6 +4097,12 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
+        Message::TimelineScrolled => {
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                session.hovered = None;
+            }
+            Task::none()
+        }
         Message::UnhoverMessage(id) => {
             // Only if it's still this one: entering the next can come first.
             if let Screen::LoggedIn(session) = &mut state.screen
@@ -4667,7 +4717,8 @@ fn subscription(state: &App) -> Subscription<Message> {
         },
         // Cameras that stop sending (no "ended" from a remote that just turns
         // its camera off) go away within a couple of seconds.
-        if state.video.is_empty() {
+        // (and "big" resets once there's none).
+        if state.video.is_empty() && !state.video_big {
             Subscription::none()
         } else {
             iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::VideoPrune)
@@ -6541,7 +6592,12 @@ fn user_panel<'a>(
     let me = row![
         ui::avatar(
             &name,
-            picture(session, session.my_profile.as_ref().and_then(|me| me.avatar.as_ref())),
+            // The picture you published in Aflos, else your Matrix one.
+            session
+                .mesh_id
+                .as_ref()
+                .and_then(|id| web_picture(session, Some(&profile_ui::avatar_key(id))))
+                .or_else(|| picture(session, session.my_profile.as_ref().and_then(|me| me.avatar.as_ref()))),
             34.0,
             p.accent(),
             p,
@@ -6796,13 +6852,30 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
             col = col.push(container(discord_ring_bar(ring, p, l)).padding([8, 16]));
         }
     }
+    // A call's live video, Discord's or WhatsApp's.
+    let live = |wa: bool| {
+        state
+            .video
+            .iter()
+            .filter(move |(id, t)| id.starts_with("wa-") == wa && video_live(id, t))
+            .map(|(_, t)| t)
+    };
+    // Big: the call takes the chat pane, its video filling it.
+    let mut big = false;
     if let Some(snapshot) = state.discord_state.as_ref().filter(|s| s.voice.connected()) {
-        let discord_video = state.video.iter().filter(|(id, _)| !id.starts_with("wa-")).map(|(_, t)| t);
-        col = col.push(container(discord_call_bar(session, &snapshot.voice, discord_video, p, l)).padding([8, 16]));
+        let fill = state.video_big && live(false).next().is_some();
+        big |= fill;
+        let bar = discord_call_bar(session, &snapshot.voice, live(false), fill, p, l);
+        col = col.push(container(bar).padding([8, 16]).height(fill_if(fill)));
     }
     if let Some(call) = &state.wa_call {
-        let wa_video = state.video.iter().filter(|(id, _)| id.starts_with("wa-")).map(|(_, t)| t);
-        col = col.push(container(wa_call_bar(call, wa_video, state.wa_share.as_deref(), p, l)).padding([8, 16]));
+        let fill = state.video_big && live(true).next().is_some();
+        big |= fill;
+        let bar = wa_call_bar(call, live(true), fill, state.wa_share.as_deref(), p, l);
+        col = col.push(container(bar).padding([8, 16]).height(fill_if(fill)));
+    }
+    if big {
+        return col.into();
     }
     if let Some(prompt) = &session.verification {
         col = col.push(container(verification_banner(prompt, p)).padding([8, 16]));
@@ -6811,14 +6884,17 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
     // Timeline, status line and composer: the same for a room or a Discord channel.
     let me = session.my_profile.as_ref().map(|me| &me.user_id);
     let body = |mut col: iced::widget::Column<'a, Message>, placeholder: String, typing: &'a [String]| {
-        col = col.push(
-            scrollable(
-                container(timeline_view(session, me, state.density, &state.extras, p))
-                    .padding(iced::Padding { top: 16.0, right: 16.0, bottom: 8.0, left: 16.0 }),
-            )
-            .height(Length::Fill)
-            .anchor_bottom(),
-        );
+        let timeline = scrollable(
+            container(timeline_view(session, me, state.density, &state.extras, p))
+                .padding(iced::Padding { top: 16.0, right: 16.0, bottom: 8.0, left: 16.0 }),
+        )
+        .height(Length::Fill)
+        .anchor_bottom();
+        col = col.push(if session.hovered.is_some() {
+            timeline.on_scroll(|_| Message::TimelineScrolled)
+        } else {
+            timeline
+        });
         if let Some(status) = &session.status {
             col = col.push(container(text(status.clone()).size(13).color(p.danger())).padding([0, 16]));
         }
@@ -7152,6 +7228,7 @@ fn discord_call_bar<'a>(
     session: &'a Session,
     voice: &'a aflos_discord::Voice,
     video: impl Iterator<Item = &'a VideoTile>,
+    big: bool,
     p: &'a theme::Palette,
     l: &theme::Layout,
 ) -> Element<'a, Message> {
@@ -7256,12 +7333,13 @@ fn discord_call_bar<'a>(
         }
         body = body.push(shares);
     }
-    if let Some(tiles) = video_tiles(video, p) {
+    if let Some(tiles) = video_tiles(video, big, p) {
         body = body.push(tiles);
     }
     container(body)
         .padding(12)
         .width(Length::Fill)
+        .height(fill_if(big))
         .style(move |_| container::Style {
             background: Some(fill.into()),
             border: iced::border::rounded(8).color(edge).width(1),
@@ -7331,6 +7409,7 @@ fn share_picker<'a>(choices: &'a [ShareChoice], p: &'a theme::Palette, l: &theme
 fn wa_call_bar<'a>(
     call: &'a whatsapp::Call,
     video: impl Iterator<Item = &'a VideoTile>,
+    big: bool,
     share: Option<&'a [ShareChoice]>,
     p: &'a theme::Palette,
     l: &theme::Layout,
@@ -7386,13 +7465,14 @@ fn wa_call_bar<'a>(
     if let Some(choices) = share.filter(|_| !call.screen) {
         body = body.push(share_picker(choices, p, l));
     }
-    if let Some(tiles) = video_tiles(video, p) {
+    if let Some(tiles) = video_tiles(video, big, p) {
         body = body.push(tiles);
     }
     let (fill, edge) = (p.surface_alt(), p.border());
     container(body)
         .padding(12)
         .width(Length::Fill)
+        .height(fill_if(big))
         .style(move |_| container::Style {
             background: Some(fill.into()),
             border: iced::border::rounded(8).color(edge).width(1),
@@ -7462,11 +7542,14 @@ mod tile_label_tests {
     }
 }
 
+/// `video` is what's live (`video_live`). `big`: everyone else's fill the
+/// space the call has, else they're 320 px tall.
 fn video_tiles<'a>(
     video: impl Iterator<Item = &'a VideoTile>,
-    p: &theme::Palette,
+    big: bool,
+    p: &'a theme::Palette,
 ) -> Option<Element<'a, Message>> {
-    let live: Vec<&VideoTile> = video.filter(|t| t.at.elapsed() < VIDEO_STALE).collect();
+    let live: Vec<&VideoTile> = video.collect();
     if live.is_empty() {
         return None;
     }
@@ -7475,8 +7558,9 @@ fn video_tiles<'a>(
         theme::mix(p.background(), iced::Color::TRANSPARENT, 0.35),
         p.text_bright(),
     );
-    let tile = |t: &'a VideoTile, height: f32| {
+    let tile = |t: &'a VideoTile, height: Length| {
         let picture = iced::widget::image(t.frame.clone())
+            .width(fill_if(height == Length::Fill))
             .height(height)
             .content_fit(iced::ContentFit::Contain);
         let mut layers = stack![picture];
@@ -7503,13 +7587,28 @@ fn video_tiles<'a>(
             })
     };
     let mut tiles = row![].spacing(8).align_y(iced::Alignment::End);
+    let theirs = if big {
+        Length::Fill
+    } else {
+        Length::Fixed(320.0)
+    };
     for t in live.iter().filter(|t| !t.local) {
-        tiles = tiles.push(tile(t, 320.0));
+        tiles = tiles.push(tile(t, theirs));
     }
     for t in live.iter().filter(|t| t.local) {
-        tiles = tiles.push(tile(t, 110.0));
+        tiles = tiles.push(tile(t, Length::Fixed(110.0)));
     }
-    Some(container(tiles).center_x(Length::Fill).into())
+    let label = if big { "Smaller video" } else { "Bigger video" };
+    let toggle = button(text(label).size(12).color(p.text()))
+        .on_press(Message::VideoBig(!big))
+        .padding([4, 10])
+        .style(flat_button_style(p));
+    let tiles = container(tiles).center_x(Length::Fill).height(fill_if(big));
+    Some(
+        column![container(toggle).align_right(Length::Fill), tiles]
+            .spacing(4)
+            .into(),
+    )
 }
 
 /// A Discord DM/group call ringing us: answer joins it, decline stops it ringing here.
@@ -7836,10 +7935,7 @@ fn bubble_row<'a>(
             let side = if mine { iced::alignment::Horizontal::Left } else { iced::alignment::Horizontal::Right };
             layers = layers.push(container(bar).width(Length::Fill).padding(gap).align_x(side));
         }
-        mouse_area(layers)
-            .on_enter(Message::HoverMessage(id.clone()))
-            .on_exit(Message::UnhoverMessage(id))
-            .into()
+        hover_area(layers, &id, session)
     };
     if mine {
         return hover(row![Space::new().width(Length::Fill), bubble].padding(gap).into());
@@ -7992,10 +8088,26 @@ fn message_content<'a>(
                 .align_x(iced::alignment::Horizontal::Right),
         );
     }
-    mouse_area(layers)
-        .on_enter(Message::HoverMessage(id.to_string()))
-        .on_exit(Message::UnhoverMessage(id.to_string()))
-        .into()
+    hover_area(layers, id, session)
+}
+
+/// Hovering a message shows its bar. A scroll clears it (`TimelineScrolled`):
+/// a scroll view hands the wheel to its messages before moving them, so each
+/// one checks the cursor a step out of date. With nothing hovered, the first
+/// move picks the message under the cursor, even one it never left.
+fn hover_area<'a>(
+    content: impl Into<Element<'a, Message>>,
+    id: &str,
+    session: &Session,
+) -> Element<'a, Message> {
+    let area = mouse_area(content).on_exit(Message::UnhoverMessage(id.to_string()));
+    if session.hovered.is_none() {
+        let id = id.to_string();
+        area.on_move(move |_| Message::HoverMessage(id.clone()))
+            .into()
+    } else {
+        area.on_enter(Message::HoverMessage(id.to_string())).into()
+    }
 }
 
 /// A message's id for hovering: its Aflos or WhatsApp id, else its Matrix event.
