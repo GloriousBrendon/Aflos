@@ -2004,7 +2004,15 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         Message::MeshForm(msg) => mesh_ui::update(state, msg),
         Message::MeshSpace(msg) => mesh_spaces::update(state, msg),
         Message::MeshCall(msg) => mesh_calls::update(state, msg),
-        Message::Profile(msg) => profile_ui::update(state, msg),
+        Message::Profile(msg) => {
+            // The editor shows in the chat pane, which Settings would hide.
+            if matches!(msg, profile_ui::Msg::Edit)
+                && let Screen::LoggedIn(session) = &mut state.screen
+            {
+                session.show_settings = false;
+            }
+            profile_ui::update(state, msg)
+        }
         Message::Fx(msg) => fx_ui::update(state, msg),
         Message::DcVideo(kind, field, value) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
@@ -6530,27 +6538,37 @@ fn user_panel<'a>(
 
     let fill = p.panel_dim();
     let radius = (l.rounding - l.border_size).max(0.0);
+    let me = row![
+        ui::avatar(
+            &name,
+            picture(session, session.my_profile.as_ref().and_then(|me| me.avatar.as_ref())),
+            34.0,
+            p.accent(),
+            p,
+            Some((p.success(), fill)),
+        ),
+        // Clipped so a long MXID can't run under the buttons.
+        container(
+            column![ui::sans(name, 13.0, Weight::Semibold, p.text_bright()), sub.wrapping(text::Wrapping::None)]
+                .spacing(1),
+        )
+        .width(Length::Fill)
+        .clip(true),
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center);
+    // Your picture and name open your profile's editor.
+    let me = iced::widget::tooltip(
+        mouse_area(me)
+            .on_press(Message::Profile(crate::profile_ui::Msg::Edit))
+            .interaction(iced::mouse::Interaction::Pointer),
+        container(text("Edit your profile").size(12)).padding([4, 8]),
+        iced::widget::tooltip::Position::Top,
+    );
     container(
-        row![
-            ui::avatar(
-                &name,
-                picture(session, session.my_profile.as_ref().and_then(|me| me.avatar.as_ref())),
-                34.0,
-                p.accent(),
-                p,
-                Some((p.success(), fill)),
-            ),
-            // Clipped so a long MXID can't run under the buttons.
-            container(
-                column![ui::sans(name, 13.0, Weight::Semibold, p.text_bright()), sub.wrapping(text::Wrapping::None)]
-                    .spacing(1),
-            )
-            .width(Length::Fill)
-            .clip(true),
-            controls,
-        ]
-        .spacing(8)
-        .align_y(iced::Alignment::Center),
+        row![container(me).width(Length::Fill), controls]
+            .spacing(8)
+            .align_y(iced::Alignment::Center),
     )
     .padding(10)
     .width(Length::Fill)
