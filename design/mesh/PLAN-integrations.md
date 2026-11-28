@@ -122,6 +122,14 @@ Go Live stream, invites, 2FA sign-in. Phase 3 starts once this passes.
   the unofficial warning; granted permissions kept; Aflos hands over only
   what's granted (no camera frames without camera). **Accept:** unit
   tests: a denied permission's blocks stay hidden.
+- [ ] **Task 12b: crash recovery** (spec T7 to T10). The stopped
+  message with Restart, Turn off and Remove; the "handling" note around
+  each integration's events and blocks, a panic hook that writes it to
+  `<data>/integrations/crashed`, and the next start's question; the
+  start-up crash count and safe start (`--safe`); Integrations on the
+  sign-in screen. **Accept:** tests: a stand-in whose event makes the app
+  panic is named on the next start and removing it works; two unnamed
+  start-up crashes bring a safe start; `--safe` starts with all off.
 - [ ] **Task 13: updates, turn off, remove.** "Update available" from the
   pinned release; Update asks again if permissions changed (T4); turn off
   and remove (T5). **Accept:** tests with two echo releases: no update
@@ -172,6 +180,10 @@ the parity list passes again.
   the maintainer creates it, or says to.
 
 ## Changes while planning
+
+- 2026-11-28: crash recovery added (spec T7 extended, T8 to T10 new;
+  Task 12b), from the maintainer: a broken integration must be easy to
+  remove, from the sign-in screen and after a crash, named.
 
 - Spec building blocks gained **Join by link** (chat list) and **Watch a
   stream** (calls), both things Discord does today.

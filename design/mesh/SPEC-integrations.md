@@ -91,7 +91,10 @@ layer; see Later.
 | T4 | **Pinned versions.** Aflos checks for a new release and shows "Update available"; nothing updates until you press Update, which shows the consent screen again if the permissions changed. | A publisher can't push new code to you silently. |
 | T5 | **Remove** stops it and deletes its program and data, after a confirmation. **Turn off** keeps them. | One click out. |
 | T6 | **Official integrations are signed** with Aflos's key and marked **Official** on the consent screen and in Settings. Aflos checks the signature. | How a business knows it's the supported one. |
-| T7 | **One crash doesn't take Aflos down.** A crashed integration is restarted up to three times, then shown as stopped with its error and a Restart button. | The same rule as voice plugins. |
+| T7 | **One crash doesn't take Aflos down.** A crashed or hung integration is restarted up to three times, then stopped, and Aflos says so by name with **Restart**, **Turn off** and **Remove**. | The same rule as voice plugins, with a way out. |
+| T8 | **If Aflos itself crashes because of one, the next start says which.** While Aflos handles anything from an integration (an event, drawing its blocks), it notes which integration that is. A crash in that moment writes its name down; the next start, before any integration runs, says "Aflos closed while handling *name*" with **Remove it**, **Turn it off** and **Keep it**. *Added 2026-11-28.* | A broken integration must never lock someone out of Aflos. |
+| T9 | **Safe start.** Two crashes in a row during start-up with no integration named: the next start runs with every integration turned off and says so, and they're turned back on one at a time. `aflos --safe` does the same by hand. *Added 2026-11-28.* | The case T8 can't name. |
+| T10 | **Integrations from the sign-in screen.** It has an **Integrations** button: the list, with turn off and remove, without signing in. *Added 2026-11-28.* | Getting rid of a broken one can't depend on getting past it. |
 
 ### The protocol
 
@@ -164,5 +167,8 @@ layer; see Later.
 - The template's echo integration installs from its GitHub release, passes
   `aflos-integration-test`, and shows its icon, sign-in and chat.
 - An integration that crashes, hangs, or sends nonsense never takes Aflos
-  down; Aflos shows it stopped and why.
+  down; Aflos shows it stopped and why, with Remove.
+- An integration whose data crashes Aflos is named on the next start, with
+  Remove; with none named, the second start-up crash in a row brings a
+  safe start. Integrations can be removed from the sign-in screen.
 - Changing an integration's permissions in an update asks again.
