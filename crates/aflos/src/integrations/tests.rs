@@ -324,3 +324,118 @@ fn an_entry_round_trips_through_the_config() {
         integrations: Vec<Entry>,
     }
 }
+
+#[test]
+fn calls_ring_and_ringback() {
+    use crate::sounds::Sound;
+    use aflos_integration::{Call, Phase, Ring, Voice};
+    let entry = Entry {
+        id: "test.int.calls".into(),
+        program: "/bin/true".into(),
+        args: vec![],
+        off: false,
+    };
+    let mut all = Integrations::new(vec![entry]);
+    let id = "test.int.calls".to_string();
+    all.apply(
+        id.clone(),
+        Update::Report(Report::Ready(hello("Calls", "cl", "#123456"))),
+    );
+    let network = all.live[&id].network.unwrap();
+    assert_eq!(calls::ring(&all), None);
+    let call = |phase| Call {
+        id: "k".into(),
+        chat: "c".into(),
+        name: "Ann".into(),
+        phase,
+        ..Call::default()
+    };
+    all.apply(
+        id.clone(),
+        event(Event::Call {
+            call: Some(call(Phase::Outgoing)),
+        }),
+    );
+    assert_eq!(calls::ring(&all), Some(Sound::Ringback));
+    all.apply(
+        id.clone(),
+        event(Event::Call {
+            call: Some(call(Phase::Incoming)),
+        }),
+    );
+    assert_eq!(calls::ring(&all), Some(Sound::Ring(network)));
+    // An ended call is gone, not kept.
+    all.apply(
+        id.clone(),
+        event(Event::Call {
+            call: Some(call(Phase::Ended)),
+        }),
+    );
+    assert_eq!(all.live[&id].call, None);
+    assert_eq!(calls::ring(&all), None);
+    // A room ringing us rings until it's dismissed here.
+    let ringing = |rooms: &[&str]| Voice {
+        ringing: rooms
+            .iter()
+            .map(|r| Ring {
+                room: r.to_string(),
+                name: "Bob".into(),
+            })
+            .collect(),
+        ..Voice::default()
+    };
+    all.apply(id.clone(), event(Event::Voice(ringing(&["r1"]))));
+    assert_eq!(calls::ring(&all), Some(Sound::Ring(network)));
+    all.live_mut(network).unwrap().dismissed.push("r1".into());
+    assert_eq!(calls::ring(&all), None);
+    // Once it stops ringing there, the dismissal is forgotten.
+    all.apply(id.clone(), event(Event::Voice(ringing(&[]))));
+    assert!(all.live[&id].dismissed.is_empty());
+}
+
+#[test]
+fn screens_reach_the_picker_only_while_it_is_open() {
+    use aflos_integration::Source;
+    let mut all = Integrations::new(vec![]);
+    let id = "test.int.share".to_string();
+    let screens = vec![
+        Source {
+            id: "s0".into(),
+            name: "Screen 1".into(),
+            thumbnail: None,
+        },
+        Source {
+            id: "w1".into(),
+            name: "Firefox".into(),
+            thumbnail: Some("not base64!".into()),
+        },
+    ];
+    let sources = || {
+        event(Event::Sources {
+            cameras: vec![],
+            screens: screens.clone(),
+        })
+    };
+    all.apply(id.clone(), sources());
+    assert!(
+        all.live[&id].sources.is_none(),
+        "a late answer after Cancel is dropped"
+    );
+    all.live.get_mut(&id).unwrap().sources = Some(Vec::new());
+    all.apply(id.clone(), sources());
+    let picked = all.live[&id].sources.as_ref().unwrap();
+    assert_eq!(
+        picked.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(),
+        ["Screen 1", "Firefox"]
+    );
+    assert!(
+        picked[1].thumbnail.is_none(),
+        "a bad thumbnail is left out, not fatal"
+    );
+}
+
+#[test]
+fn video_tracks_are_kept_per_integration() {
+    assert_eq!(calls::track_prefix(Network::Integration(7)), "int-7-");
+    assert_eq!(calls::track_prefix(Network::Matrix), "");
+}
