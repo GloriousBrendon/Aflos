@@ -1,7 +1,7 @@
 # Spec: `integrations` (Aflos)
 
-Status: **DRAFT 2026-11-28**, for review. Recommendations are the defaults;
-the open questions at the end need a decision before the plan.
+Status: **DRAFT 2026-11-28**, for review. Every open question is decided
+(2026-11-28, below); approval of the whole is what's left before the plan.
 Ships as **0.7.0**: it changes what Aflos is made of (see `versioning`).
 
 ## Objective
@@ -108,7 +108,7 @@ layer; see Later.
 |---|---|---|
 | M1 | **0.7.0 ships without WhatsApp and Discord.** On first start after the update, Aflos says so once and links to Settings → Integrations, where installing one carries its sign-in over (the helper's data folder moves into the integration's). | Nobody is signed out without being told how to get it back. |
 | M2 | **Before that, the app goes generic with WhatsApp and Discord still built in**, speaking the new protocol. One release (0.6.x) proves the protocol with the two real integrations before anything is removed. | Swapping the engine and removing the parts in one release would leave nothing to compare against. |
-| M3 | **Today's WhatsApp and Discord code leaves the Aflos repos and isn't published.** The maintainer keeps it privately on their own machine, outside any repo, converted into integrations: the first real ones, used to test the protocol, the installer and every building block. *Decided 2026-11-28.* | Aflos stops distributing it, and the protocol still gets tested against the two most demanding integrations there are. |
+| M3 | **Today's WhatsApp and Discord code leaves the Aflos repos and isn't published.** The maintainer keeps it privately on their own machine, outside any repo, converted into integrations: the first real ones, used to test the protocol, the installer and every building block. It stays in the repos' history (history is never rewritten); the CHANGELOG and README say plainly it was removed because using personal WhatsApp and Discord accounts this way is against their terms of service. *Decided 2026-11-28.* | Aflos stops distributing it, says why openly, and the protocol still gets tested against the two most demanding integrations there are. |
 | M4 | **Matrix stays built in**, a native part of Aflos, not an integration. *Decided 2026-11-28.* | It's an open protocol; nothing in its terms stops Aflos shipping it. |
 
 ### For people building integrations
@@ -125,18 +125,25 @@ layer; see Later.
    (M3)**: out of the repos, kept privately on the maintainer's machine as
    test integrations. (Not legal advice: if terms of service are the main
    reason, a lawyer's read is worth it.)
-2. **Does Aflos list any integrations?** *Recommendation*: only official
-   ones, in Settings → Integrations; community ones are installed by link.
-   A directory of community integrations comes later, if ever.
-3. **Matrix bridges** (mautrix-discord and similar on a homeserver): leave
-   them working as Matrix rooms, as now? *Recommendation*: yes; they're the
-   homeserver owner's choice, not Aflos's. (Matrix itself stays built in:
-   decided, M4.)
-4. **First official integrations**: which service and API first?
-   *Recommendation*: WhatsApp Business Platform (Cloud API), since that's
-   where a business would ask first; a separate spec.
-5. **Sandboxing in version 1?** *Recommendation*: no (T3); declared
-   permissions now, OS sandboxes as their own spec.
+2. ~~Does Aflos list any integrations?~~ **Decided**: Aflos lists the
+   official integrations it makes, in Settings → Integrations. WhatsApp
+   and Discord personal accounts are never among them (their terms).
+   Community integrations are installed by link.
+3. ~~Matrix bridges~~ **Decided**: bridged rooms on a homeserver
+   (mautrix-discord and similar) keep working as Matrix rooms; they're the
+   homeserver owner's choice. Matrix itself stays built in (M4).
+4. ~~First official integration~~ **Decided**: the WhatsApp Business
+   Platform (Cloud API), in its own spec. It's Meta's sanctioned API, for
+   businesses messaging their customers: a business number, message
+   templates Meta approves for anything the business starts, a 24-hour
+   window for free replies, customer opt-in, Meta's per-message charges
+   billed to the business. Offering it to other businesses means Aflos
+   registers as a Meta Tech Provider (its terms, a separate business
+   portfolio, its template and data-privacy rules). Meta's ban on
+   general-purpose AI assistants (from 2026-01-15) doesn't touch a
+   messaging client, only an AI assistant routed through it.
+5. ~~Sandboxing in version 1?~~ **Decided**: no (T3); declared permissions
+   now, OS sandboxes as their own spec.
 
 ## Later
 
