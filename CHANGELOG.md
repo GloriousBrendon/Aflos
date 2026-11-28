@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.3
+
+- Chat bubbles are as wide as what's in them (up to 560 px) instead of
+  stretching across the whole chat.
+- Your picture and name at the bottom left open your profile's editor.
+  Before, there was no way to reach your own profile.
+
 ## 0.6.2
 
 - Voice quality for Aflos calls (Settings, Voice & audio): Low, Standard,
