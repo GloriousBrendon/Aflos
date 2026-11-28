@@ -842,6 +842,8 @@ impl Event {
 }
 
 #[cfg(feature = "host")]
+pub mod harness;
+#[cfg(feature = "host")]
 pub mod host;
 
 #[cfg(test)]
