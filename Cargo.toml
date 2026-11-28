@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/aflos-core", "crates/aflos-discord", "crates/aflos"]
+members = ["crates/aflos-core", "crates/aflos-discord", "crates/aflos-integration", "crates/aflos"]
 # Its own workspace: whatsapp-rust's SQLite can't link next to matrix-sdk's.
 exclude = ["aflos-wa", "aflos-media"]
 
