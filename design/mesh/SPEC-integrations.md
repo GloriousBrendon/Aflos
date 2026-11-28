@@ -1,7 +1,8 @@
 # Spec: `integrations` (Aflos)
 
-Status: **DRAFT 2026-11-28**, for review. Every open question is decided
-(2026-11-28, below); approval of the whole is what's left before the plan.
+Status: **APPROVED 2026-11-28** ("approve, write the plan"), every open
+question decided as recorded below. Plan:
+[PLAN-integrations.md](PLAN-integrations.md).
 Ships as **0.7.0**: it changes what Aflos is made of (see `versioning`).
 
 ## Objective
@@ -66,12 +67,12 @@ is hard-coded now; each becomes generic.
 |---|---|---|
 | Rail tile | An SVG icon, a short tag (`wa`, `dc`), a colour, a status dot, an unread badge | The fixed `dc`, `wa` tiles |
 | Sign-in | One of: a QR code to scan, a code to enter, a form (fields it names), or a web page to open | WhatsApp's QR, Discord's QR and 2FA code |
-| Chat list | Chats in sections it names (Direct, Groups, Servers → channels), with pictures, unread counts, muted, archived | The WhatsApp groups pane, Discord's server list |
+| Chat list | Chats in sections it names (Direct, Groups, Servers → channels), with pictures, unread counts, muted, archived; optionally **Join by link** | The WhatsApp groups pane, Discord's server list and invites |
 | Timeline | Messages: text (with a fixed set of formatting), images, video, files, voice notes, stickers, replies, forwards, reactions, edits, deletes, ticks | Each network's `Messages` |
 | Actions | Which message actions it supports: send, reply, react, edit, delete, forward, send files | The hover bar's per-network rules |
 | Presence and typing | Per chat or contact | WhatsApp's `Typing`, `Presence` |
 | Notifications | A new message worth a notification | `Notify` |
-| Calls | Ringing, answer, decline, mute, end; video frames in and out; which cameras and screens to share | The WhatsApp and Discord call bars, voice channels |
+| Calls | Ringing, answer, decline, mute, end; video frames in and out; which cameras and screens to share; optionally **Watch a stream** | The WhatsApp and Discord call bars, Discord's Go Live |
 | Voice channels | Rooms you join and leave, with who's in them | Discord voice channels |
 | Settings | A page of fields it names (switches, choices, text), stored for it | Discord video settings |
 | Search | Contacts and chats matching a query | WhatsApp contact search, Ctrl K |
