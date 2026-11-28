@@ -91,7 +91,7 @@ Mesh-Node has no WhatsApp or Discord code.
   channels with members, Watch a stream. **Accept:** unit tests with a
   stand-in that rings, sends frames and ends; the call bar and voice
   channels drawn from blocks.
-- [ ] **Task 8: settings.** The settings block, stored per integration;
+- [x] **Task 8: settings.** The settings block, stored per integration;
   Discord's video settings move into it. **Accept:** a setting survives a
   restart and reaches the integration.
 - [ ] **Task 9: WhatsApp through the protocol.** `aflos-wa` speaks it; the
@@ -220,6 +220,11 @@ the parity list passes again.
   ringback for ours), a room's ringing can be dismissed here, and a DM
   header gets call buttons when it declares calls. The share picker is
   shared with WhatsApp's (it now takes its pick and cancel messages).
+- **Task 8:** settings are kept in `settings.json` in the integration's
+  folder (so Remove takes them too), sent in every `hello` and on each
+  change; a text setting is sent when it's submitted. They show on its
+  Accounts panel. Discord's video settings move into it with Discord
+  itself (Task 10).
 
 ## Changes while planning
 

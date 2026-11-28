@@ -439,3 +439,48 @@ fn video_tracks_are_kept_per_integration() {
     assert_eq!(calls::track_prefix(Network::Integration(7)), "int-7-");
     assert_eq!(calls::track_prefix(Network::Matrix), "");
 }
+
+#[test]
+fn settings_survive_a_restart_and_fall_back_to_their_defaults() {
+    use aflos_integration::{Setting, SettingKind};
+    let dir = std::env::temp_dir().join(format!("aflos-int-settings-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(load_settings(&dir).is_empty(), "none stored: none loaded");
+    let mut stored = BTreeMap::new();
+    stored.insert("hd".to_string(), serde_json::json!(false));
+    stored.insert("nick".to_string(), serde_json::json!("ann"));
+    save_settings(&dir, &stored).unwrap();
+    // What the next start's hello carries.
+    let back = load_settings(&dir);
+    assert_eq!(back, stored);
+    let switch = |key: &str, default| Setting {
+        key: key.into(),
+        label: key.into(),
+        help: None,
+        kind: SettingKind::Switch { default },
+    };
+    assert_eq!(
+        setting_value(Some(&back), &switch("hd", true)),
+        serde_json::json!(false),
+        "stored wins"
+    );
+    assert_eq!(
+        setting_value(Some(&back), &switch("loud", true)),
+        serde_json::json!(true),
+        "else its default"
+    );
+    let choice = Setting {
+        key: "fps".into(),
+        label: "Frame rate".into(),
+        help: None,
+        kind: SettingKind::Choice {
+            choices: vec![("30".into(), "30".into())],
+            default: "30".into(),
+        },
+    };
+    assert_eq!(setting_value(None, &choice), serde_json::json!("30"));
+    // A damaged file is ignored, not fatal.
+    std::fs::write(dir.join("settings.json"), b"{not json").unwrap();
+    assert!(load_settings(&dir).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
+}

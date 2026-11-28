@@ -89,6 +89,9 @@ pub(crate) fn panel<'a>(state: &'a App, entry: &'a Entry) -> Element<'a, Message
             } else {
                 sign_in(state, live, network)
             });
+            if let Some(page) = settings(state, entry, live) {
+                body = body.push(page);
+            }
         }
         _ => {}
     }
@@ -140,6 +143,83 @@ pub(crate) fn panel<'a>(state: &'a App, entry: &'a Entry) -> Element<'a, Message
         .width(380)
         .height(Length::Fill)
         .into()
+}
+
+/// Its settings page: a switch, a choice or a text field each.
+fn settings<'a>(state: &'a App, entry: &'a Entry, live: &'a Live) -> Option<Element<'a, Message>> {
+    use aflos_integration::SettingKind;
+    let p = &state.palette;
+    let fields = &live.hello.as_ref()?.supports.settings;
+    if fields.is_empty() {
+        return None;
+    }
+    let stored = state.integrations.settings.get(&entry.id);
+    let mut col = column![ui::section("settings", p)].spacing(10);
+    for setting in fields {
+        let value = super::setting_value(stored, setting);
+        let (id, key) = (entry.id.clone(), setting.key.clone());
+        let control: Element<'a, Message> = match &setting.kind {
+            SettingKind::Switch { .. } => {
+                let on = value.as_bool().unwrap_or(false);
+                iced::widget::toggler(on)
+                    .on_toggle(move |v| act(Act::Setting(id.clone(), key.clone(), v.into())))
+                    .into()
+            }
+            SettingKind::Choice { choices, .. } => {
+                let (accent, hover, edge) = (p.accent(), p.surface_alt(), p.border_ctrl());
+                let current = value.as_str().unwrap_or_default().to_owned();
+                let mut options = row![].spacing(4);
+                for (choice, label) in choices {
+                    let chosen = *choice == current;
+                    let pick = act(Act::Setting(id.clone(), key.clone(), choice.clone().into()));
+                    options = options.push(
+                        button(text(label.clone()).size(12).color(if chosen {
+                            p.accent_text()
+                        } else {
+                            p.text()
+                        }))
+                        .on_press(pick)
+                        .padding([4, 10])
+                        .style(move |_, status| button::Style {
+                            background: match (chosen, status) {
+                                (true, _) => Some(accent.into()),
+                                (false, button::Status::Hovered) => Some(hover.into()),
+                                _ => None,
+                            },
+                            border: iced::border::rounded(6).color(edge).width(1),
+                            ..button::Style::default()
+                        }),
+                    );
+                }
+                options.wrap().into()
+            }
+            SettingKind::Text { .. } => {
+                let typed = value.as_str().unwrap_or_default().to_owned();
+                let (id2, key2) = (id.clone(), key.clone());
+                text_input("", &typed)
+                    .on_input(move |t| act(Act::SettingDraft(id2.clone(), key2.clone(), t)))
+                    .on_submit(act(Act::Setting(id, key, typed.clone().into())))
+                    .padding([8, 10])
+                    .size(13)
+                    .into()
+            }
+        };
+        let mut item = column![
+            row![
+                ui::sans(setting.label.clone(), 13.0, Weight::Normal, p.text_bright())
+                    .width(Length::Fill),
+                control,
+            ]
+            .spacing(10)
+            .align_y(iced::Alignment::Center)
+        ]
+        .spacing(2);
+        if let Some(help) = &setting.help {
+            item = item.push(text(help.clone()).size(12).color(p.text_muted()));
+        }
+        col = col.push(item);
+    }
+    Some(col.into())
 }
 
 fn signed_in<'a>(state: &'a App, network: Network) -> Element<'a, Message> {
