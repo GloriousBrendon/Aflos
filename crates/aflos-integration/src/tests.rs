@@ -418,6 +418,7 @@ fn every_event() -> Vec<Event> {
             jpeg: s("/9j/"),
         },
         Event::VideoEnded { track: s("u1") },
+        Event::Show { chat: s("c9") },
         Event::Sources {
             cameras: vec![Source {
                 id: s("cam0"),
@@ -616,9 +617,10 @@ fn event_variant(e: &Event) -> usize {
         Event::Video { .. } => 14,
         Event::VideoEnded { .. } => 15,
         Event::Sources { .. } => 16,
+        Event::Show { .. } => 17,
     }
 }
-const EVENT_VARIANTS: usize = 17;
+const EVENT_VARIANTS: usize = 18;
 
 #[test]
 fn the_round_trip_lists_have_every_variant() {

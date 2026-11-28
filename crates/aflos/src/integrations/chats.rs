@@ -229,7 +229,6 @@ pub(crate) fn on_event(state: &mut App, network: Network, event: &Event) -> Task
                 session.timeline = timeline(network, messages);
                 let clients = Clients {
                     discord: state.discord.as_ref(),
-                    whatsapp: state.whatsapp.as_ref(),
                     mesh: state.mesh.node.as_ref(),
                     spaces: &state.mesh.spaces,
                     integrations: &state.integrations,
@@ -256,13 +255,47 @@ pub(crate) fn on_event(state: &mut App, network: Network, event: &Event) -> Task
             }
         }
         Event::Fetched { key, form, result } => return fetched(state, network, key, *form, result),
+        Event::Contacts { query, contacts } => {
+            if let Screen::LoggedIn(session) = &mut state.screen
+                && let Some(picker) = session
+                    .new_chat
+                    .as_mut()
+                    .filter(|p| p.network == network && p.query == *query)
+            {
+                picker.contacts = contacts.clone();
+            }
+        }
+        // A chat it started or joined for us: open it, as if picked.
+        Event::Show { chat } => {
+            let found = super::chat(state, network, chat).map(|c| (c.name.clone(), c.kind));
+            let (name, kind) =
+                found.unwrap_or_else(|| (chat.clone(), aflos_integration::ChatKind::Direct));
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                session.new_chat = None;
+            }
+            let open = crate::WebChat {
+                network,
+                id: chat.clone(),
+                name,
+                dm: kind == aflos_integration::ChatKind::Direct,
+            };
+            return Task::done(Message::WebChatSelected(open));
+        }
         Event::Reply {
             ok: false,
             error: Some(error),
             ..
         } => {
             if let Screen::LoggedIn(session) = &mut state.screen {
-                session.status = Some(format!("{name}: {error}"));
+                // A chat being started is waiting on this, most likely.
+                match session
+                    .new_chat
+                    .as_mut()
+                    .filter(|p| p.network == network && p.busy)
+                {
+                    Some(picker) => (picker.busy, picker.error) = (false, Some(error.clone())),
+                    None => session.status = Some(format!("{name}: {error}")),
+                }
             }
         }
         _ => {}

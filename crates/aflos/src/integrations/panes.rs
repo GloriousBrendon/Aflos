@@ -173,3 +173,106 @@ pub(crate) fn section_pane<'a>(
     .width(Length::Fill)
     .into()
 }
+
+/// Its archived Home chats: one row that opens them, then (open) the chats.
+pub(crate) fn archived<'a>(
+    session: &'a Session,
+    state: &'a App,
+    shows: impl Fn(Network) -> bool,
+    p: &theme::Palette,
+    l: &theme::Layout,
+) -> Vec<Element<'a, Message>> {
+    let mut chats = Vec::new();
+    for (_, live, network) in state.integrations.ready() {
+        if live.state == Some(State::Online) && shows(network) {
+            let home = live
+                .chats
+                .sections
+                .iter()
+                .filter(|s| s.home)
+                .flat_map(|s| &s.chats);
+            chats.extend(home.filter(|c| c.archived).map(|c| (network, c)));
+        }
+    }
+    if chats.is_empty() {
+        return Vec::new();
+    }
+    let unread: u64 = chats.iter().map(|(_, c)| c.unread).sum();
+    let arrow = if session.show_archived { "▾" } else { "▸" };
+    let mut line = row![
+        ui::sans(
+            format!("Archived ({})", chats.len()),
+            14.0,
+            Weight::Normal,
+            p.text()
+        )
+        .width(Length::Fill)
+    ]
+    .spacing(8)
+    .align_y(iced::Alignment::Center);
+    if unread > 0 {
+        line = line.push(ui::chip(unread.to_string(), p));
+    }
+    let line = line.push(ui::mono(arrow, 12.0, p.text_muted()));
+    let mut rows =
+        vec![ui::row_button(line, Message::ToggleArchived, session.show_archived, p, l).into()];
+    if session.show_archived {
+        chats.sort_by_key(|(_, c)| std::cmp::Reverse(c.last_ms));
+        rows.extend(
+            chats
+                .into_iter()
+                .map(|(network, chat)| row_for(session, network, chat, p, l)),
+        );
+    }
+    rows
+}
+
+/// The open chat's Archive and Delete, when its integration takes them.
+pub(crate) fn chat_actions<'a>(
+    session: &Session,
+    state: &App,
+    channel: &WebChat,
+    p: &'a theme::Palette,
+) -> Vec<Element<'a, Message>> {
+    let network = channel.network;
+    let Some((_, live)) = state.integrations.by_network(network) else {
+        return Vec::new();
+    };
+    let can = |a: Action| {
+        live.hello
+            .as_ref()
+            .is_some_and(|h| h.supports.actions.contains(&a))
+    };
+    let flat = |label: &'static str, color: iced::Color, press: Message| -> Element<'a, Message> {
+        iced::widget::button(iced::widget::text(label).size(12).color(color))
+            .on_press(press)
+            .padding([4, 10])
+            .style(crate::flat_button_style(p))
+            .into()
+    };
+    if session.confirm_delete.as_deref() == Some(channel.id.as_str()) {
+        return vec![
+            ui::mono("delete this chat?", 11.0, p.danger()).into(),
+            flat("Delete", p.danger(), Message::ChatDeleteConfirm),
+            flat("Cancel", p.text(), Message::ChatDeleteCancel),
+        ];
+    }
+    let mut actions = Vec::new();
+    if can(Action::Archive) {
+        let archived = super::chat(state, network, &channel.id).is_some_and(|c| c.archived);
+        let press = Message::ChatArchive(network, channel.id.clone(), !archived);
+        actions.push(flat(
+            if archived { "Unarchive" } else { "Archive" },
+            p.text(),
+            press,
+        ));
+    }
+    if can(Action::DeleteChat) {
+        actions.push(flat(
+            "Delete",
+            p.text_muted(),
+            Message::ChatDeleteAsk(channel.id.clone()),
+        ));
+    }
+    actions
+}

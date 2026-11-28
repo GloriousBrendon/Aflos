@@ -83,15 +83,6 @@ pub(crate) fn link(state: &App, network: Network) -> Link {
             (None, None) if state.discord_native.is_some() => Link::Connecting,
             (None, None) => Link::Offline,
         },
-        Network::WhatsApp => match (&state.whatsapp_state, &state.whatsapp) {
-            (Some(snapshot), _) => Link::Linked {
-                name: phone(&snapshot.me),
-                meta: count(snapshot.chats.len() + snapshot.archived.len(), "chat"),
-            },
-            (None, Some(_)) if state.login_qr.contains_key("wa") => Link::SignedOut,
-            (None, Some(_)) => Link::Connecting,
-            (None, None) => Link::Offline,
-        },
         Network::Integration(_) => match state.integrations.by_network(network) {
             Some((_, live)) => match live.state {
                 Some(aflos_integration::State::Online) => Link::Linked {
@@ -125,11 +116,6 @@ fn count(n: usize, what: &str) -> String {
     format!("{n} {what}{}", if n == 1 { "" } else { "s" })
 }
 
-/// `27821234567@c.us` → `+27821234567`.
-fn phone(id: &str) -> String {
-    let digits: String = id.split(['@', ':']).next().unwrap_or_default().chars().filter(char::is_ascii_digit).collect();
-    if digits.is_empty() { id.to_string() } else { format!("+{digits}") }
-}
 
 /// Whether a step-2 switch is on: `sync_off` holds `<network id>:<key>`.
 pub(crate) fn synced(state: &App, network: Network, key: &str) -> bool {
@@ -175,10 +161,6 @@ pub(crate) fn shown_discord(state: &App) -> Option<&aflos_discord::Snapshot> {
     if all_synced(state, Network::Discord) { state.discord_state.as_ref() } else { state.discord_shown.as_ref() }
 }
 
-pub(crate) fn shown_whatsapp(state: &App) -> Option<&whatsapp::Snapshot> {
-    if all_synced(state, Network::WhatsApp) { state.whatsapp_state.as_ref() } else { state.whatsapp_shown.as_ref() }
-}
-
 /// Rebuilds the filtered snapshots, after a new snapshot or a switch flips.
 pub(crate) fn refresh_shown(state: &mut App) {
     let (dms, servers) = (synced(state, Network::Discord, "dms"), synced(state, Network::Discord, "servers"));
@@ -189,13 +171,6 @@ pub(crate) fn refresh_shown(state: &mut App) {
         if !servers {
             shown.guilds.clear();
         }
-        shown
-    });
-    let (chats, groups) = (synced(state, Network::WhatsApp, "chats"), synced(state, Network::WhatsApp, "groups"));
-    state.whatsapp_shown = state.whatsapp_state.clone().filter(|_| !(chats && groups)).map(|mut shown| {
-        let keep = |c: &whatsapp::Chat| if c.group { groups } else { chats };
-        shown.chats.retain(keep);
-        shown.archived.retain(keep);
         shown
     });
 }
@@ -219,9 +194,6 @@ pub(crate) fn start_link(state: &App, network: Network) -> Result<(), String> {
         return Ok(());
     };
     // The native helpers are always up and show their QR code when unlinked.
-    if network == Network::WhatsApp && state.whatsapp_native.is_some() {
-        return Ok(());
-    }
     if network == Network::Discord && state.discord_native.is_some() {
         return Ok(());
     }
@@ -848,16 +820,4 @@ fn manage<'a>(
             .color(p.text_muted()),
         )
         .into()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn phone_numbers() {
-        assert_eq!(phone("27821234567@c.us"), "+27821234567");
-        assert_eq!(phone("27821234567:12@s.whatsapp.net"), "+27821234567");
-        assert_eq!(phone("someone"), "someone");
-    }
 }

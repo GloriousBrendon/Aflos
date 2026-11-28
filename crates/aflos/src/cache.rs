@@ -64,14 +64,6 @@ pub fn file(key: &str) -> Option<PathBuf> {
         .find(|p| p.file_name().and_then(|n| n.to_str()).is_some_and(|n| n.starts_with(&prefix)))
 }
 
-pub fn put_file(key: &str, filename: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
-    let dir = Kind::Media.dir();
-    std::fs::create_dir_all(&dir)?;
-    let path = dir.join(format!("{}-{filename}", name(key)));
-    std::fs::write(&path, bytes)?;
-    Ok(path)
-}
-
 /// Deletes files past their kind's age. Run once at startup.
 pub fn prune() {
     for kind in [Kind::Avatar, Kind::Media] {

@@ -33,7 +33,7 @@ use aflos_core::{
     MediaRef, MessageKind, Network, OwnedEventId, PendingContact, RoomSummary, SasEmoji, SpaceGroup, TimelineMessage,
     group_by_space,
 };
-use aflos_discord::{mesh, whatsapp};
+use aflos_discord::mesh;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -111,9 +111,6 @@ struct App {
     discord_socket: Option<PathBuf>,
     /// Command that starts it (`discord_engine_command`).
     discord_command: Option<String>,
-    /// The native WhatsApp helper beside Aflos's own binary, when it's there;
-    /// WhatsApp then runs in it instead of the engine browser.
-    whatsapp_native: Option<PathBuf>,
     /// The native Discord helper (`aflos-dc`) beside Aflos's own binary, when it's
     /// there; Discord then runs in it instead of the engine browser.
     discord_native: Option<PathBuf>,
@@ -131,16 +128,11 @@ struct App {
     discord: Option<aflos_discord::Engine>,
     /// Its latest voice state.
     discord_state: Option<aflos_discord::Snapshot>,
-    /// WhatsApp Web in the same engine browser: a handle while connected, and
-    /// its chat list.
-    whatsapp: Option<whatsapp::Engine>,
-    whatsapp_state: Option<whatsapp::Snapshot>,
     /// Each signed-out engine site's current QR code, by network id.
     login_qr: HashMap<&'static str, accounts::LoginQr>,
     /// The engine snapshots less what the sync switches leave out, while
     /// any are off (`accounts::refresh_shown`).
     discord_shown: Option<aflos_discord::Snapshot>,
-    whatsapp_shown: Option<whatsapp::Snapshot>,
     /// Networks that have been linked (so a sign-out elsewhere reads as
     /// "needs relink"), and the sync switches that are off (`wa:groups`).
     linked: Vec<String>,
@@ -155,16 +147,8 @@ struct App {
     integrations: integrations::Integrations,
     /// Check for updates: where it's got to.
     update: Updating,
-    /// WhatsApp's call, while there is one.
-    wa_call: Option<whatsapp::Call>,
-    /// Who's typing in each WhatsApp chat, by name.
-    wa_typing: HashMap<String, Vec<String>>,
-    /// WhatsApp contacts' online state and last seen (ms), for the open chat's header.
-    wa_presence: HashMap<String, (bool, Option<u64>)>,
-    /// The WhatsApp chat we last said we're typing in, and when (sent once every 5 s).
-    wa_typed: Option<(String, std::time::Instant)>,
-    /// The share picker in WhatsApp's call bar: `Some(empty)` while it loads.
-    wa_share: Option<Vec<ShareChoice>>,
+    /// The chat we last said we're typing in, and when (sent once every 5 s).
+    typed: Option<(String, std::time::Instant)>,
     /// Whether Aflos's window has focus (no notifications for the chat in view).
     window_focused: bool,
     /// Theme source files and their last-seen mtimes, polled for hot reload.
@@ -204,12 +188,15 @@ pub(crate) struct LoginForm {
     pub error: Option<String>,
 }
 
-/// The new WhatsApp chat picker: a name to search contacts, or a number.
+/// The new chat picker for an integration: a name to search its contacts,
+/// or a number.
 #[derive(Default)]
 struct NewChat {
+    /// The integration it starts a chat on.
+    network: Network,
     query: String,
-    contacts: Vec<whatsapp::Contact>,
-    /// Waiting for WhatsApp to open the chat.
+    contacts: Vec<aflos_integration::Contact>,
+    /// Waiting for it to open the chat.
     busy: bool,
     error: Option<String>,
 }
@@ -341,9 +328,6 @@ struct Session {
     active_guild: Option<String>,
     /// The Aflos Space (SPEC-spaces) shown in the channel pane instead.
     active_mesh_space: Option<String>,
-    /// Showing the WhatsApp groups list (its own pane, off the rail) instead
-    /// of Home/a space/a guild.
-    active_wa_groups: bool,
     /// An integration's section open in the channel pane (a server, its
     /// groups): its network and the section's id.
     active_section: Option<(Network, String)>,
@@ -383,14 +367,12 @@ struct Session {
     player: Option<Player>,
     /// Voice note speed: 1, 1.5 or 2.
     voice_speed: f32,
-    /// The new WhatsApp chat picker, while open.
+    /// The new chat picker, while open.
     new_chat: Option<NewChat>,
-    /// Archived WhatsApp chats are listed (under Home).
+    /// Archived chats are listed (under Home).
     show_archived: bool,
-    /// The WhatsApp chat whose Delete is waiting for a yes.
+    /// The integration chat whose Delete is waiting for a yes.
     confirm_delete: Option<String>,
-    /// The WhatsApp chat being deleted (closed once it's gone).
-    deleting: Option<String>,
     /// The Discord text channel or DM shown in the chat pane (through the
     /// hidden client) instead of `selected_room`.
     web_chat: Option<WebChat>,
@@ -546,7 +528,6 @@ impl Session {
             active_space: None,
             active_guild: None,
             active_mesh_space: None,
-            active_wa_groups: false,
             active_section: None,
             folders_open: [true; 4],
             folders_closed: Vec::new(),
@@ -569,7 +550,6 @@ impl Session {
             new_chat: None,
             show_archived: false,
             confirm_delete: None,
-            deleting: None,
             web_chat: None,
             mesh_mine: Default::default(),
             int_actions: HashMap::new(),
@@ -792,7 +772,6 @@ macro_rules! clients {
     ($state:expr) => {
         Clients {
             discord: $state.discord.as_ref(),
-            whatsapp: $state.whatsapp.as_ref(),
             mesh: $state.mesh.node.as_ref(),
             spaces: &$state.mesh.spaces,
             integrations: &$state.integrations,
@@ -804,7 +783,6 @@ macro_rules! clients {
 /// Built from `App`'s fields, so it can sit beside a `&mut` session.
 struct Clients<'a> {
     discord: Option<&'a aflos_discord::Engine>,
-    whatsapp: Option<&'a whatsapp::Engine>,
     mesh: Option<&'a mesh::Node>,
     /// For a channel's mentions.
     spaces: &'a [mesh::Space],
@@ -817,7 +795,6 @@ impl Clients<'_> {
     fn open(&self, chat: &WebChat) -> bool {
         match chat.network {
             Network::Discord => self.discord.map(|e| e.open_channel(&chat.id)).is_some(),
-            Network::WhatsApp => self.whatsapp.map(|e| e.open_chat(&chat.id)).is_some(),
             Network::Mesh => self.mesh.map(|n| mesh_spaces::open(n, &chat.id)).is_some(),
             Network::Integration(_) => {
                 let open = aflos_integration::Cmd::Open {
@@ -831,7 +808,6 @@ impl Clients<'_> {
     fn close(&self, chat: &WebChat) {
         match chat.network {
             Network::Discord => self.discord.map(aflos_discord::Engine::close_channel),
-            Network::WhatsApp => self.whatsapp.map(whatsapp::Engine::close_chat),
             Network::Integration(_) => self
                 .integrations
                 .send(chat.network, aflos_integration::Cmd::Open { chat: None })
@@ -844,7 +820,6 @@ impl Clients<'_> {
     fn send(&self, chat: &WebChat, text: &str, reply_to: Option<&str>) -> bool {
         match chat.network {
             Network::Discord => self.discord.map(|e| e.send_message(&chat.id, text)).is_some(),
-            Network::WhatsApp => self.whatsapp.map(|e| e.send_message(&chat.id, text, reply_to)).is_some(),
             Network::Mesh => self.mesh.map(|n| mesh_spaces::send(n, self.spaces, &chat.id, text, reply_to)).is_some(),
             Network::Integration(_) => {
                 let send = aflos_integration::Cmd::Send {
@@ -869,126 +844,10 @@ impl Clients<'_> {
             }
         } else if url.starts_with("int:") {
             integrations::chats::fetch(self, url);
-        } else if url.starts_with("wa-") || url.contains(".whatsapp.net/") {
-            self.whatsapp.map(|e| e.fetch_media(url));
         } else {
             self.discord.map(|e| e.fetch_media(url));
         }
     }
-}
-
-/// Our WhatsApp messages, and their delivery marks (WhatsApp's ticks).
-fn whatsapp_marks(
-    messages: &whatsapp::Messages,
-    me: &str,
-) -> (std::collections::HashSet<String>, HashMap<String, String>) {
-    let ours: Vec<&whatsapp::Message> = messages
-        .messages
-        .iter()
-        .filter(|m| m.author_id == me)
-        .collect();
-    let marks = ours
-        .iter()
-        .filter_map(|m| {
-            let mark = match m.ack {
-                1 => "✓ sent",
-                2 => "✓✓ delivered",
-                3 => "✓✓ read",
-                _ => return None,
-            };
-            Some((m.id.clone(), mark.to_string()))
-        })
-        .collect();
-    (ours.iter().map(|m| m.id.clone()).collect(), marks)
-}
-
-/// WhatsApp messages as timeline rows, like `discord_timeline` (photos are
-/// decrypted in WhatsApp's tab, fetched by `load_web_media`). ponytail: made-up
-/// `@wa_<number>:whatsapp.net` user ids; voice notes, video and documents
-/// show as labels.
-fn whatsapp_timeline(messages: whatsapp::Messages) -> Vec<TimelineMessage> {
-    let mut timeline = Vec::new();
-    for m in messages.messages {
-        let number: String = m.author_id.split(['@', ':']).next().unwrap_or_default().chars().filter(char::is_ascii_alphanumeric).collect();
-        let Ok(sender) = OwnedUserId::try_from(format!("@wa_{number}:whatsapp.net")) else {
-            continue;
-        };
-        let row = |body: String, kind| TimelineMessage {
-            event_id: None,
-            sender: sender.clone(),
-            sender_name: m.author.clone(),
-            sender_avatar: m.avatar.clone().map(MediaRef::web),
-            sender_network: Network::WhatsApp,
-            body,
-            kind,
-            reactions: Vec::new(),
-            timestamp_ms: m.timestamp_ms,
-            web_id: Some(m.id.clone()),
-            reply_to: None,
-            forwarded: m.forwarded,
-        };
-        let first = timeline.len();
-        if m.system {
-            timeline.push(row(format!("{} {}", m.author, m.content), MessageKind::System));
-            continue;
-        }
-        if let Some(image) = &m.image {
-            // Stickers come down 160 px wide; draw them at that size.
-            let (width, height, label) = if image.sticker {
-                let scale = |v: Option<u64>| v.map(|v| v * 160 / image.width.unwrap_or(160).max(1));
-                (Some(160), scale(image.height), "sticker")
-            } else {
-                (image.width, image.height, if image.gif { "GIF" } else { "photo" })
-            };
-            // A GIF plays from its frames; a photo has a bigger copy for full screen.
-            let (media, full) = if image.gif {
-                (whatsapp::gif_url(&m.id), None)
-            } else {
-                (whatsapp::image_url(&m.id), (!image.sticker).then(|| MediaRef::web(whatsapp::big_url(&m.id))))
-            };
-            let info = aflos_core::ImageInfo { media: MediaRef::web(media), width, height, size: None, full };
-            timeline.push(row(label.to_string(), MessageKind::Image(info)));
-        }
-        if let Some(f) = &m.file {
-            let info = aflos_core::FileInfo {
-                media: MediaRef::web(whatsapp::file_url(&m.id)),
-                name: f.name.clone(),
-                kind: f.kind.clone(),
-                size: f.size,
-                duration: f.duration,
-                waveform: f.waveform.clone(),
-                // Filled into `images` from the message as it arrives.
-                thumbnail: f.thumb.as_ref().map(|_| aflos_core::ImageInfo {
-                    media: MediaRef::web(format!("wa-thumb:{}", m.id)),
-                    width: f.width,
-                    height: f.height,
-                    size: None,
-                    full: None,
-                }),
-            };
-            timeline.push(row(f.name.clone(), MessageKind::File(info)));
-        }
-        if !m.content.is_empty() {
-            timeline.push(row(m.content.clone(), MessageKind::Text));
-        }
-        // A message can take several rows (photo, then caption): the quote
-        // goes above the first, the reactions under the last.
-        if let Some(q) = &m.quote
-            && let Some(row) = timeline.get_mut(first)
-        {
-            row.reply_to = Some(aflos_core::Quote { author: q.author.clone(), text: q.text.clone() });
-        }
-        if timeline.len() > first
-            && let Some(row) = timeline.last_mut()
-        {
-            row.reactions = m
-                .reactions
-                .iter()
-                .map(|r| aflos_core::Reaction { key: r.key.clone(), count: r.count as usize, mine: None, by_me: r.mine })
-                .collect();
-        }
-    }
-    timeline
 }
 
 /// Discord messages as timeline rows, so the Matrix timeline view draws them:
@@ -1306,11 +1165,9 @@ fn wants(map: &mut HashMap<String, Option<iced::widget::image::Handle>>, kind: c
 }
 
 /// Where a bigger copy of a profile picture comes from: Discord's CDN takes a
-/// size, WhatsApp looks the full one up (`wa-pic:`). Matrix: just the small one.
+/// size. Matrix: just the small one.
 fn full_avatar(url: &str) -> Option<String> {
-    if url.contains(".whatsapp.net/") {
-        Some(format!("wa-pic:{url}"))
-    } else if url.starts_with("https://cdn.discordapp.com/") {
+    if url.starts_with("https://cdn.discordapp.com/") {
         Some(url.replace("size=64", "size=1024"))
     } else {
         None
@@ -1515,7 +1372,6 @@ enum Message {
     ReactionDone(Result<(), String>),
     OpenSettings(SettingsPage),
     Discord(aflos_discord::Event),
-    WhatsApp(whatsapp::Event),
     Mesh(mesh::Event),
     MeshForm(mesh_ui::Msg),
     MeshSpace(mesh_spaces::Msg),
@@ -1546,18 +1402,6 @@ enum Message {
     ToggleScreenShare,
     /// Watch (true) or stop watching someone's screen share, by their id.
     WatchStream(String, bool),
-    /// Call the open WhatsApp chat (with our camera on if true).
-    WaCallStart(bool),
-    /// Answer WhatsApp's ringing call (with our camera on if true).
-    WaCallAccept(bool),
-    WaCallDecline,
-    WaCallEnd,
-    WaCallMute,
-    WaCallCamera,
-    WaCallScreen,
-    /// Share this screen or window (its source id) in the WhatsApp call.
-    WaSharePick(String),
-    WaShareCancel,
     /// Drop video from cameras that stopped sending.
     VideoPrune,
     /// An integration started, or reported something.
@@ -1583,8 +1427,6 @@ enum Message {
     MeshSpaceMute(String, bool),
     /// Expand or collapse a rail folder.
     ToggleFolder(Network),
-    /// Show the WhatsApp groups list.
-    ShowWhatsAppGroups,
     HomeFilter(Option<Network>),
     /// Start the hidden Discord client with `discord_engine_command`.
     StartDiscord,
@@ -1672,19 +1514,19 @@ enum Message {
     /// Show an image full screen: (its media key, a bigger copy's key).
     OpenImage(String, Option<String>),
     CloseLightbox,
-    /// Open the new WhatsApp chat picker.
-    NewChatOpen,
+    /// Open the new chat picker for an integration.
+    NewChatOpen(Network),
     NewChatQuery(String),
     /// Open the chat with this contact id or phone number.
     NewChatStart(String),
-    /// Show or hide archived WhatsApp chats.
+    /// Show or hide archived chats.
     ToggleArchived,
-    /// Archive (true) or unarchive a WhatsApp chat.
-    WaArchive(String, bool),
-    /// Ask before deleting a WhatsApp chat, then do or don't.
-    WaDeleteAsk(String),
-    WaDeleteConfirm,
-    WaDeleteCancel,
+    /// Archive (true) or unarchive an integration's chat.
+    ChatArchive(Network, String, bool),
+    /// Ask before deleting an integration's chat, then do or don't.
+    ChatDeleteAsk(String),
+    ChatDeleteConfirm,
+    ChatDeleteCancel,
     /// Open the forward picker for a web message.
     ForwardStart(String),
     ForwardQuery(String),
@@ -1744,7 +1586,6 @@ fn boot() -> (App, Task<Message>) {
     let iced_theme = palette.to_iced_theme();
     let theme_files = theme::watched_files(&theme_choice, &theme_path());
 
-    let whatsapp_native = whatsapp_native();
     let discord_native = discord_native();
     let mesh_node = mesh_node();
     let screen = Screen::Booting;
@@ -1767,7 +1608,6 @@ fn boot() -> (App, Task<Message>) {
         theme_reloaded: Local::now().format("%H:%M").to_string(),
         discord_socket: discord_socket(&config),
         discord_command: config.discord_engine_command.clone(),
-        whatsapp_native: whatsapp_native.clone(),
         discord_native,
         discord_native_wrapper: config.discord_native_wrapper.clone().unwrap_or_default(),
         dc_sign_in: accounts::DcSignIn::default(),
@@ -1776,23 +1616,18 @@ fn boot() -> (App, Task<Message>) {
         dc_ring_dismissed: Vec::new(),
         discord: None,
         discord_state: None,
-        whatsapp: None,
-        whatsapp_state: None,
         login_qr: HashMap::new(),
         discord_shown: None,
-        whatsapp_shown: None,
         linked: config.linked.clone(),
         sync_off: config.sync_off.clone(),
         accounts: accounts::Panel::default(),
         video: HashMap::new(),
         video_big: false,
-        integrations: integrations::Integrations::new(config.integrations.clone()),
+        integrations: integrations::Integrations::new(integrations::with_bundled(
+            config.integrations.clone(),
+        )),
         update: Updating::Idle,
-        wa_call: None,
-        wa_typing: HashMap::new(),
-        wa_presence: HashMap::new(),
-        wa_typed: None,
-        wa_share: None,
+        typed: None,
         window_focused: true,
         theme_stamps: theme::stamps(&theme_files),
         theme_files,
@@ -1827,7 +1662,7 @@ fn boot() -> (App, Task<Message>) {
 /// helpers don't replace them.
 fn start_engine() {
     let config = theme::load_config(&config_path());
-    let (whatsapp_native, discord_native) = (whatsapp_native(), discord_native());
+    let discord_native = discord_native();
     // Start the hidden Discord client (once) if it isn't running yet, unless the
     // native helper has replaced it.
     if discord_native.is_none()
@@ -1844,7 +1679,6 @@ fn start_engine() {
             .linked
             .iter()
             .filter_map(|id| aflos_core::networks::spec(id))
-            .filter(|spec| !(spec.id == "wa" && whatsapp_native.is_some()))
             .filter(|spec| !(spec.id == "dc" && discord_native.is_some()))
             .filter_map(|spec| Some((spec.engine?, spec.login_url?)))
             .collect();
@@ -2060,7 +1894,6 @@ fn wanted_ring(state: &App) -> Option<sounds::Sound> {
         Screen::LoggedIn(session) => session.call.as_ref().map(|c| &c.state),
         _ => None,
     };
-    let whatsapp = state.wa_call.as_ref().map(|c| c.phase.as_str());
     let discord = state.discord_state.as_ref().is_some_and(|d| d.ringing.iter().any(|r| !state.dc_ring_dismissed.contains(&r.channel_id)));
     let integration = integrations::calls::ring(&state.integrations);
     if let Some(mesh) = mesh_calls::ring(state) {
@@ -2071,12 +1904,7 @@ fn wanted_ring(state: &App) -> Option<sounds::Sound> {
         Some(Sound::Ring(Network::Matrix))
     } else if discord {
         Some(Sound::Ring(Network::Discord))
-    } else if whatsapp == Some("incoming") {
-        Some(Sound::Ring(Network::WhatsApp))
-    } else if matrix == Some(&CallUiState::OutgoingRinging)
-        || whatsapp == Some("outgoing")
-        || integration.is_some()
-    {
+    } else if matrix == Some(&CallUiState::OutgoingRinging) || integration.is_some() {
         Some(Sound::Ringback)
     } else {
         None
@@ -2501,19 +2329,18 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         }
         Message::WindowFocused(focused) => {
             state.window_focused = focused;
-            // Away from Aflos, WhatsApp sees us offline and new messages stay unread
-            // (blue ticks only once you look); back, the chat opens (and reads) again.
-            if let (Screen::LoggedIn(session), Some(engine)) = (&state.screen, &state.whatsapp)
+            // Away from Aflos, an integration's chat closes, so new messages stay
+            // unread (read marks only once you look); back, it opens (and reads) again.
+            if let Screen::LoggedIn(session) = &state.screen
                 && let Some(chat) = session
                     .web_chat
                     .as_ref()
-                    .filter(|c| c.network == Network::WhatsApp)
+                    .filter(|c| matches!(c.network, Network::Integration(_)))
             {
-                if focused {
-                    engine.open_chat(&chat.id);
-                } else {
-                    engine.close_chat();
-                }
+                let open = aflos_integration::Cmd::Open {
+                    chat: focused.then(|| chat.id.clone()),
+                };
+                state.integrations.send(chat.network, open);
             }
             // Push-to-talk only while Aflos is focused: leaving lets go.
             if !focused {
@@ -2539,7 +2366,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                             .is_some_and(|a| a.contains(&aflos_integration::Action::Typing))
                     })
                     && !state
-                        .wa_typed
+                        .typed
                         .as_ref()
                         .is_some_and(|(id, at)| *id == chat.id && at.elapsed().as_secs() < 5)
                 {
@@ -2548,24 +2375,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                         on: true,
                     };
                     state.integrations.send(chat.network, typing);
-                    state.wa_typed = Some((chat.id.clone(), std::time::Instant::now()));
-                }
-                // WhatsApp too, at most every 5 s (it shows "typing…" for a while after each).
-                if action.is_edit()
-                    && let (Some(chat), Some(engine)) = (
-                        session
-                            .web_chat
-                            .as_ref()
-                            .filter(|c| c.network == Network::WhatsApp),
-                        &state.whatsapp,
-                    )
-                    && !state
-                        .wa_typed
-                        .as_ref()
-                        .is_some_and(|(id, at)| *id == chat.id && at.elapsed().as_secs() < 5)
-                {
-                    engine.typing(&chat.id, true);
-                    state.wa_typed = Some((chat.id.clone(), std::time::Instant::now()));
+                    state.typed = Some((chat.id.clone(), std::time::Instant::now()));
                 }
                 session.message_draft.perform(action);
             }
@@ -2808,49 +2618,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::WaCallStart(video) => {
-            if let (Some(engine), Screen::LoggedIn(session)) = (&state.whatsapp, &state.screen)
-                && let Some(chat) = session.web_chat.as_ref().filter(|c| c.network == Network::WhatsApp)
-            {
-                engine.call_start(&chat.id, video);
-            }
-            Task::none()
-        }
-        Message::WaCallAccept(video) => {
-            if let Some(engine) = &state.whatsapp {
-                engine.call_accept(video);
-            }
-            Task::none()
-        }
-        Message::WaCallDecline | Message::WaCallEnd | Message::WaCallMute | Message::WaCallCamera | Message::WaCallScreen => {
-            if let (Some(engine), Some(call)) = (&state.whatsapp, &state.wa_call) {
-                match message {
-                    Message::WaCallDecline => engine.call_decline(),
-                    Message::WaCallEnd => engine.call_end(),
-                    Message::WaCallMute => engine.call_mute(!call.muted),
-                    // The native helper shares what's picked in Aflos; the
-                    // engine tab asks with Edge's own picker.
-                    Message::WaCallScreen if !call.screen && state.whatsapp_native.is_some() => {
-                        engine.list_sources();
-                        state.wa_share = Some(Vec::new());
-                    }
-                    Message::WaCallScreen => engine.call_screen(!call.screen),
-                    _ => engine.call_camera(!call.camera),
-                }
-            }
-            Task::none()
-        }
-        Message::WaSharePick(id) => {
-            if let Some(engine) = &state.whatsapp {
-                engine.call_screen_source(&id);
-            }
-            state.wa_share = None;
-            Task::none()
-        }
-        Message::WaShareCancel => {
-            state.wa_share = None;
-            Task::none()
-        }
         Message::ToggleScreenShare => {
             if let (Some(engine), Some(snapshot)) = (&state.discord, &state.discord_state) {
                 engine.share_screen(!snapshot.voice.self_stream);
@@ -2885,7 +2652,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_space = None;
                 session.active_guild = None;
                 session.active_mesh_space = None;
-                session.active_wa_groups = false;
                 session.active_section = Some((network, section));
             }
             Task::none()
@@ -3072,260 +2838,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                             Invite::Failed { error } => (format!("✗ {error}"), true),
                         });
                     }
-                }
-            }
-            Task::none()
-        }
-        Message::WhatsApp(event) => {
-            match event {
-                whatsapp::Event::Connected(engine) => {
-                    if let Screen::LoggedIn(session) = &state.screen
-                        && let Some(chat) = session.web_chat.as_ref().filter(|c| c.network == Network::WhatsApp)
-                    {
-                        engine.open_chat(&chat.id);
-                    }
-                    state.whatsapp = Some(engine);
-                }
-                whatsapp::Event::Snapshot(snapshot) => {
-                    if let Screen::LoggedIn(session) = &mut state.screen
-                        && let Some(engine) = &state.whatsapp
-                    {
-                        for url in snapshot.chats.iter().chain(&snapshot.archived).filter_map(|c| c.avatar.as_ref()) {
-                            if wants(&mut session.avatars, cache::Kind::Avatar, url) {
-                                engine.fetch_media(url);
-                            }
-                        }
-                    }
-                    state.login_qr.remove("wa");
-                    accounts::remember_linked(state, Network::WhatsApp);
-                    state.whatsapp_state = Some(snapshot);
-                    accounts::refresh_shown(state);
-                }
-                whatsapp::Event::Sources(sources) => {
-                    // Only while the picker's open: a late answer after Cancel is dropped.
-                    if state.wa_share.is_some() {
-                        state.wa_share = Some(sources.sources.iter().map(ShareChoice::from).collect());
-                    }
-                }
-                whatsapp::Event::Qr(qr) => {
-                    state.login_qr.insert("wa", qr.into());
-                }
-                whatsapp::Event::Call(Ok(call)) => {
-                    let call = call.filter(|c| c.phase != "ended");
-                    if call.as_ref().is_none_or(|c| c.screen) {
-                        state.wa_share = None;
-                    }
-                    let ringing = |c: &Option<whatsapp::Call>| c.as_ref().is_some_and(|c| c.phase == "incoming");
-                    if ringing(&call) && !ringing(&state.wa_call)
-                        && let Some(c) = &call
-                    {
-                        let kind = if c.video { "video call" } else { "call" };
-                        notify(format!("WhatsApp {kind}"), format!("{} is calling", c.name));
-                    }
-                    if call.is_none() {
-                        state.video.retain(|id, _| !id.starts_with("wa-"));
-                    }
-                    let sharing = |c: &Option<whatsapp::Call>| c.as_ref().is_some_and(|c| c.screen);
-                    let shared = sharing(&call) && !sharing(&state.wa_call);
-                    state.wa_call = call;
-                    // The share picker came up in WhatsApp's window; once
-                    // something's picked, Aflos goes back in front of it.
-                    if shared {
-                        return iced::window::latest().and_then(iced::window::gain_focus);
-                    }
-                }
-                whatsapp::Event::Call(Err(error)) => {
-                    if let Screen::LoggedIn(session) = &mut state.screen {
-                        session.status = Some(format!("WhatsApp: {error}"));
-                    }
-                }
-                whatsapp::Event::Video(aflos_discord::Video::Frame { id, local, width, height, rgba }) => {
-                    let frame = iced::widget::image::Handle::from_rgba(width, height, rgba);
-                    state.video.insert(id, VideoTile { frame, local, at: std::time::Instant::now(), label: None });
-                }
-                whatsapp::Event::Video(aflos_discord::Video::Ended { id }) => {
-                    state.video.remove(&id);
-                }
-                whatsapp::Event::Messages(messages) => {
-                    if let Screen::LoggedIn(session) = &mut state.screen
-                        && session.web_chat.as_ref().is_some_and(|c| c.network == Network::WhatsApp && c.id == messages.chat_id)
-                    {
-                        for m in &messages.messages {
-                            let key = format!("wa-thumb:{}", m.id);
-                            if !session.images.contains_key(&key)
-                                && let Some(jpeg) =
-                                    m.file.as_ref().and_then(whatsapp::FileMeta::thumbnail)
-                            {
-                                session.images.insert(
-                                    key,
-                                    Some(iced::widget::image::Handle::from_bytes(jpeg)),
-                                );
-                            }
-                        }
-                        let me = state
-                            .whatsapp_state
-                            .as_ref()
-                            .map(|w| w.me.as_str())
-                            .unwrap_or_default();
-                        (session.mesh_mine, session.web_marks) = whatsapp_marks(&messages, me);
-                        session.timeline = whatsapp_timeline(messages);
-                        load_web_media(session, &clients!(state));
-                    }
-                }
-                whatsapp::Event::Media { url, bytes } => return web_media_loaded(state, url, bytes),
-                whatsapp::Event::Notify(n) => {
-                    let open = match &state.screen {
-                        Screen::LoggedIn(session) => session.web_chat.as_ref().is_some_and(|c| c.id == n.chat_id),
-                        _ => false,
-                    };
-                    // Their message ends their "typing…"; archived chats stay quiet.
-                    state.wa_typing.remove(&n.chat_id);
-                    let archived = state
-                        .whatsapp_state
-                        .as_ref()
-                        .is_some_and(|w| w.archived.iter().any(|c| c.id == n.chat_id));
-                    if !(state.window_focused && open) && !archived {
-                        sounds::play(
-                            sounds::Sound::Message(Network::WhatsApp),
-                            &state.sounds,
-                            speaker(state),
-                        );
-                        notify(n.title, n.body);
-                    }
-                }
-                whatsapp::Event::Sent { result, .. } => {
-                    return update(state, Message::AttachmentSent(result));
-                }
-                whatsapp::Event::Typing(t) => {
-                    let names = state.wa_typing.entry(t.chat_id).or_default();
-                    names.retain(|n| *n != t.who);
-                    if t.typing {
-                        names.push(t.who);
-                    }
-                }
-                whatsapp::Event::Presence(p) => {
-                    state.wa_presence.insert(p.id, (p.online, p.last_seen));
-                }
-                whatsapp::Event::File {
-                    id,
-                    filename,
-                    bytes,
-                } => {
-                    // Kept for the day, so opening it again skips the download.
-                    let outcome = bytes.and_then(|data| {
-                        let path = cache::put_file(
-                            &whatsapp::file_url(&id),
-                            &safe_filename(&filename),
-                            &data,
-                        )
-                        .map_err(|e| e.to_string())?;
-                        open_url(&path.to_string_lossy()).map_err(|e| e.to_string())
-                    });
-                    if let Screen::LoggedIn(session) = &mut state.screen {
-                        session.status = match outcome {
-                            Ok(()) => None,
-                            Err(err) => Some(format!("Couldn't open that: {err}")),
-                        };
-                    }
-                }
-                whatsapp::Event::Frames { url, delay_ms, frames } => {
-                    if let Screen::LoggedIn(session) = &mut state.screen {
-                        match frames {
-                            Ok(frames) if !frames.is_empty() => {
-                                cache::put(cache::Kind::Media, &url, &pack_frames(delay_ms, &frames));
-                                show_frames(&mut session.images, &mut session.animations, &url, delay_ms, frames);
-                            }
-                            other => {
-                                // Out of the cache so the next timeline load retries.
-                                tracing::warn!("gif {url}: {:?}", other.err());
-                                session.images.remove(&url);
-                            }
-                        }
-                    }
-                }
-                whatsapp::Event::Pcm { id, samples } => {
-                    if let Screen::LoggedIn(session) = &mut state.screen {
-                        let key = whatsapp::file_url(&id);
-                        let waiting = session.player.as_ref().is_some_and(|pl| pl.key == key && pl.loading);
-                        match samples {
-                            Ok(samples) => {
-                                session.voice_pcm.insert(key.clone(), Arc::new(samples));
-                                if waiting {
-                                    return play_voice(session, key, 0);
-                                }
-                            }
-                            Err(err) => {
-                                session.status = Some(format!("Couldn't play that voice note: {err}"));
-                                if waiting {
-                                    session.player = None;
-                                }
-                            }
-                        }
-                    }
-                }
-                whatsapp::Event::Contacts { query, contacts } => {
-                    if let Screen::LoggedIn(session) = &mut state.screen
-                        && let Some(picker) = session.new_chat.as_mut().filter(|p| p.query == query)
-                    {
-                        picker.contacts = contacts;
-                    }
-                }
-                whatsapp::Event::ChatStarted(result) => {
-                    let Screen::LoggedIn(session) = &mut state.screen else {
-                        return Task::none();
-                    };
-                    match result {
-                        Ok(chat) => {
-                            session.new_chat = None;
-                            let open = WebChat { network: Network::WhatsApp, id: chat.id, name: chat.name, dm: !chat.group };
-                            return update(state, Message::WebChatSelected(open));
-                        }
-                        Err(err) => {
-                            if let Some(picker) = &mut session.new_chat {
-                                picker.busy = false;
-                                picker.error = Some(err);
-                            }
-                        }
-                    }
-                }
-                whatsapp::Event::ChatAction { chat_id, result } => {
-                    let Screen::LoggedIn(session) = &mut state.screen else {
-                        return Task::none();
-                    };
-                    let deleted = session.deleting.as_ref() == Some(&chat_id);
-                    if deleted {
-                        session.deleting = None;
-                    }
-                    session.status = match result {
-                        Ok(()) if deleted => Some("Chat deleted.".to_string()),
-                        Ok(()) => None,
-                        Err(err) => Some(format!("Couldn't do that: {err}")),
-                    };
-                    // A deleted chat that's open closes.
-                    if deleted && session.status.as_deref() == Some("Chat deleted.") && session.web_chat.as_ref().is_some_and(|c| c.id == chat_id) {
-                        if let Some(engine) = &state.whatsapp {
-                            engine.close_chat();
-                        }
-                        session.web_chat = None;
-                        session.timeline.clear();
-                    }
-                }
-                whatsapp::Event::Forwarded(result) => {
-                    if let Screen::LoggedIn(session) = &mut state.screen {
-                        session.status = Some(match result {
-                            Ok(()) => "Forwarded.".to_string(),
-                            Err(err) => format!("Couldn't forward: {err}"),
-                        });
-                    }
-                }
-                whatsapp::Event::Disconnected => {
-                    state.wa_call = None;
-                    state.wa_share = None;
-                    state.video.retain(|id, _| !id.starts_with("wa-"));
-                    state.whatsapp = None;
-                    state.whatsapp_state = None;
-                    state.login_qr.remove("wa");
-                    accounts::refresh_shown(state);
                 }
             }
             Task::none()
@@ -3831,7 +3343,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_space = space;
                 session.active_guild = None;
                 session.active_mesh_space = None;
-                session.active_wa_groups = false;
                 session.active_section = None;
                 session.focused = Pane::Channels;
             }
@@ -3844,7 +3355,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_space = group.id().cloned();
                 session.active_guild = None;
                 session.active_mesh_space = None;
-                session.active_wa_groups = false;
                 session.active_section = None;
                 session.focused = Pane::Channels;
             }
@@ -3888,7 +3398,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_space = None;
                 session.active_guild = Some(guild);
                 session.active_mesh_space = None;
-                session.active_wa_groups = false;
                 session.active_section = None;
                 session.focused = Pane::Channels;
             }
@@ -3898,7 +3407,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             if let Screen::LoggedIn(session) = &mut state.screen {
                 session.active_space = None;
                 session.active_guild = None;
-                session.active_wa_groups = false;
                 session.active_section = None;
                 session.active_mesh_space = Some(space);
                 session.focused = Pane::Channels;
@@ -3927,17 +3435,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     let open = &mut session.folders_open[folder_index(network)];
                     *open = !*open;
                 }
-            }
-            Task::none()
-        }
-        Message::ShowWhatsAppGroups => {
-            if let Screen::LoggedIn(session) = &mut state.screen {
-                session.active_space = None;
-                session.active_guild = None;
-                session.active_mesh_space = None;
-                session.active_wa_groups = true;
-                session.active_section = None;
-                session.focused = Pane::Channels;
             }
             Task::none()
         }
@@ -4031,11 +3528,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                         engine.sign_out();
                     }
                 }
-                Network::WhatsApp => {
-                    if let Some(engine) = &state.whatsapp {
-                        engine.sign_out();
-                    }
-                }
                 Network::Integration(_) => {
                     state
                         .integrations
@@ -4093,7 +3585,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             session.jump = None;
             session.active_guild = None;
             session.active_mesh_space = None;
-            session.active_wa_groups = false;
             session.active_section = None;
             if session.groups.iter().any(|g| g.id() == Some(&room_id)) {
                 session.active_space = Some(room_id);
@@ -4272,8 +3763,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     network,
                     aflos_integration::Cmd::React { message: id, emoji },
                 );
-            } else if let Some(engine) = &state.whatsapp {
-                engine.react(&id, &emoji);
             }
             Task::none()
         }
@@ -4342,11 +3831,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             session.player = None;
             if total > 0 {
                 return play_voice(session, key, 0);
-            } else if let Some(id) = key.strip_prefix("wa-file:")
-                && let Some(engine) = &state.whatsapp
-            {
-                engine.voice_pcm(id);
-                session.player = Some(Player { key, position: 0, out: None, loading: true });
             } else if key.starts_with("int:") {
                 integrations::chats::want_voice(state, key);
             }
@@ -4437,9 +3921,12 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::NewChatOpen => {
+        Message::NewChatOpen(network) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
-                session.new_chat = Some(NewChat::default());
+                session.new_chat = Some(NewChat {
+                    network,
+                    ..NewChat::default()
+                });
             }
             iced::widget::operation::focus(iced::widget::Id::new(NEW_CHAT_INPUT))
         }
@@ -4447,9 +3934,10 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             if let Screen::LoggedIn(session) = &mut state.screen
                 && let Some(picker) = &mut session.new_chat
             {
-                if let Some(engine) = &state.whatsapp {
-                    engine.search_contacts(&query);
-                }
+                let search = aflos_integration::Cmd::Search {
+                    query: query.clone(),
+                };
+                state.integrations.send(picker.network, search);
                 picker.query = query;
                 picker.error = None;
             }
@@ -4459,12 +3947,13 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             if let Screen::LoggedIn(session) = &mut state.screen
                 && let Some(picker) = &mut session.new_chat
             {
-                match &state.whatsapp {
-                    Some(engine) => {
-                        engine.start_chat(&who);
-                        picker.busy = true;
+                let start = aflos_integration::Cmd::StartChat { who };
+                match state.integrations.send(picker.network, start) {
+                    Some(_) => picker.busy = true,
+                    None => {
+                        picker.error =
+                            Some(format!("{} isn't running.", picker.network.spec().name))
                     }
-                    None => picker.error = Some("WhatsApp isn't running.".to_string()),
                 }
             }
             Task::none()
@@ -4475,35 +3964,46 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             }
             Task::none()
         }
-        Message::WaArchive(chat_id, archive) => {
-            if let Screen::LoggedIn(session) = &mut state.screen
-                && let Some(engine) = &state.whatsapp
-            {
-                engine.set_archived(&chat_id, archive);
+        Message::ChatArchive(network, chat_id, archive) => {
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                let cmd = aflos_integration::Cmd::Archive {
+                    chat: chat_id,
+                    archived: archive,
+                };
+                state.integrations.send(network, cmd);
                 session.status = Some(if archive { "Archiving…" } else { "Unarchiving…" }.to_string());
             }
             Task::none()
         }
-        Message::WaDeleteAsk(chat_id) => {
+        Message::ChatDeleteAsk(chat_id) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
                 session.confirm_delete = Some(chat_id);
             }
             Task::none()
         }
-        Message::WaDeleteCancel => {
+        Message::ChatDeleteCancel => {
             if let Screen::LoggedIn(session) = &mut state.screen {
                 session.confirm_delete = None;
             }
             Task::none()
         }
-        Message::WaDeleteConfirm => {
+        Message::ChatDeleteConfirm => {
             if let Screen::LoggedIn(session) = &mut state.screen
                 && let Some(chat_id) = session.confirm_delete.take()
-                && let Some(engine) = &state.whatsapp
+                && let Some(network) = session.web_chat.as_ref().map(|c| c.network)
             {
-                engine.delete_chat(&chat_id);
-                session.deleting = Some(chat_id);
-                session.status = Some("Deleting…".to_string());
+                state.integrations.send(
+                    network,
+                    aflos_integration::Cmd::DeleteChat {
+                        chat: chat_id.clone(),
+                    },
+                );
+                // It leaves the list once it's gone; the chat closes now.
+                if session.web_chat.as_ref().is_some_and(|c| c.id == chat_id) {
+                    session.web_chat = None;
+                    session.timeline.clear();
+                }
+                session.status = None;
             }
             Task::none()
         }
@@ -4541,13 +4041,8 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     session.status = Some("Forwarding…".to_string());
                     return Task::none();
                 }
-                session.status = Some(match &state.whatsapp {
-                    Some(engine) => {
-                        engine.forward(&id, &chat_id);
-                        "Forwarding…".to_string()
-                    }
-                    None => "WhatsApp isn't running, so this can't be forwarded.".to_string(),
-                });
+                let _ = (id, chat_id);
+                session.status = Some("That chat can't forward messages.".to_string());
             }
             Task::none()
         }
@@ -4571,13 +4066,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             if let Some(path) = cache::file(&url) {
                 if let Err(err) = open_url(&path.to_string_lossy()) {
                     tracing::warn!("open {}: {err}", path.display());
-                }
-            } else if let Some(id) = url.strip_prefix("wa-file:") {
-                if let Some(engine) = &state.whatsapp {
-                    engine.save_media(id);
-                    if let Screen::LoggedIn(session) = &mut state.screen {
-                        session.status = Some("Opening…".to_string());
-                    }
                 }
             } else if let Err(err) = open_url(&url) {
                 tracing::warn!("open media {url}: {err}");
@@ -4607,7 +4095,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 session.active_guild,
                 session.active_mesh_space,
             ) = (None, None, None);
-            session.active_wa_groups = false;
             session.active_section = None;
             session.focused = Pane::Chat;
             if tab == mesh_ui::Tab::Add {
@@ -4708,7 +4195,6 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     session.active_space = None;
                     session.active_guild = None;
                     session.active_mesh_space = None;
-                    session.active_wa_groups = false;
                     session.active_section = None;
                     let Some(client) = session.client.clone() else { return Task::none() };
                     Task::batch([
@@ -4848,12 +4334,6 @@ fn subscription(state: &App) -> Subscription<Message> {
             (None, Some(socket)) => Subscription::run_with(socket.clone(), discord_events),
             (None, None) => Subscription::none(),
         },
-        match (&state.whatsapp_native, &state.discord_socket) {
-            _ if !mesh_ui::started(state) => Subscription::none(),
-            (Some(exe), _) => Subscription::run_with(exe.clone(), whatsapp_native_events),
-            (None, Some(socket)) => Subscription::run_with(socket.clone(), whatsapp_events),
-            (None, None) => Subscription::none(),
-        },
         if mesh_ui::started(state) {
             integrations::subscription(state)
         } else {
@@ -4953,13 +4433,6 @@ fn send_message(state: &mut App) -> Task<Message> {
             }
             let caption = draft(session);
             match &session.web_chat {
-                Some(chat) if chat.network == Network::WhatsApp => match &state.whatsapp {
-                    Some(engine) => {
-                        engine.send_file(&chat.id, &attachment.filename, &attachment.mime, &attachment.data, &caption);
-                        session.sending_attachment = true;
-                    }
-                    None => session.status = Some("WhatsApp isn't running, so this can't be sent.".to_string()),
-                },
                 Some(chat) if chat.network == Network::Discord => {
                     session.status = Some("Sending files to Discord isn't ready yet — only WhatsApp and Matrix.".to_string());
                     let _ = chat;
@@ -5098,17 +4571,14 @@ fn forward_targets<'a>(session: &Session, state: &'a App) -> Vec<ForwardTarget<'
                     .collect()
             })
             .unwrap_or_default(),
-        _ => state
-            .whatsapp_state
-            .iter()
-            .flat_map(|w| &w.chats)
-            .map(|c| ForwardTarget {
-                id: &c.id,
-                name: &c.name,
-                group: c.group,
-            })
-            .collect(),
+        _ => Vec::new(),
     }
+}
+
+/// An integration's person's online state and last seen (ms), for a DM's header.
+fn presence(state: &App, chat: &WebChat) -> Option<(bool, Option<u64>)> {
+    let (_, live) = state.integrations.by_network(chat.network)?;
+    live.presence.get(&chat.id).copied()
 }
 
 /// The integration behind the open chat, if it's one of theirs.
@@ -5173,26 +4643,7 @@ fn discord_events(socket: &PathBuf) -> impl iced::futures::Stream<Item = Message
     })
 }
 
-/// Streams WhatsApp Web's events from the same engine (reconnecting by itself).
-fn whatsapp_events(socket: &PathBuf) -> impl iced::futures::Stream<Item = Message> + use<> {
-    let socket = socket.clone();
-    iced::stream::channel(64, async move |mut output: iced::futures::channel::mpsc::Sender<Message>| {
-        use iced::futures::SinkExt;
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(whatsapp::run(socket, tx));
-        while let Some(event) = rx.recv().await {
-            if output.send(Message::WhatsApp(event)).await.is_err() {
-                break;
-            }
-        }
-    })
-}
 
-/// `aflos-wa` next to Aflos's own binary, if it was installed with it.
-fn whatsapp_native() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?.with_file_name(if cfg!(windows) { "aflos-wa.exe" } else { "aflos-wa" });
-    exe.is_file().then_some(exe)
-}
 
 /// `mesh-node` next to Aflos's own binary, if it was installed with it.
 fn mesh_node() -> Option<PathBuf> {
@@ -5236,20 +4687,6 @@ fn discord_native_events((exe, wrapper): &(PathBuf, Vec<String>)) -> impl iced::
     })
 }
 
-/// Streams the native WhatsApp helper's events (restarting it by itself).
-fn whatsapp_native_events(exe: &PathBuf) -> impl iced::futures::Stream<Item = Message> + use<> {
-    let exe = exe.clone();
-    iced::stream::channel(64, async move |mut output: iced::futures::channel::mpsc::Sender<Message>| {
-        use iced::futures::SinkExt;
-        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-        tokio::spawn(whatsapp::run_native(exe, data_dir().join("whatsapp"), tx));
-        while let Some(event) = rx.recv().await {
-            if output.send(Message::WhatsApp(event)).await.is_err() {
-                break;
-            }
-        }
-    })
-}
 
 fn shortcut(key: keyboard::Key, modifiers: keyboard::Modifiers) -> Option<Message> {
     match key.as_ref() {
@@ -5287,13 +4724,28 @@ fn jump_matches(session: &Session, state: &App) -> Vec<JumpHit> {
             go: Message::JumpTo(room.id.clone()),
         })
         .collect();
-    if let Some(w) = accounts::shown_whatsapp(state) {
-        hits.extend(w.chats.iter().chain(&w.archived).map(|c| JumpHit {
-            icon: if c.group { "#" } else { "@" },
-            label: c.name.clone(),
-            tag: Network::WhatsApp.tag(),
-            go: Message::WebChatSelected(WebChat { network: Network::WhatsApp, id: c.id.clone(), name: c.name.clone(), dm: !c.group }),
-        }));
+    for (_, live, network) in state.integrations.ready() {
+        hits.extend(
+            live.chats
+                .sections
+                .iter()
+                .flat_map(|s| &s.chats)
+                .filter(|c| !c.locked)
+                .map(|c| {
+                    let dm = c.kind == aflos_integration::ChatKind::Direct;
+                    JumpHit {
+                        icon: if dm { "@" } else { "#" },
+                        label: c.name.clone(),
+                        tag: network.tag(),
+                        go: Message::WebChatSelected(WebChat {
+                            network,
+                            id: c.id.clone(),
+                            name: c.name.clone(),
+                            dm,
+                        }),
+                    }
+                }),
+        );
     }
     if let Some(d) = accounts::shown_discord(state) {
         hits.extend(d.dms.iter().map(|dm| JumpHit {
@@ -5378,11 +4830,11 @@ fn session_view<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message
             settings_shell(session, state, size.width)
         } else {
             // What the Accounts sync switches leave in.
-            let (discord, whatsapp) = (accounts::shown_discord(state), accounts::shown_whatsapp(state));
-            let rail = rail_view(session, state, discord, whatsapp, p, l, x.show_network_tags);
+            let discord = accounts::shown_discord(state);
+            let rail = rail_view(session, state, discord, p, l, x.show_network_tags);
             let mut panes = row![
                 tile(session, Pane::Rail, rail, 64.0 + 2.0 * l.border_size, p, l, x),
-                tile(session, Pane::Channels, channel_pane(session, discord, whatsapp, state, p, l), 248.0, p, l, x),
+                tile(session, Pane::Channels, channel_pane(session, discord, state, p, l), 248.0, p, l, x),
                 tile(session, Pane::Chat, chat_pane(session, state), 0.0, p, l, x),
             ]
             .spacing(l.gaps_out)
@@ -5400,14 +4852,22 @@ fn session_view<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message
         };
         let mesh_space = (state.mesh.spaces.iter())
             .find(|s| Some(s.id.as_str()) == session.active_mesh_space.as_deref());
-        let guild = if session.active_wa_groups {
-            Some("WhatsApp groups")
+        let section = session.active_section.as_ref().and_then(|(n, id)| {
+            let (_, live) = state.integrations.by_network(*n)?;
+            live.chats
+                .sections
+                .iter()
+                .find(|s| s.id == *id)
+                .map(|s| s.name.as_str())
+        });
+        let guild = if let Some(name) = section {
+            Some(name)
         } else if let Some(space) = mesh_space {
             Some(space.name.as_str())
         } else {
             active_guild(session, state.discord_state.as_ref()).map(|g| g.name.as_str())
         };
-        let shell = column![top_bar(session, guild, accounts::link(state, Network::Discord), accounts::link(state, Network::WhatsApp), p, l, x.translucent_panes), panes]
+        let shell = column![top_bar(session, guild, accounts::link(state, Network::Discord), integrations::links(state), p, l, x.translucent_panes), panes]
             .spacing(l.gaps_out)
             .padding(l.gaps_out);
         if let Some((shown, full)) = &session.lightbox {
@@ -5522,7 +4982,13 @@ fn new_chat_picker<'a>(picker: &'a NewChat, p: &theme::Palette, l: &theme::Layou
     let number = looks_like_number(&picker.query).then(|| picker.query.trim().to_string());
     let first = number.clone().or_else(|| picker.contacts.first().map(|c| c.id.clone()));
     let mut list = column![
-        text_input("new WhatsApp chat: a name or a phone number…", &picker.query)
+        text_input(
+            &format!(
+                "new {} chat: a name or a number…",
+                picker.network.spec().name
+            ),
+            &picker.query,
+        )
             .id(iced::widget::Id::new(NEW_CHAT_INPUT))
             .on_input(Message::NewChatQuery)
             .on_submit_maybe(first.filter(|_| !picker.busy).map(Message::NewChatStart))
@@ -5540,7 +5006,13 @@ fn new_chat_picker<'a>(picker: &'a NewChat, p: &theme::Palette, l: &theme::Layou
     if let Some(number) = number {
         let line = row![
             ui::mono("+", 13.0, p.text_muted()),
-            ui::sans(format!("Message {number} on WhatsApp"), 14.0, Weight::Normal, p.text_bright()).width(Length::Fill),
+            ui::sans(
+                format!("Message {number} on {}", picker.network.spec().name),
+                14.0,
+                Weight::Normal,
+                p.text_bright()
+            )
+            .width(Length::Fill),
             ui::mono("Enter", 11.0, p.text_muted()),
         ]
         .spacing(10)
@@ -5552,7 +5024,7 @@ fn new_chat_picker<'a>(picker: &'a NewChat, p: &theme::Palette, l: &theme::Layou
         let mut line = row![
             ui::mono("@", 13.0, p.text_muted()),
             ui::sans(&contact.name, 14.0, Weight::Normal, p.text_bright()).width(Length::Fill),
-            ui::mono(format!("+{}", contact.number), 11.0, p.text_muted()),
+            ui::mono(&contact.detail, 11.0, p.text_muted()),
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center);
@@ -5757,7 +5229,7 @@ fn top_bar<'a>(
     session: &'a Session,
     guild: Option<&str>,
     discord: accounts::Link,
-    whatsapp: accounts::Link,
+    integrations: Vec<(Network, accounts::Link)>,
     p: &theme::Palette,
     l: &theme::Layout,
     translucent: bool,
@@ -5808,8 +5280,9 @@ fn top_bar<'a>(
         (_, h) => h,
     };
     chips = chips.push(connection_chip(Network::Discord, dc, p));
-    // WhatsApp: the hidden WhatsApp Web tab.
-    chips = chips.push(connection_chip(Network::WhatsApp, health(&whatsapp), p));
+    for (network, link) in &integrations {
+        chips = chips.push(connection_chip(*network, health(link), p));
+    }
 
     let (fill, edge, radius) = (p.background(), p.border_ctrl(), l.control_radius());
     let search = button(
@@ -5874,7 +5347,6 @@ fn net_icon(network: Network) -> ui::Icon {
     match network {
         Network::Discord => ui::Icon::Discord,
         Network::Matrix => ui::Icon::Matrix,
-        Network::WhatsApp => ui::Icon::WhatsApp,
         Network::Mesh => ui::Icon::At,
         // Its own logo is an SVG it sent (`integrations::logo`); this is the stand-in.
         Network::Integration(_) => ui::Icon::Hash,
@@ -5919,7 +5391,6 @@ fn rail_view<'a>(
     session: &'a Session,
     state: &'a App,
     discord: Option<&'a aflos_discord::Snapshot>,
-    whatsapp: Option<&'a whatsapp::Snapshot>,
     p: &theme::Palette,
     l: &theme::Layout,
     tags: bool,
@@ -5927,14 +5398,13 @@ fn rail_view<'a>(
     // Home holds the DMs, so its badge counts their unread messages (muted chats left out).
     let home_unread: u64 = session.rooms.iter().filter(|r| r.is_direct).map(|r| r.unread_notifications).sum::<u64>()
         + discord.map(|d| d.dms.iter().map(|dm| dm.mentions).sum()).unwrap_or(0)
-        + whatsapp.map(|w| w.chats.iter().filter(|c| !c.group && !c.muted).map(|c| c.unread).sum()).unwrap_or(0);
+        + integrations::home_unread(state);
     let home = rail_badge(
         rail_tile(
             ui::icon(ui::Icon::Home, 20.0, p.text_bright()),
             session.active_space.is_none()
                 && session.active_guild.is_none()
                 && session.active_mesh_space.is_none()
-                && !session.active_wa_groups
                 && session.active_section.is_none(),
             Some(Message::SpaceSelected(None)),
             p,
@@ -6001,35 +5471,14 @@ fn rail_view<'a>(
             mx.push(space_tile(session, index, group, p, l, tags));
         }
     }
-    // WhatsApp: one "Groups" tile holding the group chats, so Home stays 1:1.
-    let wa_groups: Vec<&whatsapp::Chat> = whatsapp.map(|w| w.chats.iter().filter(|c| c.group).collect()).unwrap_or_default();
-    let mut wa: Vec<Element<'a, Message>> = Vec::new();
-    if !wa_groups.is_empty() {
-        let unread: u64 = wa_groups.iter().map(|c| c.unread).sum();
-        let tile = rail_badge(
-            rail_tile(ui::icon(ui::Icon::Users, 20.0, if session.active_wa_groups { p.text_bright() } else { p.text() }), session.active_wa_groups, Some(Message::ShowWhatsAppGroups), p, l),
-            unread,
-            p,
-        );
-        wa.push(
-            iced::widget::tooltip(
-                column![tile, ui::mono("groups", 10.0, p.text_muted())].spacing(2).align_x(iced::Alignment::Center),
-                container(text("WhatsApp groups").size(12).color(p.text())).padding([4, 8]),
-                iced::widget::tooltip::Position::Right,
-            )
-            .into(),
-        );
-    }
     let mut folders = column![].spacing(8).align_x(iced::Alignment::Center);
     let ms = mesh_spaces::rail_tiles(session, &state.mesh, p, l);
     // A closed folder still shows its count, so a mention is never hidden.
     let dc_count = guilds.iter().map(guild_mentions).sum();
-    let wa_count = wa_groups.iter().map(|c| c.unread).sum();
     for (network, tiles, count) in [
         (Network::Mesh, ms, 0),
         (Network::Discord, dc, dc_count),
         (Network::Matrix, mx, 0),
-        (Network::WhatsApp, wa, wa_count),
     ] {
         if !tiles.is_empty() {
             let open = session.folders_open[folder_index(network)];
@@ -6117,7 +5566,6 @@ fn folder_index(network: Network) -> usize {
     match network {
         Network::Discord | Network::Integration(_) => 0,
         Network::Matrix => 1,
-        Network::WhatsApp => 2,
         Network::Mesh => 3,
     }
 }
@@ -6244,16 +5692,12 @@ fn rail_tile<'a>(
 fn channel_pane<'a>(
     session: &'a Session,
     discord: Option<&'a aflos_discord::Snapshot>,
-    whatsapp: Option<&'a whatsapp::Snapshot>,
     state: &'a App,
     p: &'a theme::Palette,
     l: &theme::Layout,
 ) -> Element<'a, Message> {
     if let Some((network, section)) = &session.active_section {
         return integrations::panes::section_pane(session, state, *network, section, p, l);
-    }
-    if session.active_wa_groups {
-        return wa_groups_pane(session, whatsapp, p, l);
     }
     if session.active_guild.is_some() {
         return guild_pane(session, discord, p, l);
@@ -6311,7 +5755,6 @@ fn channel_pane<'a>(
             (ui::Icon::At, "Aflos", net_color(Network::Mesh, p), Network::Mesh),
             (ui::Icon::Matrix, "Matrix", net_color(Network::Matrix, p), Network::Matrix),
             (ui::Icon::Discord, "Discord", net_color(Network::Discord, p), Network::Discord),
-            (ui::Icon::WhatsApp, "WhatsApp", p.success(), Network::WhatsApp),
         ] {
             chips = chips.push(filter_chip(Some(filter), icon, label, color, session.home_filter, p, l));
         }
@@ -6367,56 +5810,9 @@ fn channel_pane<'a>(
         Some(d) if shows(Network::Discord) => d.dms.as_slice(),
         _ => &[],
     };
-    // WhatsApp chats (groups too) sit with the DMs: they're conversations.
-    let whatsapp_chats = match whatsapp {
-        Some(w) if shows(Network::WhatsApp) => w.chats.as_slice(),
-        _ => &[],
-    };
-    // Archived WhatsApp chats: one row at the top that opens them, like WhatsApp's.
-    if let Some(w) = whatsapp.filter(|w| shows(Network::WhatsApp) && !w.archived.is_empty()) {
-        let unread: u64 = w.archived.iter().map(|c| c.unread).sum();
-        let arrow = if session.show_archived { "▾" } else { "▸" };
-        let mut line = row![
-            ui::icon(ui::Icon::WhatsApp, 16.0, p.text_muted()),
-            ui::sans(
-                format!("Archived ({})", w.archived.len()),
-                14.0,
-                Weight::Normal,
-                p.text()
-            )
-            .width(Length::Fill),
-        ]
-        .spacing(8)
-        .align_y(iced::Alignment::Center);
-        if unread > 0 {
-            line = line.push(ui::chip(unread.to_string(), p));
-        }
-        list = list.push(ui::row_button(
-            line.push(ui::mono(arrow, 12.0, p.text_muted())),
-            Message::ToggleArchived,
-            session.show_archived,
-            p,
-            l,
-        ));
-        if session.show_archived {
-            for chat in &w.archived {
-                let open = WebChat {
-                    network: Network::WhatsApp,
-                    id: chat.id.clone(),
-                    name: chat.name.clone(),
-                    dm: !chat.group,
-                };
-                list = list.push(web_chat_row(
-                    session,
-                    open,
-                    chat.avatar.as_deref(),
-                    chat.unread > 0,
-                    chat.unread,
-                    p,
-                    l,
-                ));
-            }
-        }
+    // Archived chats: one row at the top that opens them, like WhatsApp's.
+    for row in integrations::panes::archived(session, state, shows, p, l) {
+        list = list.push(row);
     }
     for (label, rooms) in sections {
         let dm_section = home && label == "Direct messages";
@@ -6441,10 +5837,6 @@ fn channel_pane<'a>(
                 }
             }
             rows.extend(integrations::panes::home_rows(session, state, shows, p, l));
-            rows.extend(whatsapp_chats.iter().filter(|chat| !chat.group).map(|chat| {
-                let open = WebChat { network: Network::WhatsApp, id: chat.id.clone(), name: chat.name.clone(), dm: !chat.group };
-                (chat.last_ms, web_chat_row(session, open, chat.avatar.as_deref(), chat.unread > 0, chat.unread, p, l))
-            }));
             rows.sort_by_key(|(last, _)| std::cmp::Reverse(*last));
         }
         if rows.is_empty() {
@@ -6554,34 +5946,6 @@ fn voice_channel<'a>(
     col.into()
 }
 
-/// A Discord server straight from the hidden client: its categories, each
-/// with text channels (opening the bridged room, when there is one) and
-/// voice channels (click to join).
-/// The WhatsApp groups list (off its rail tile): group chats, most recent
-/// first, opening in the chat pane like any other web chat.
-fn wa_groups_pane<'a>(
-    session: &'a Session,
-    whatsapp: Option<&'a whatsapp::Snapshot>,
-    p: &'a theme::Palette,
-    l: &theme::Layout,
-) -> Element<'a, Message> {
-    let footer = user_panel(session, None, p, l);
-    let mut groups: Vec<&whatsapp::Chat> =
-        whatsapp.map(|w| w.chats.iter().filter(|c| c.group).collect()).unwrap_or_default();
-    groups.sort_by_key(|c| std::cmp::Reverse(c.last_ms));
-    let header = column![
-        ui::sans("WhatsApp groups", 15.0, Weight::Semibold, p.text_bright()),
-        ui::mono(format!("{} groups", groups.len()), 11.0, p.text_muted()),
-    ]
-    .spacing(4)
-    .padding(iced::Padding { top: 14.0, right: 14.0, bottom: 10.0, left: 14.0 });
-    let mut list = column![].spacing(2).padding([10, 8]);
-    for chat in groups {
-        let open = WebChat { network: Network::WhatsApp, id: chat.id.clone(), name: chat.name.clone(), dm: false };
-        list = list.push(web_chat_row(session, open, chat.avatar.as_deref(), chat.unread > 0, chat.unread, p, l));
-    }
-    column![header, ui::hline(p), scrollable(list).height(Length::Fill), ui::hline(p), footer].into()
-}
 
 fn guild_pane<'a>(
     session: &'a Session,
@@ -6911,8 +6275,8 @@ fn web_presence(state: &App, chat: &WebChat) -> Option<(String, bool)> {
         return None;
     }
     let status = match chat.network {
-        Network::WhatsApp => {
-            let (online, seen) = *state.wa_presence.get(&chat.id)?;
+        Network::Integration(_) if presence(state, chat).is_some() => {
+            let (online, seen) = presence(state, chat)?;
             if !online {
                 let seen = seen.and_then(|ms| Local.timestamp_millis_opt(ms as i64).single())?;
                 let when = if seen.date_naive() == Local::now().date_naive() {
@@ -6965,16 +6329,15 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
     if let Some(channel) = &session.web_chat {
         let face_url = match channel.network {
             Network::Mesh => channel.dm.then(|| profile_ui::avatar_key(&channel.id)),
-            Network::WhatsApp => state
-                .whatsapp_state
-                .as_ref()
-                .and_then(|w| {
-                    w.chats
-                        .iter()
-                        .chain(&w.archived)
-                        .find(|c| c.id == channel.id)
-                })
-                .and_then(|c| c.avatar.clone()),
+            Network::Integration(_) => integrations::chat(state, channel.network, &channel.id)
+                .and_then(|c| c.avatar.as_deref())
+                .map(|k| {
+                    integrations::chats::url(
+                        channel.network,
+                        aflos_integration::FetchForm::Original,
+                        k,
+                    )
+                }),
             _ => state
                 .discord_state
                 .as_ref()
@@ -7016,21 +6379,8 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center);
-        if channel.network == Network::WhatsApp {
-            let flat = |label: &'static str, color: iced::Color, press: Message| {
-                button(text(label).size(12).color(color)).on_press(press).padding([4, 10]).style(flat_button_style(p))
-            };
-            if session.confirm_delete.as_deref() == Some(channel.id.as_str()) {
-                header = header
-                    .push(ui::mono("delete this chat?", 11.0, p.danger()))
-                    .push(flat("Delete", p.danger(), Message::WaDeleteConfirm))
-                    .push(flat("Cancel", p.text(), Message::WaDeleteCancel));
-            } else {
-                let archived = state.whatsapp_state.as_ref().is_some_and(|w| w.archived.iter().any(|c| c.id == channel.id));
-                header = header
-                    .push(flat(if archived { "Unarchive" } else { "Archive" }, p.text(), Message::WaArchive(channel.id.clone(), !archived)))
-                    .push(flat("Delete", p.text_muted(), Message::WaDeleteAsk(channel.id.clone())));
-            }
+        for action in integrations::panes::chat_actions(session, state, channel, p) {
+            header = header.push(action);
         }
         // An Aflos DM: how we're connected with them now (P8).
         if channel.dm
@@ -7070,11 +6420,6 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
                     l,
                 ));
             }
-        }
-        if channel.dm && channel.network == Network::WhatsApp && state.wa_call.is_none() {
-            header = header
-                .push(ui::icon_button(ui::Icon::Phone, Some(Message::WaCallStart(false)), false, p, l))
-                .push(ui::icon_button(ui::Icon::Video, Some(Message::WaCallStart(true)), false, p, l));
         }
         if channel.dm && channel.network == Network::Discord {
             let in_call = state.discord_state.as_ref().and_then(|d| d.voice.channel_id.as_deref()) == Some(channel.id.as_str());
@@ -7137,12 +6482,12 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
             col = col.push(container(discord_ring_bar(ring, p, l)).padding([8, 16]));
         }
     }
-    // A call's live video, Discord's or WhatsApp's.
-    let live = |wa: bool| {
+    // A call's live video (integrations' are theirs, `int-`).
+    let live = |int: bool| {
         state
             .video
             .iter()
-            .filter(move |(id, t)| id.starts_with("wa-") == wa && video_live(id, t))
+            .filter(move |(id, t)| id.starts_with("int-") == int && video_live(id, t))
             .map(|(_, t)| t)
     };
     // Big: the call takes the chat pane, its video filling it.
@@ -7151,12 +6496,6 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
         let fill = state.video_big && live(false).next().is_some();
         big |= fill;
         let bar = discord_call_bar(session, &snapshot.voice, live(false), fill, p, l);
-        col = col.push(container(bar).padding([8, 16]).height(fill_if(fill)));
-    }
-    if let Some(call) = &state.wa_call {
-        let fill = state.video_big && live(true).next().is_some();
-        big |= fill;
-        let bar = wa_call_bar(call, live(true), fill, state.wa_share.as_deref(), p, l);
         col = col.push(container(bar).padding([8, 16]).height(fill_if(fill)));
     }
     for (bar, fill) in integrations::calls::bars(state, p, l) {
@@ -7191,24 +6530,16 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
     };
 
     if let Some(channel) = &session.web_chat {
-        let (hash, account) = match channel.network {
-            Network::WhatsApp => ("", channel.network.spec().name),
-            _ => (
-                if channel.dm { "" } else { "#" },
-                channel.network.spec().name,
-            ),
-        };
+        let (hash, account) = (
+            if channel.dm { "" } else { "#" },
+            channel.network.spec().name,
+        );
         let placeholder = format!(
             "message {hash}{}  —  sends with your {account} account",
             channel.name
         );
         let typing = match channel.network {
             Network::Mesh => mesh_dm::typing(state, &channel.id),
-            Network::WhatsApp => state
-                .wa_typing
-                .get(&channel.id)
-                .map(Vec::as_slice)
-                .unwrap_or_default(),
             Network::Discord => discord_typing(state, &channel.id),
             Network::Integration(_) => integrations::typing(state, channel.network, &channel.id),
             Network::Matrix => &[],
@@ -7246,7 +6577,9 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
 
     let placeholder = match room.network {
         Network::Discord => format!("message {}  —  sends to discord via bridge", room_label(room)),
-        Network::Matrix | Network::WhatsApp | Network::Mesh | Network::Integration(_) => format!("message {}", room_label(room)),
+        Network::Matrix | Network::Mesh | Network::Integration(_) => {
+            format!("message {}", room_label(room))
+        }
     };
     body(col, placeholder, session.typing.get(&room.id).map(Vec::as_slice).unwrap_or_default()).into()
 }
@@ -7638,8 +6971,6 @@ fn discord_call_bar<'a>(
         .into()
 }
 
-/// WhatsApp's call: ringing (answer / decline) or under way (mute, camera,
-/// hang up), with its video.
 /// A screen or window to share, with its thumbnail ready to draw.
 #[derive(Debug, Clone)]
 struct ShareChoice {
@@ -7647,17 +6978,6 @@ struct ShareChoice {
     name: String,
     screen: bool,
     thumbnail: Option<iced::widget::image::Handle>,
-}
-
-impl From<&whatsapp::ShareSource> for ShareChoice {
-    fn from(s: &whatsapp::ShareSource) -> Self {
-        ShareChoice {
-            id: s.id.clone(),
-            name: s.name.clone(),
-            screen: s.kind == "screen",
-            thumbnail: s.thumbnail_jpeg().map(iced::widget::image::Handle::from_bytes),
-        }
-    }
 }
 
 /// The share picker: screens, then windows, as thumbnails.
@@ -7702,86 +7022,6 @@ fn share_picker<'a>(
     iced::widget::scrollable(body).height(Length::Shrink).into()
 }
 
-fn wa_call_bar<'a>(
-    call: &'a whatsapp::Call,
-    video: impl Iterator<Item = &'a VideoTile>,
-    big: bool,
-    share: Option<&'a [ShareChoice]>,
-    p: &'a theme::Palette,
-    l: &theme::Layout,
-) -> Element<'a, Message> {
-    let status = match call.phase.as_str() {
-        "incoming" => if call.video { "video call · ringing" } else { "calling you" },
-        "outgoing" => "ringing…",
-        "connecting" => "connecting…",
-        _ => "in call",
-    };
-    let mut controls = row![].spacing(8).align_y(iced::Alignment::Center);
-    if call.phase == "incoming" {
-        let answer = |label: &'static str, video: bool| {
-            ui::primary_button(ui::sans(label, 13.0, Weight::Semibold, p.accent_text()), Some(Message::WaCallAccept(video)), p, l)
-                .padding([6, 12])
-        };
-        if call.video {
-            controls = controls.push(answer("Answer with video", true));
-        }
-        controls = controls.push(answer(if call.video { "Voice only" } else { "Answer" }, false));
-        controls = controls.push(ui::icon_button(ui::Icon::PhoneOff, Some(Message::WaCallDecline), true, p, l));
-    } else {
-        controls = controls
-            .push(ui::icon_button(if call.muted { ui::Icon::MicOff } else { ui::Icon::Mic }, Some(Message::WaCallMute), call.muted, p, l))
-            .push(ui::icon_button(
-                if call.camera { ui::Icon::Video } else { ui::Icon::VideoOff },
-                Some(Message::WaCallCamera),
-                !call.camera,
-                p,
-                l,
-            ))
-            .push(ui::icon_button(
-                if call.screen { ui::Icon::ScreenShare } else { ui::Icon::ScreenShareOff },
-                Some(Message::WaCallScreen),
-                !call.screen,
-                p,
-                l,
-            ))
-            .push(ui::icon_button(ui::Icon::PhoneOff, Some(Message::WaCallEnd), true, p, l));
-    }
-    let mut body = column![
-        row![
-            ui::icon(ui::Icon::Phone, 17.0, if call.phase == "active" { p.success() } else { p.warning() }),
-            ui::mono_bold(Network::WhatsApp.tag(), 12.0, net_color(Network::WhatsApp, p)),
-            ui::sans(&call.name, 14.0, Weight::Semibold, p.text_bright()),
-            text(status).size(12).color(p.text_muted()).width(Length::Fill),
-            controls,
-        ]
-        .spacing(10)
-        .align_y(iced::Alignment::Center),
-    ]
-    .spacing(8);
-    if let Some(choices) = share.filter(|_| !call.screen) {
-        body = body.push(share_picker(
-            choices,
-            Message::WaSharePick,
-            Message::WaShareCancel,
-            p,
-            l,
-        ));
-    }
-    if let Some(tiles) = video_tiles(video, big, p) {
-        body = body.push(tiles);
-    }
-    let (fill, edge) = (p.surface_alt(), p.border());
-    container(body)
-        .padding(12)
-        .width(Length::Fill)
-        .height(fill_if(big))
-        .style(move |_| container::Style {
-            background: Some(fill.into()),
-            border: iced::border::rounded(8).color(edge).width(1),
-            ..container::Style::default()
-        })
-        .into()
-}
 
 /// The call's cameras: everyone else's large, ours small at the end.
 /// A Discord video tile's label: the member a `dc-<id>` camera is, or
@@ -8515,13 +7755,10 @@ fn message_actions<'a>(
     if !message.body.is_empty() && !matches!(message.kind, MessageKind::Image(_) | MessageKind::File(_)) {
         bar = bar.push(action("⧉", "Copy", Message::CopyText(message.body.clone())));
     }
-    if matches!(message.sender_network, Network::WhatsApp | Network::Mesh) {
+    if message.sender_network == Network::Mesh {
         bar = bar
             .push(action("🙂", "React", Message::ToggleReactPicker(id.to_string())))
             .push(action("↩", "Reply", Message::ReplyTo(id.to_string(), quote_of(message))));
-    }
-    if message.sender_network == Network::WhatsApp {
-        bar = bar.push(action("↪", "Forward", Message::ForwardStart(id.to_string())));
     }
     if let Some(can) = actions {
         use aflos_integration::Action as A;
@@ -10746,15 +9983,22 @@ fn create_view<'a>(
             add,
         ));
     }
-    if state.whatsapp.is_some() {
-        let color = net_color(Network::WhatsApp, p);
-        list = list.push(item(
-            ui::Icon::WhatsApp,
-            color,
-            "New WhatsApp chat".into(),
-            "Message a contact or a number",
-            vec![Message::NewChatOpen],
-        ));
+    for (_, live, network) in state.integrations.ready() {
+        let starts = live.hello.as_ref().is_some_and(|h| {
+            h.supports
+                .actions
+                .contains(&aflos_integration::Action::StartChat)
+        });
+        if starts && live.state == Some(aflos_integration::State::Online) {
+            let name = network.spec().name;
+            list = list.push(item(
+                ui::Icon::At,
+                net_color(network, p),
+                format!("New {name} chat"),
+                "Message a contact or a number",
+                vec![Message::NewChatOpen(network)],
+            ));
+        }
     }
     if state.discord.is_some() {
         let color = net_color(Network::Discord, p);
@@ -11112,7 +10356,7 @@ mod tests {
     fn drops_go_to_the_open_chat_and_never_to_discord() {
         let mut session = Session::new(None);
         assert_eq!(drop_target(&session), DropTarget::Nowhere);
-        session.web_chat = Some(chat(Network::WhatsApp, "Mom"));
+        session.web_chat = Some(chat(Network::Integration(0), "Mom"));
         assert_eq!(drop_target(&session), DropTarget::Chat("Mom".into()));
         session.web_chat = Some(chat(Network::Mesh, "Strange"));
         assert_eq!(drop_target(&session), DropTarget::Chat("Strange".into()));
@@ -11158,7 +10402,7 @@ mod tests {
         }
         let paths = vec![dir.join(names[0]), dir.join("a folder"), dir.join(names[1])];
         let mut session = Session::new(None);
-        session.web_chat = Some(chat(Network::WhatsApp, "Mom"));
+        session.web_chat = Some(chat(Network::Integration(0), "Mom"));
         assert_eq!(attach_files(&mut session, read_files(&paths)), 2);
         assert_eq!(session.pending_attachment.as_ref().map(|a| a.filename.as_str()), Some(names[0]));
         assert!(session.pending_attachment.as_ref().unwrap().preview.is_some(), "a picture has a preview");

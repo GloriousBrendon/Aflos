@@ -126,6 +126,38 @@ pub(crate) enum Update {
     Report(Report),
 }
 
+/// The integrations shipped beside Aflos (until 0.7.0: PLAN Task 16), added
+/// to the configured ones unless the config already has them. WhatsApp keeps
+/// its 0.6 folder, so it stays signed in.
+pub(crate) fn with_bundled(mut entries: Vec<Entry>) -> Vec<Entry> {
+    let exe = |name: &str| {
+        let file = if cfg!(windows) {
+            format!("{name}.exe")
+        } else {
+            name.to_owned()
+        };
+        std::env::current_exe()
+            .ok()
+            .map(|e| e.with_file_name(file))
+            .filter(|p| p.is_file())
+    };
+    if let Some(program) = exe("aflos-wa")
+        && !entries.iter().any(|e| e.id == WHATSAPP)
+    {
+        let data = data_dir().join("whatsapp").to_string_lossy().into_owned();
+        entries.push(Entry {
+            id: WHATSAPP.into(),
+            program,
+            args: vec!["--data".into(), data],
+            off: false,
+        });
+    }
+    entries
+}
+
+/// The bundled WhatsApp integration's id.
+pub(crate) const WHATSAPP: &str = "aflos.whatsapp";
+
 /// Its folders: `<data>/integrations/<id>/data` and `…/files`.
 pub(crate) fn dir(id: &str) -> PathBuf {
     data_dir().join("integrations").join(id)
@@ -505,6 +537,40 @@ pub(crate) fn sign_in_command(
         }),
         _ => None,
     }
+}
+
+/// Unread messages in integrations' Home chats (muted and archived left
+/// out), for Home's badge.
+pub(crate) fn home_unread(state: &App) -> u64 {
+    let mut unread = 0;
+    for live in state
+        .integrations
+        .live
+        .values()
+        .filter(|l| l.state == Some(State::Online))
+    {
+        for chat in live
+            .chats
+            .sections
+            .iter()
+            .filter(|s| s.home)
+            .flat_map(|s| &s.chats)
+        {
+            if !chat.muted && !chat.archived {
+                unread += chat.unread;
+            }
+        }
+    }
+    unread
+}
+
+/// Each running integration and how it's linked, for the top bar's chips.
+pub(crate) fn links(state: &App) -> Vec<(Network, crate::accounts::Link)> {
+    state
+        .integrations
+        .ready()
+        .map(|(_, _, n)| (n, crate::accounts::link(state, n)))
+        .collect()
 }
 
 /// One of its chats, by id.

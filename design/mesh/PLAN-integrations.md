@@ -94,7 +94,7 @@ Mesh-Node has no WhatsApp or Discord code.
 - [x] **Task 8: settings.** The settings block, stored per integration;
   Discord's video settings move into it. **Accept:** a setting survives a
   restart and reaches the integration.
-- [ ] **Task 9: WhatsApp through the protocol.** `aflos-wa` speaks it; the
+- [x] **Task 9: WhatsApp through the protocol.** `aflos-wa` speaks it; the
   app's WhatsApp-only code goes, and WhatsApp runs as a bundled
   integration. **Accept:** the checkpoint parity list below, WhatsApp half,
   by hand; no `Network::WhatsApp` left.
@@ -225,6 +225,26 @@ the parity list passes again.
   change; a text setting is sent when it's submitted. They show on its
   Accounts panel. Discord's video settings move into it with Discord
   itself (Task 10).
+- **Task 9:** `aflos-wa` speaks the protocol through a translation layer
+  at its edge (`aflos-wa/src/proto.rs`): protocol commands become its own
+  calls and its reports become events, so WhatsApp's own code is
+  untouched. It reads Aflos's hello before anything else; while bundled
+  it keeps 0.6's data folder (`--data`), so nobody is signed out. Aflos
+  runs it as the integration `aflos.whatsapp` when it's installed beside
+  Aflos. The protocol gained `show` (an integration asks Aflos to open a
+  chat it started or joined). Gone from the app: `Network::WhatsApp`, the
+  WhatsApp state, events, panes, call bar and messages, the engine
+  browser's WhatsApp tab, WhatsApp's registry entry (Matrix rooms bridged
+  from WhatsApp now read as Matrix) and its sync switches. Made generic
+  on the way: the new-chat picker (contact search, start a chat), the
+  Archived row, Archive and Delete in a chat's header, Ctrl K, closing an
+  integration chat while Aflos is unfocused (so it isn't marked read), a
+  DM's last-seen line, and Home's badge. Integrations ring and chime as
+  WhatsApp did; custom sound files keyed `message_wa`/`ring_wa` still
+  apply. Not carried over: WhatsApp's "groups"/"chats" sync switches and
+  its bigger profile pictures. Removing the bundled WhatsApp in Accounts
+  lasts until the next start (it's re-added while bundled); Turn off
+  sticks.
 
 ## Changes while planning
 
