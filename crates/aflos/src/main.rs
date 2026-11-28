@@ -1548,6 +1548,8 @@ enum Message {
     Integration(String, integrations::Update),
     /// Open an integration's section (a server, its groups) in the channel pane.
     IntegrationSection(Network, String),
+    /// The Accounts panel's sign-in, restart, turn off and remove.
+    Integrations(integrations::Act),
     /// The call's video fills the chat pane, or goes back above the chat.
     VideoBig(bool),
     /// Show a Discord server (by id) from the hidden client.
@@ -2829,6 +2831,7 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::Integration(id, update) => integrations::update(state, id, update),
+        Message::Integrations(a) => integrations::act(state, a),
         Message::IntegrationSection(network, section) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
                 session.active_space = None;

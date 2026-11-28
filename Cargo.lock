@@ -80,6 +80,7 @@ dependencies = [
  "aflos-integration",
  "anyhow",
  "arboard",
+ "base64",
  "chrono",
  "dirs",
  "iced",
