@@ -319,6 +319,58 @@ pub(crate) fn page<'a>(state: &'a App, columns: usize) -> Element<'a, Message> {
         rows = rows.push(container(line).padding([12, 14]));
         count += 1;
     }
+    // Integrations, whether or not they're working: each has its panel, and
+    // one that won't start can still be removed from there (spec T7).
+    for entry in &state.integrations.entries {
+        let live = state.integrations.live.get(&entry.id);
+        let name = live
+            .and_then(|l| l.hello.as_ref())
+            .map_or(entry.id.clone(), |h| h.name.clone());
+        let (label, color) = match (
+            entry.off,
+            live.and_then(|l| l.trouble.as_ref()),
+            live.and_then(|l| l.state),
+        ) {
+            (true, _, _) => ("turned off", p.text_muted()),
+            (_, Some(crate::integrations::Trouble::Stopped(_)), _) => ("▲ stopped", p.danger()),
+            (_, Some(_), _) => ("… restarting", p.warning()),
+            (_, None, Some(aflos_integration::State::Online)) => ("● synced", p.success()),
+            (_, None, Some(aflos_integration::State::SignedOut)) => ("▲ sign in", p.warning()),
+            _ => ("… connecting", p.text_muted()),
+        };
+        let face: Element<'a, Message> = match live.zip(live.and_then(|l| l.network)) {
+            Some((live, network)) => {
+                crate::integrations::logo(live, 24.0, p.network(network.spec()))
+            }
+            None => ui::icon(ui::Icon::Hash, 24.0, p.text_muted()),
+        };
+        // Its panel is picked by its id; a leaked copy lives as long as Aflos.
+        let pick: &'static str = match live.and_then(|l| l.network) {
+            Some(network) => network.spec().id,
+            None => Box::leak(entry.id.clone().into_boxed_str()),
+        };
+        let line = row![
+            container(face).center_x(38).center_y(38),
+            column![
+                ui::sans(name, 14.0, Weight::Semibold, p.text_bright()),
+                text("integration").size(12).color(p.text_muted()),
+            ]
+            .spacing(2)
+            .width(Length::Fill),
+            ui::mono(label, 11.0, color),
+            button(ui::sans("⋯", 16.0, Weight::Semibold, p.text()))
+                .on_press(Message::AccountsPick(pick))
+                .padding([4, 10])
+                .style(flat_button_style(p)),
+        ]
+        .spacing(14)
+        .align_y(iced::Alignment::Center);
+        if count > 0 {
+            rows = rows.push(ui::hline(p));
+        }
+        rows = rows.push(container(line).padding([12, 14]));
+        count += 1;
+    }
     let edge = p.border();
     let connected = container(rows).style(move |_| container::Style {
         border: iced::border::rounded(8).color(edge).width(1),
@@ -400,6 +452,9 @@ fn network_card<'a>(state: &'a App, spec: &'static NetworkSpec, on: bool) -> Ele
 pub(crate) fn panel<'a>(state: &'a App) -> Element<'a, Message> {
     let (p, l) = (&state.palette, &state.layout);
     let id = state.accounts.selected.unwrap_or_else(|| default_pick(state));
+    if let Some(entry) = state.integrations.entries.iter().find(|e| e.id == id) {
+        return crate::integrations::panel(state, entry);
+    }
     let Some(spec) = aflos_core::networks::spec(id) else {
         return Space::new().into();
     };

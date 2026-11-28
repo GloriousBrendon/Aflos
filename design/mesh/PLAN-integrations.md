@@ -77,7 +77,7 @@ Mesh-Node has no WhatsApp or Discord code.
 - [x] **Task 4: networks as data.** `Network::Integration(id)`, the rail
   tile, status dot and badge from the integration. **Accept:** echo's tile
   appears with its icon and colour; the existing tiles look as before.
-- [ ] **Task 5: sign-in and Accounts.** QR, code, form and web-page
+- [x] **Task 5: sign-in and Accounts.** QR, code, form and web-page
   sign-in; Accounts lists integrations with sign out, turn off and remove.
   **Accept:** echo signs in by form; unit tests for each sign-in kind.
 - [ ] **Task 6: chats.** Chat list sections, the timeline (text with the
@@ -195,6 +195,12 @@ the parity list passes again.
   a home section's chats go in Home, the others get rail tiles (a server,
   "Groups"). Until Task 11, integrations to run are listed in config.toml
   as `[[integrations]]` (`id`, `program`, `args`).
+- **Task 5:** every integration has a row in Accounts' connected list and
+  its own panel, including one that never started (so it can always be
+  removed). The panel draws the step it asks for (QR, code, form, web),
+  keeps a failed step up with the reason, and has Restart (when stopped),
+  Turn off and Remove; Remove asks once and deletes its folder. Part of
+  spec T7 landed here; Task 12b adds the crash-on-next-start side.
 
 ## Changes while planning
 

@@ -20,6 +20,9 @@ pub(crate) struct Entry {
     pub program: PathBuf,
     #[serde(default)]
     pub args: Vec<String>,
+    /// Turned off: kept, not run.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub off: bool,
 }
 
 /// What one integration has said, kept for the panes.
@@ -37,6 +40,8 @@ pub(crate) struct Live {
     pub trouble: Option<Trouble>,
     /// The sign-in step it's asking for.
     pub sign_in: Option<SignIn>,
+    /// Why the last sign-in didn't work (the step stays up to try again).
+    pub sign_in_error: Option<String>,
     pub chats: Chats,
 }
 
@@ -51,13 +56,20 @@ pub(crate) struct Integrations {
     pub entries: Vec<Entry>,
     /// By id.
     pub live: HashMap<String, Live>,
+    /// The sign-in form being filled in, by field name, and a code typed.
+    pub form: BTreeMap<String, String>,
+    pub code: String,
+    /// Bumped by Restart, so its subscription starts over.
+    pub generation: HashMap<String, u32>,
+    /// Remove asked once; the next press removes it.
+    pub confirm_remove: Option<String>,
 }
 
 impl Integrations {
     pub fn new(entries: Vec<Entry>) -> Self {
         Self {
             entries,
-            live: HashMap::new(),
+            ..Self::default()
         }
     }
 
@@ -98,17 +110,15 @@ pub(crate) fn dir(id: &str) -> PathBuf {
 }
 
 pub(crate) fn subscription(state: &App) -> Subscription<Message> {
-    Subscription::batch(
-        state
-            .integrations
-            .entries
-            .iter()
-            .map(|e| Subscription::run_with(e.clone(), events)),
-    )
+    let all = &state.integrations;
+    Subscription::batch(all.entries.iter().filter(|e| !e.off).map(|e| {
+        let generation = all.generation.get(&e.id).copied().unwrap_or(0);
+        Subscription::run_with((e.clone(), generation), events)
+    }))
 }
 
 /// Runs one integration for as long as its subscription lives.
-fn events(entry: &Entry) -> impl iced::futures::Stream<Item = Message> + use<> {
+fn events((entry, _): &(Entry, u32)) -> impl iced::futures::Stream<Item = Message> + use<> {
     let entry = entry.clone();
     iced::stream::channel(
         64,
@@ -189,14 +199,121 @@ impl Integrations {
                     live.error = error;
                     if s == State::Online {
                         live.sign_in = None;
+                        live.sign_in_error = None;
                     }
                 }
-                Event::SignIn(step) => live.sign_in = Some(step),
+                Event::SignIn(SignIn::Failed { error }) => live.sign_in_error = Some(error),
+                Event::SignIn(step) => {
+                    live.sign_in = Some(step);
+                    live.sign_in_error = None;
+                }
                 Event::Chats(chats) => live.chats = chats,
                 // The rest arrive with the panes that show them (PLAN Tasks 5 to 8).
                 _ => {}
             },
         }
+    }
+}
+
+/// What the Accounts panel asks of integrations.
+#[derive(Debug, Clone)]
+pub(crate) enum Act {
+    /// A sign-in form field changed.
+    Field(String, String),
+    /// The sign-in code changed.
+    Code(String),
+    /// Send the form, or the code, to the integration behind it.
+    Submit(Network),
+    /// Start a stopped one again.
+    Restart(String),
+    /// Turn it off (kept, not run) or back on.
+    Off(String, bool),
+    /// Remove it: asks once, then does it.
+    Remove(String),
+}
+
+pub(crate) fn act(state: &mut App, act: Act) -> Task<Message> {
+    let all = &mut state.integrations;
+    if !matches!(act, Act::Remove(_)) {
+        all.confirm_remove = None;
+    }
+    match act {
+        Act::Field(name, value) => drop(all.form.insert(name, value)),
+        Act::Code(code) => all.code = code,
+        Act::Submit(network) => {
+            let step = all.by_network(network).and_then(|(_, l)| l.sign_in.clone());
+            if let Some(cmd) = step.and_then(|s| sign_in_command(&s, &all.form, &all.code)) {
+                all.send(network, cmd);
+                all.code.clear();
+            }
+        }
+        Act::Restart(id) => {
+            *all.generation.entry(id.clone()).or_default() += 1;
+            if let Some(live) = all.live.get_mut(&id) {
+                live.trouble = None;
+            }
+        }
+        Act::Off(id, off) => {
+            all.set_off(&id, off);
+            let entries = all.entries.clone();
+            crate::persist(|c| c.integrations = entries);
+        }
+        Act::Remove(id) => {
+            if all.confirm_remove.as_deref() != Some(id.as_str()) {
+                all.confirm_remove = Some(id);
+                return Task::none();
+            }
+            all.remove(&id);
+            let entries = all.entries.clone();
+            crate::persist(|c| c.integrations = entries);
+            // Its folder and everything it kept go with it (spec T5).
+            let _ = std::fs::remove_dir_all(dir(&id));
+        }
+    }
+    Task::none()
+}
+
+impl Integrations {
+    pub fn set_off(&mut self, id: &str, off: bool) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
+            e.off = off;
+        }
+        if off {
+            self.live.remove(id);
+        }
+    }
+
+    pub fn remove(&mut self, id: &str) {
+        self.entries.retain(|e| e.id != id);
+        self.live.remove(id);
+        self.confirm_remove = None;
+    }
+}
+
+/// The command a sign-in step's answer is: the form's fields (only the ones
+/// it asked for), or the code. `None` for steps the person finishes
+/// elsewhere (a QR code, a web page).
+pub(crate) fn sign_in_command(
+    step: &SignIn,
+    form: &BTreeMap<String, String>,
+    code: &str,
+) -> Option<Cmd> {
+    match step {
+        SignIn::Form { fields } => Some(Cmd::SignIn {
+            values: fields
+                .iter()
+                .map(|f| {
+                    (
+                        f.name.clone(),
+                        form.get(&f.name).cloned().unwrap_or_default(),
+                    )
+                })
+                .collect(),
+        }),
+        SignIn::Code { .. } if !code.trim().is_empty() => Some(Cmd::SignInCode {
+            code: code.trim().to_owned(),
+        }),
+        _ => None,
     }
 }
 
@@ -302,6 +419,9 @@ pub(crate) fn rail_tiles<'a>(
         })
         .collect()
 }
+
+mod panel;
+pub(crate) use panel::panel;
 
 #[cfg(test)]
 mod tests;
