@@ -470,7 +470,7 @@ pub(crate) fn event(state: &mut App, event: mesh::Event) -> Task<Message> {
                     pr.notice = Some((
                         true,
                         format!(
-                            "Published: version {}. Your friends get it when they're next connected.",
+                            "Saved: version {}. Your friends get it when they're next connected.",
                             p.version
                         ),
                     ));
@@ -971,6 +971,11 @@ fn label<'a>(t: impl text::IntoFragment<'a>, p: &theme::Palette) -> iced::widget
     ui::sans(t, 13.0, Weight::Normal, p.text())
 }
 
+/// A primary button's text, in the colour that reads on the accent.
+fn on_accent<'a>(t: impl text::IntoFragment<'a>, p: &theme::Palette) -> iced::widget::Text<'a> {
+    ui::sans(t, 13.0, Weight::Normal, p.accent_text())
+}
+
 fn flat<'a>(t: impl text::IntoFragment<'a>, msg: Msg, p: &theme::Palette) -> Element<'a, Message> {
     button(ui::sans(t, 12.0, Weight::Normal, p.text()))
         .on_press(to(msg))
@@ -1227,7 +1232,7 @@ fn link_dialog<'a>(url: &'a str, p: &theme::Palette, l: &theme::Layout) -> Eleme
         ui::mono(url, 12.0, p.text()),
         row![
             flat("Cancel", Msg::LinkCancel, p),
-            ui::primary_button(label("Open", p), Some(to(Msg::LinkOpen)), p, l)
+            ui::primary_button(on_accent("Open", p), Some(to(Msg::LinkOpen)), p, l)
         ]
         .spacing(8),
     ]
@@ -1371,7 +1376,7 @@ fn editor<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
     .style(flat_button_style(p));
     form = form.push(rice);
     let publish = ui::primary_button(
-        label(if e.busy { "Publishing…" } else { "Publish" }, p),
+        on_accent(if e.busy { "Saving…" } else { "Save" }, p),
         (!e.busy).then(|| to(Msg::Publish)),
         p,
         l,
@@ -1473,7 +1478,7 @@ pub(crate) fn card_form<'a>(space: &'a mesh::Space, state: &'a App) -> Element<'
         .spacing(8),
         row![
             flat("Cancel", Msg::CardCancel, p),
-            ui::primary_button(label("Save card", p), Some(to(Msg::CardSave)), p, l)
+            ui::primary_button(on_accent("Save card", p), Some(to(Msg::CardSave)), p, l)
         ]
         .spacing(8),
     ]
