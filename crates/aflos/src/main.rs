@@ -290,6 +290,8 @@ struct Session {
     my_profile: Option<MyProfile>,
     /// Your Aflos username, for the user panel when Matrix isn't signed in.
     mesh_name: Option<String>,
+    /// Your Aflos ID: the user panel shows the picture you published.
+    mesh_id: Option<String>,
     self_muted: bool,
     self_deafened: bool,
     backup: BackupUi,
@@ -495,6 +497,7 @@ impl Session {
             members: Vec::new(),
             my_profile: None,
             mesh_name: None,
+            mesh_id: None,
             self_muted: false,
             self_deafened: false,
             backup: BackupUi::default(),
@@ -1557,6 +1560,8 @@ enum Message {
     OpenUrl(String),
     /// The mouse entered / left a message (by web id).
     HoverMessage(String),
+    /// The timeline scrolled: nothing is hovered until the mouse moves.
+    TimelineScrolled,
     UnhoverMessage(String),
     /// Open or close a message's quick-reaction strip.
     ToggleReactPicker(String),
@@ -1823,6 +1828,7 @@ fn window_settings() -> iced::window::Settings {
 fn enter_session(state: &mut App) {
     let mut session = Session::new(None);
     session.mesh_name = state.mesh.identity.as_ref().and_then(|i| i.username.clone());
+    session.mesh_id = state.mesh.my_id();
     session.paste_tip = paste_tip_due();
     state.screen = Screen::LoggedIn(session);
     // Discord often connects before the session exists; catch up on its pictures.
@@ -2000,7 +2006,15 @@ fn sync_ringer(state: &mut App) {
 fn handle(state: &mut App, message: Message) -> Task<Message> {
     match message {
         Message::RestoreFinished(Ok(client)) => attach_matrix(state, client),
-        Message::Mesh(event) => mesh_ui::event(state, event),
+        Message::Mesh(event) => {
+            let task = mesh_ui::event(state, event);
+            // The user panel shows your Aflos picture by this ID.
+            let id = state.mesh.my_id();
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                session.mesh_id = id;
+            }
+            task
+        }
         Message::MeshForm(msg) => mesh_ui::update(state, msg),
         Message::MeshSpace(msg) => mesh_spaces::update(state, msg),
         Message::MeshCall(msg) => mesh_calls::update(state, msg),
@@ -4050,6 +4064,12 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
         Message::HoverMessage(id) => {
             if let Screen::LoggedIn(session) = &mut state.screen {
                 session.hovered = Some(id);
+            }
+            Task::none()
+        }
+        Message::TimelineScrolled => {
+            if let Screen::LoggedIn(session) = &mut state.screen {
+                session.hovered = None;
             }
             Task::none()
         }
@@ -6541,7 +6561,12 @@ fn user_panel<'a>(
     let me = row![
         ui::avatar(
             &name,
-            picture(session, session.my_profile.as_ref().and_then(|me| me.avatar.as_ref())),
+            // The picture you published in Aflos, else your Matrix one.
+            session
+                .mesh_id
+                .as_ref()
+                .and_then(|id| web_picture(session, Some(&profile_ui::avatar_key(id))))
+                .or_else(|| picture(session, session.my_profile.as_ref().and_then(|me| me.avatar.as_ref()))),
             34.0,
             p.accent(),
             p,
@@ -6811,14 +6836,17 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
     // Timeline, status line and composer: the same for a room or a Discord channel.
     let me = session.my_profile.as_ref().map(|me| &me.user_id);
     let body = |mut col: iced::widget::Column<'a, Message>, placeholder: String, typing: &'a [String]| {
-        col = col.push(
-            scrollable(
-                container(timeline_view(session, me, state.density, &state.extras, p))
-                    .padding(iced::Padding { top: 16.0, right: 16.0, bottom: 8.0, left: 16.0 }),
-            )
-            .height(Length::Fill)
-            .anchor_bottom(),
-        );
+        let timeline = scrollable(
+            container(timeline_view(session, me, state.density, &state.extras, p))
+                .padding(iced::Padding { top: 16.0, right: 16.0, bottom: 8.0, left: 16.0 }),
+        )
+        .height(Length::Fill)
+        .anchor_bottom();
+        col = col.push(if session.hovered.is_some() {
+            timeline.on_scroll(|_| Message::TimelineScrolled)
+        } else {
+            timeline
+        });
         if let Some(status) = &session.status {
             col = col.push(container(text(status.clone()).size(13).color(p.danger())).padding([0, 16]));
         }
@@ -7836,10 +7864,7 @@ fn bubble_row<'a>(
             let side = if mine { iced::alignment::Horizontal::Left } else { iced::alignment::Horizontal::Right };
             layers = layers.push(container(bar).width(Length::Fill).padding(gap).align_x(side));
         }
-        mouse_area(layers)
-            .on_enter(Message::HoverMessage(id.clone()))
-            .on_exit(Message::UnhoverMessage(id))
-            .into()
+        hover_area(layers, &id, session)
     };
     if mine {
         return hover(row![Space::new().width(Length::Fill), bubble].padding(gap).into());
@@ -7992,10 +8017,26 @@ fn message_content<'a>(
                 .align_x(iced::alignment::Horizontal::Right),
         );
     }
-    mouse_area(layers)
-        .on_enter(Message::HoverMessage(id.to_string()))
-        .on_exit(Message::UnhoverMessage(id.to_string()))
-        .into()
+    hover_area(layers, id, session)
+}
+
+/// Hovering a message shows its bar. A scroll clears it (`TimelineScrolled`):
+/// a scroll view hands the wheel to its messages before moving them, so each
+/// one checks the cursor a step out of date. With nothing hovered, the first
+/// move picks the message under the cursor, even one it never left.
+fn hover_area<'a>(
+    content: impl Into<Element<'a, Message>>,
+    id: &str,
+    session: &Session,
+) -> Element<'a, Message> {
+    let area = mouse_area(content).on_exit(Message::UnhoverMessage(id.to_string()));
+    if session.hovered.is_none() {
+        let id = id.to_string();
+        area.on_move(move |_| Message::HoverMessage(id.clone()))
+            .into()
+    } else {
+        area.on_enter(Message::HoverMessage(id.to_string())).into()
+    }
 }
 
 /// A message's id for hovering: its Aflos or WhatsApp id, else its Matrix event.
