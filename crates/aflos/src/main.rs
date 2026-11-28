@@ -148,6 +148,8 @@ struct App {
     /// The call's video, by track: the latest frame of each camera
     /// (WhatsApp's ids start `wa-`).
     video: HashMap<String, VideoTile>,
+    /// The call's video fills the chat pane (else a strip above the chat).
+    video_big: bool,
     /// Check for updates: where it's got to.
     update: Updating,
     /// WhatsApp's call, while there is one.
@@ -223,6 +225,24 @@ struct VideoTile {
 
 /// A camera that sent nothing for this long is off (or the call ended).
 const VIDEO_STALE: std::time::Duration = std::time::Duration::from_millis(1500);
+/// WhatsApp says when a video stops, and sends few frames of a still or
+/// weak picture: its last frame stays up this long without a new one.
+const WA_VIDEO_STALE: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// Whether a video tile is still showing (WhatsApp's ids start `wa-`).
+fn video_live(id: &str, tile: &VideoTile) -> bool {
+    let stale = if id.starts_with("wa-") {
+        WA_VIDEO_STALE
+    } else {
+        VIDEO_STALE
+    };
+    tile.at.elapsed() < stale
+}
+
+/// `Fill` when `on`, else `Shrink`.
+fn fill_if(on: bool) -> Length {
+    if on { Length::Fill } else { Length::Shrink }
+}
 
 /// A GIF as one sprite sheet (its frames in a grid), drawn a frame at a time
 /// by cropping. One image rather than one per frame, because iced evicts
@@ -1486,6 +1506,8 @@ enum Message {
     WaShareCancel,
     /// Drop video from cameras that stopped sending.
     VideoPrune,
+    /// The call's video fills the chat pane, or goes back above the chat.
+    VideoBig(bool),
     /// Show a Discord server (by id) from the hidden client.
     GuildSelected(String),
     /// The text chat of the Discord voice channel we're in, from anywhere:
@@ -1699,6 +1721,7 @@ fn boot() -> (App, Task<Message>) {
         sync_off: config.sync_off.clone(),
         accounts: accounts::Panel::default(),
         video: HashMap::new(),
+        video_big: false,
         update: Updating::Idle,
         wa_call: None,
         wa_typing: HashMap::new(),
@@ -2741,7 +2764,14 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             Task::none()
         }
         Message::VideoPrune => {
-            state.video.retain(|_, tile| tile.at.elapsed() < VIDEO_STALE);
+            state.video.retain(|id, tile| video_live(id, tile));
+            if state.video.is_empty() {
+                state.video_big = false;
+            }
+            Task::none()
+        }
+        Message::VideoBig(big) => {
+            state.video_big = big;
             Task::none()
         }
         // In Discord voice, mute/deafen act on that call.
@@ -4667,7 +4697,8 @@ fn subscription(state: &App) -> Subscription<Message> {
         },
         // Cameras that stop sending (no "ended" from a remote that just turns
         // its camera off) go away within a couple of seconds.
-        if state.video.is_empty() {
+        // (and "big" resets once there's none).
+        if state.video.is_empty() && !state.video_big {
             Subscription::none()
         } else {
             iced::time::every(std::time::Duration::from_millis(500)).map(|_| Message::VideoPrune)
@@ -6796,13 +6827,30 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
             col = col.push(container(discord_ring_bar(ring, p, l)).padding([8, 16]));
         }
     }
+    // A call's live video, Discord's or WhatsApp's.
+    let live = |wa: bool| {
+        state
+            .video
+            .iter()
+            .filter(move |(id, t)| id.starts_with("wa-") == wa && video_live(id, t))
+            .map(|(_, t)| t)
+    };
+    // Big: the call takes the chat pane, its video filling it.
+    let mut big = false;
     if let Some(snapshot) = state.discord_state.as_ref().filter(|s| s.voice.connected()) {
-        let discord_video = state.video.iter().filter(|(id, _)| !id.starts_with("wa-")).map(|(_, t)| t);
-        col = col.push(container(discord_call_bar(session, &snapshot.voice, discord_video, p, l)).padding([8, 16]));
+        let fill = state.video_big && live(false).next().is_some();
+        big |= fill;
+        let bar = discord_call_bar(session, &snapshot.voice, live(false), fill, p, l);
+        col = col.push(container(bar).padding([8, 16]).height(fill_if(fill)));
     }
     if let Some(call) = &state.wa_call {
-        let wa_video = state.video.iter().filter(|(id, _)| id.starts_with("wa-")).map(|(_, t)| t);
-        col = col.push(container(wa_call_bar(call, wa_video, state.wa_share.as_deref(), p, l)).padding([8, 16]));
+        let fill = state.video_big && live(true).next().is_some();
+        big |= fill;
+        let bar = wa_call_bar(call, live(true), fill, state.wa_share.as_deref(), p, l);
+        col = col.push(container(bar).padding([8, 16]).height(fill_if(fill)));
+    }
+    if big {
+        return col.into();
     }
     if let Some(prompt) = &session.verification {
         col = col.push(container(verification_banner(prompt, p)).padding([8, 16]));
@@ -7152,6 +7200,7 @@ fn discord_call_bar<'a>(
     session: &'a Session,
     voice: &'a aflos_discord::Voice,
     video: impl Iterator<Item = &'a VideoTile>,
+    big: bool,
     p: &'a theme::Palette,
     l: &theme::Layout,
 ) -> Element<'a, Message> {
@@ -7256,12 +7305,13 @@ fn discord_call_bar<'a>(
         }
         body = body.push(shares);
     }
-    if let Some(tiles) = video_tiles(video, p) {
+    if let Some(tiles) = video_tiles(video, big, p) {
         body = body.push(tiles);
     }
     container(body)
         .padding(12)
         .width(Length::Fill)
+        .height(fill_if(big))
         .style(move |_| container::Style {
             background: Some(fill.into()),
             border: iced::border::rounded(8).color(edge).width(1),
@@ -7331,6 +7381,7 @@ fn share_picker<'a>(choices: &'a [ShareChoice], p: &'a theme::Palette, l: &theme
 fn wa_call_bar<'a>(
     call: &'a whatsapp::Call,
     video: impl Iterator<Item = &'a VideoTile>,
+    big: bool,
     share: Option<&'a [ShareChoice]>,
     p: &'a theme::Palette,
     l: &theme::Layout,
@@ -7386,13 +7437,14 @@ fn wa_call_bar<'a>(
     if let Some(choices) = share.filter(|_| !call.screen) {
         body = body.push(share_picker(choices, p, l));
     }
-    if let Some(tiles) = video_tiles(video, p) {
+    if let Some(tiles) = video_tiles(video, big, p) {
         body = body.push(tiles);
     }
     let (fill, edge) = (p.surface_alt(), p.border());
     container(body)
         .padding(12)
         .width(Length::Fill)
+        .height(fill_if(big))
         .style(move |_| container::Style {
             background: Some(fill.into()),
             border: iced::border::rounded(8).color(edge).width(1),
@@ -7462,11 +7514,14 @@ mod tile_label_tests {
     }
 }
 
+/// `video` is what's live (`video_live`). `big`: everyone else's fill the
+/// space the call has, else they're 320 px tall.
 fn video_tiles<'a>(
     video: impl Iterator<Item = &'a VideoTile>,
-    p: &theme::Palette,
+    big: bool,
+    p: &'a theme::Palette,
 ) -> Option<Element<'a, Message>> {
-    let live: Vec<&VideoTile> = video.filter(|t| t.at.elapsed() < VIDEO_STALE).collect();
+    let live: Vec<&VideoTile> = video.collect();
     if live.is_empty() {
         return None;
     }
@@ -7475,8 +7530,9 @@ fn video_tiles<'a>(
         theme::mix(p.background(), iced::Color::TRANSPARENT, 0.35),
         p.text_bright(),
     );
-    let tile = |t: &'a VideoTile, height: f32| {
+    let tile = |t: &'a VideoTile, height: Length| {
         let picture = iced::widget::image(t.frame.clone())
+            .width(fill_if(height == Length::Fill))
             .height(height)
             .content_fit(iced::ContentFit::Contain);
         let mut layers = stack![picture];
@@ -7503,13 +7559,28 @@ fn video_tiles<'a>(
             })
     };
     let mut tiles = row![].spacing(8).align_y(iced::Alignment::End);
+    let theirs = if big {
+        Length::Fill
+    } else {
+        Length::Fixed(320.0)
+    };
     for t in live.iter().filter(|t| !t.local) {
-        tiles = tiles.push(tile(t, 320.0));
+        tiles = tiles.push(tile(t, theirs));
     }
     for t in live.iter().filter(|t| t.local) {
-        tiles = tiles.push(tile(t, 110.0));
+        tiles = tiles.push(tile(t, Length::Fixed(110.0)));
     }
-    Some(container(tiles).center_x(Length::Fill).into())
+    let label = if big { "Smaller video" } else { "Bigger video" };
+    let toggle = button(text(label).size(12).color(p.text()))
+        .on_press(Message::VideoBig(!big))
+        .padding([4, 10])
+        .style(flat_button_style(p));
+    let tiles = container(tiles).center_x(Length::Fill).height(fill_if(big));
+    Some(
+        column![container(toggle).align_right(Length::Fill), tiles]
+            .spacing(4)
+            .into(),
+    )
 }
 
 /// A Discord DM/group call ringing us: answer joins it, decline stops it ringing here.
