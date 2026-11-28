@@ -1,6 +1,6 @@
 # Plan: `integrations` (Aflos)
 
-Status: **DRAFT 2026-11-28**, for approval. Built from
+Status: **APPROVED 2026-11-28** ("approve"). Built from
 [SPEC-integrations.md](SPEC-integrations.md) (approved 2026-11-28).
 Phases 1 to 3 ship in 0.6.x releases with WhatsApp and Discord still
 bundled (M2); Phase 4 is **0.7.0**, without them.
