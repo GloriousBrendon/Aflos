@@ -403,6 +403,10 @@ pub struct Config {
     /// A person's own voice plugins, in order (SPEC-voice-quality).
     #[serde(default)]
     pub fx_plugins: Vec<crate::fx_ui::Plugin>,
+    /// Integrations to run (SPEC-integrations), until they're installed
+    /// through Settings.
+    #[serde(default)]
+    pub integrations: Vec<crate::integrations::Entry>,
     /// Folders to look for plugins in, besides the standard ones.
     #[serde(default)]
     pub fx_dirs: Vec<String>,

@@ -155,6 +155,7 @@ fn builtin(sound: Sound) -> Vec<i16> {
                 Network::Discord => 880.0,
                 Network::WhatsApp => 1318.5,
                 Network::Mesh => 987.8,
+                Network::Integration(_) => 1174.7,
             };
             tone(&mut out, &[f], 70, 0.35);
             silence(&mut out, 35);
@@ -162,7 +163,7 @@ fn builtin(sound: Sound) -> Vec<i16> {
         }
         // Each network rings its own way.
         // Aflos calls come with `calls`; until then it rings as Matrix does.
-        Sound::Ring(Network::Matrix | Network::Mesh) => {
+        Sound::Ring(Network::Matrix | Network::Mesh | Network::Integration(_)) => {
             tone(&mut out, &[440.0, 480.0], 1000, 0.3);
             silence(&mut out, 2000);
         }

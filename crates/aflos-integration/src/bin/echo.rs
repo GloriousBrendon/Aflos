@@ -248,6 +248,7 @@ impl Echo {
             sections: vec![Section {
                 id: "direct".into(),
                 name: "Direct".into(),
+                home: true,
                 chats: vec![Chat {
                     id: CHAT.into(),
                     name: "Echo".into(),

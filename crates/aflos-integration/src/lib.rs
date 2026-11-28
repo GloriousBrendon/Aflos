@@ -524,6 +524,10 @@ pub struct Chats {
 pub struct Section {
     pub id: String,
     pub name: String,
+    /// Its chats show in Aflos's Home, with everyone's direct messages;
+    /// other sections get their own rail tile (a server, "Groups").
+    #[serde(default)]
+    pub home: bool,
     /// A [`Cmd::Fetch`] key for its icon.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub icon: Option<String>,

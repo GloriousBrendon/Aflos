@@ -253,6 +253,64 @@ pub fn spec(id: &str) -> Option<&'static NetworkSpec> {
     NETWORKS.iter().find(|n| n.id == id)
 }
 
+/// Integrations running in this Aflos (SPEC-integrations), by slot: their
+/// entries are made when they start, so tags and colours read like any
+/// other network's. A slot is kept for the id that had it, so a restart
+/// gets the same one.
+static INTEGRATIONS: std::sync::RwLock<Vec<&'static NetworkSpec>> = std::sync::RwLock::new(Vec::new());
+
+/// Registers (or updates) an integration's entry and returns its slot.
+/// Each new entry is leaked: a few hundred bytes per integration per run.
+pub fn register_integration(id: &str, name: &str, code: &str, color: &str) -> u8 {
+    let leak = |s: &str| -> &'static str { Box::leak(s.to_owned().into_boxed_str()) };
+    let mut list = INTEGRATIONS.write().unwrap_or_else(|e| e.into_inner());
+    let slot = list.iter().position(|n| n.id == id);
+    if let Some(at) = slot {
+        let n = list[at];
+        if n.name == name && n.code == code && n.color == color {
+            return at as u8;
+        }
+    }
+    let spec: &'static NetworkSpec = Box::leak(Box::new(NetworkSpec {
+        id: leak(id),
+        code: leak(code),
+        name: leak(name),
+        color: leak(color),
+        availability: Availability::Ready,
+        ..BASE
+    }));
+    match slot {
+        Some(at) => {
+            list[at] = spec;
+            at as u8
+        }
+        None => {
+            // ponytail: 255 integrations a run is the limit; past it they share the last slot.
+            if list.len() < u8::MAX as usize {
+                list.push(spec);
+            } else {
+                *list.last_mut().expect("full") = spec;
+            }
+            (list.len() - 1) as u8
+        }
+    }
+}
+
+/// An integration's entry by slot.
+pub fn integration(slot: u8) -> Option<&'static NetworkSpec> {
+    INTEGRATIONS.read().unwrap_or_else(|e| e.into_inner()).get(slot as usize).copied()
+}
+
+/// An integration's slot by id, if it has registered.
+pub fn integration_slot(id: &str) -> Option<u8> {
+    INTEGRATIONS
+        .read()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .position(|n| n.id == id)
+        .map(|at| at as u8)
+}
+
 /// The network whose bridge ghosts have this localpart, if any.
 pub fn ghost_network(localpart: &str) -> Option<&'static NetworkSpec> {
     NETWORKS
@@ -318,5 +376,20 @@ mod tests {
         assert_eq!(Auth::Qr.steps(), [SignIn, Sync, Done]);
         assert_eq!(Auth::Browser.steps(), [SignIn, Sync, Done]);
         assert_eq!(Auth::Phone.steps(), [SignIn, Code, Sync, Done]);
+    }
+
+    #[test]
+    fn integrations_get_a_slot_and_keep_it() {
+        let a = register_integration("test.slot.a", "Alpha", "al", "#112233");
+        let b = register_integration("test.slot.b", "Beta", "be", "#445566");
+        assert_ne!(a, b);
+        assert_eq!(register_integration("test.slot.a", "Alpha", "al", "#112233"), a);
+        // A new name keeps the slot and shows the new name.
+        assert_eq!(register_integration("test.slot.a", "Alpha 2", "al", "#112233"), a);
+        assert_eq!(integration(a).map(|n| n.name), Some("Alpha 2"));
+        assert_eq!(integration_slot("test.slot.b"), Some(b));
+        assert_eq!(integration(b).map(|n| (n.code, n.color)), Some(("be", "#445566")));
+        assert_eq!(crate::bridge::Network::Integration(b).tag(), "be");
+        assert_eq!(crate::bridge::Network::from_id("test.slot.b"), Some(crate::bridge::Network::Integration(b)));
     }
 }

@@ -19,6 +19,9 @@ pub enum Network {
     WhatsApp,
     /// Aflos's own chats, through `mesh-node` (SPEC-dm).
     Mesh,
+    /// An integration (SPEC-integrations), by its slot in
+    /// `networks::register_integration`.
+    Integration(u8),
 }
 
 impl Network {
@@ -32,13 +35,20 @@ impl Network {
             Network::Discord => "dc",
             Network::WhatsApp => "wa",
             Network::Mesh => "mesh",
+            Network::Integration(slot) => {
+                return networks::integration(slot).unwrap_or(&networks::NETWORKS[0]);
+            }
         };
         networks::spec(id).unwrap_or(&networks::NETWORKS[0])
     }
 
-    /// The registry entry's network, for the ones Aflos can show chats from.
+    /// The registry entry's network, for the ones Aflos can show chats from
+    /// (built in, or an integration that has started).
     pub fn from_id(id: &str) -> Option<Network> {
-        Network::ALL.into_iter().find(|n| n.spec().id == id)
+        Network::ALL
+            .into_iter()
+            .find(|n| n.spec().id == id)
+            .or_else(|| networks::integration_slot(id).map(Network::Integration))
     }
 
     /// The short tag the UI shows: `mx`, `dc` or `wa`.

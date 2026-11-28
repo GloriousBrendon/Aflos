@@ -238,6 +238,7 @@ fn every_event() -> Vec<Event> {
                 Section {
                     id: s("direct"),
                     name: s("Direct"),
+                    home: true,
                     icon: None,
                     chats: vec![Chat {
                         id: s("c1"),
@@ -255,6 +256,7 @@ fn every_event() -> Vec<Event> {
                 Section {
                     id: s("g1"),
                     name: s("Band"),
+                    home: false,
                     icon: Some(s("icon:g1")),
                     chats: vec![Chat {
                         id: s("t1"),

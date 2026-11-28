@@ -72,9 +72,9 @@ pub enum Report {
     Stopped { why: String },
 }
 
-/// Commands to a running integration. Dropping it stops the integration:
-/// `quit`, then a kill if it hasn't exited within 2 s.
-#[derive(Debug)]
+/// Commands to a running integration. Dropping the last clone stops the
+/// integration: `quit`, then a kill if it hasn't exited within 2 s.
+#[derive(Debug, Clone)]
 pub struct Handle {
     commands: mpsc::UnboundedSender<Command>,
     next_id: Arc<AtomicU64>,
