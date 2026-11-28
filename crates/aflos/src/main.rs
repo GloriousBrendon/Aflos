@@ -7772,7 +7772,12 @@ fn bubble_row<'a>(
         x.bubble_theirs.fill(p.surface_alt(), net, p)
     };
     let fill = theme::alpha(fill, f32::from(x.bubble_opacity.min(100)) / 100.0);
-    let mut inner = column![].spacing(4);
+    // The bubble is as wide as its widest line; ours keeps its time on the right.
+    let mut inner = column![].spacing(4).align_x(if mine {
+        iced::alignment::Horizontal::Right
+    } else {
+        iced::alignment::Horizontal::Left
+    });
     if first && !mine {
         let mut name = row![ui::sans(&message.sender_name, 13.0, Weight::Semibold, net)].spacing(8);
         if x.show_network_tags {
@@ -7789,7 +7794,7 @@ fn bubble_row<'a>(
             false,
             p,
         ))
-        .push(bubble_footer(message, session, time, mine, p));
+        .push(bubble_footer(message, session, time, p));
     let bubble = container(inner)
         .padding([6, 10])
         .max_width(560)
@@ -7997,7 +8002,7 @@ fn hover_bar<'a>(message: &TimelineMessage, id: &str, session: &Session, p: &'a 
 /// A bubble's last line: the time, then its mark beside it. WhatsApp's ticks
 /// show as ✓ or ✓✓ (the accent once read, the word in a tooltip); an Aflos
 /// mark ("sending", "edited", "late") follows a dot.
-fn bubble_footer<'a>(message: &TimelineMessage, session: &Session, time: &str, mine: bool, p: &theme::Palette) -> Element<'a, Message> {
+fn bubble_footer<'a>(message: &TimelineMessage, session: &Session, time: &str, p: &theme::Palette) -> Element<'a, Message> {
     let mut line = row![ui::mono(time.to_string(), 10.0, p.text_muted())]
         .spacing(4)
         .align_y(iced::Alignment::Center);
@@ -8014,8 +8019,9 @@ fn bubble_footer<'a>(message: &TimelineMessage, session: &Session, time: &str, m
             _ => line = line.push(ui::mono(format!("· {mark}"), 10.0, p.text_muted())),
         }
     }
-    let align = if mine { iced::alignment::Horizontal::Right } else { iced::alignment::Horizontal::Left };
-    container(line).width(Length::Fill).align_x(align).into()
+    // Not `Fill`: a filling child stretches the bubble past its max width.
+    // Ours sits right through the bubble's column (`bubble_row`).
+    line.into()
 }
 
 /// The quoted message above a reply: its author and a line of its text.
