@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.4
+
+- Your picture at the bottom left is the one you saved in your Aflos
+  profile (else your Matrix one), and updates when you save.
+- The profile editor's Publish button is now Save, and the profile
+  screens' blue buttons are readable.
+- Fixed: after scrolling with the wheel, a message's hover bar showed
+  beside the message below it.
+- Calls: "Bigger video" makes the call's video fill the chat area;
+  "Smaller video" puts it back.
+- Fixed: a friend's WhatsApp video kept disappearing when their picture
+  was still or their connection weak.
+
 ## 0.6.3
 
 - Chat bubbles are as wide as what's in them (up to 560 px) instead of
