@@ -841,5 +841,8 @@ impl Event {
     }
 }
 
+#[cfg(feature = "host")]
+pub mod host;
+
 #[cfg(test)]
 mod tests;
