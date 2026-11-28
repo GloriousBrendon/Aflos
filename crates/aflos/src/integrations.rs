@@ -43,6 +43,10 @@ pub(crate) struct Live {
     /// Why the last sign-in didn't work (the step stays up to try again).
     pub sign_in_error: Option<String>,
     pub chats: Chats,
+    /// Who's typing in each chat, by name (its `typing` events).
+    pub typing: HashMap<String, Vec<String>>,
+    /// People's online state and last seen (ms), from `presence`.
+    pub presence: HashMap<String, (bool, Option<u64>)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +67,10 @@ pub(crate) struct Integrations {
     pub generation: HashMap<String, u32>,
     /// Remove asked once; the next press removes it.
     pub confirm_remove: Option<String>,
+    /// Files fetched to be opened, by media key (`chats::url`).
+    pub opening: std::collections::HashSet<String>,
+    /// The invite link being typed into a section's Join by link.
+    pub join_link: String,
 }
 
 impl Integrations {
@@ -162,8 +170,70 @@ fn events((entry, _): &(Entry, u32)) -> impl iced::futures::Stream<Item = Messag
 }
 
 pub(crate) fn update(state: &mut App, id: String, update: Update) -> Task<Message> {
-    state.integrations.apply(id, update);
-    Task::none()
+    let network = state.integrations.live.get(&id).and_then(|l| l.network);
+    let task = match (&update, network) {
+        (Update::Report(Report::Event(event)), Some(network)) => {
+            chats::on_event(state, network, event)
+        }
+        _ => Task::none(),
+    };
+    let new_chats = matches!(update, Update::Report(Report::Event(Event::Chats(_))));
+    state.integrations.apply(id.clone(), update);
+    sync_session(state);
+    if new_chats && let Some(network) = network {
+        load_pictures(state, network);
+    }
+    task
+}
+
+/// What the session keeps of integrations for drawing: each one's message
+/// actions, for the hover bar.
+pub(crate) fn sync_session(state: &mut App) {
+    let crate::Screen::LoggedIn(session) = &mut state.screen else {
+        return;
+    };
+    session.int_actions = state
+        .integrations
+        .ready()
+        .filter_map(|(_, live, n)| Some((n, live.hello.as_ref()?.supports.actions.clone())))
+        .collect();
+}
+
+/// Asks for its chats' and sections' pictures not cached or loading.
+fn load_pictures(state: &mut App, network: Network) {
+    let crate::Screen::LoggedIn(session) = &mut state.screen else {
+        return;
+    };
+    let Some((_, live)) = state.integrations.by_network(network) else {
+        return;
+    };
+    let keys = live.chats.sections.iter().flat_map(|s| {
+        s.icon
+            .iter()
+            .chain(s.chats.iter().filter_map(|c| c.avatar.as_ref()))
+    });
+    for key in keys {
+        let url = chats::url(network, aflos_integration::FetchForm::Original, key);
+        if crate::wants(&mut session.avatars, crate::cache::Kind::Avatar, &url) {
+            live.handle.as_ref().map(|h| {
+                h.send(Cmd::Fetch {
+                    key: key.clone(),
+                    form: aflos_integration::FetchForm::Original,
+                })
+            });
+        }
+    }
+}
+
+/// Who's typing in one of its chats.
+pub(crate) fn typing<'a>(state: &'a App, network: Network, chat: &str) -> &'a [String] {
+    let Some((_, live)) = state.integrations.by_network(network) else {
+        return &[];
+    };
+    match live.typing.get(chat) {
+        Some(names) => names,
+        None => self::chat(state, network, chat).map_or(&[], |c| c.typing.as_slice()),
+    }
 }
 
 impl Integrations {
@@ -208,6 +278,22 @@ impl Integrations {
                     live.sign_in_error = None;
                 }
                 Event::Chats(chats) => live.chats = chats,
+                Event::Typing { chat, who, on } => {
+                    let names = live.typing.entry(chat).or_default();
+                    names.retain(|n| *n != who);
+                    if on {
+                        names.push(who);
+                    }
+                }
+                Event::Presence {
+                    who,
+                    online,
+                    last_seen,
+                } => {
+                    live.presence.insert(who, (online, last_seen));
+                }
+                // Their message ends their "typing…".
+                Event::Notify { chat, .. } => drop(live.typing.remove(&chat)),
                 // The rest arrive with the panes that show them (PLAN Tasks 5 to 8).
                 _ => {}
             },
@@ -230,6 +316,10 @@ pub(crate) enum Act {
     Off(String, bool),
     /// Remove it: asks once, then does it.
     Remove(String),
+    /// The Join by link box changed.
+    JoinLink(String),
+    /// Join by the link typed.
+    Join(Network),
 }
 
 pub(crate) fn act(state: &mut App, act: Act) -> Task<Message> {
@@ -240,6 +330,18 @@ pub(crate) fn act(state: &mut App, act: Act) -> Task<Message> {
     match act {
         Act::Field(name, value) => drop(all.form.insert(name, value)),
         Act::Code(code) => all.code = code,
+        Act::JoinLink(link) => all.join_link = link,
+        Act::Join(network) => {
+            let link = std::mem::take(&mut all.join_link);
+            if !link.trim().is_empty() {
+                all.send(
+                    network,
+                    Cmd::JoinByLink {
+                        link: link.trim().to_owned(),
+                    },
+                );
+            }
+        }
         Act::Submit(network) => {
             let step = all.by_network(network).and_then(|(_, l)| l.sign_in.clone());
             if let Some(cmd) = step.and_then(|s| sign_in_command(&s, &all.form, &all.code)) {
@@ -420,7 +522,9 @@ pub(crate) fn rail_tiles<'a>(
         .collect()
 }
 
+pub(crate) mod chats;
 mod panel;
+pub(crate) mod panes;
 pub(crate) use panel::panel;
 
 #[cfg(test)]

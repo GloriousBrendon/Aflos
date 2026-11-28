@@ -399,6 +399,8 @@ struct Session {
     /// the ones that can be edited (ours, without files), each message's
     /// small mark ("sending · edited · late"), and the one being edited.
     mesh_mine: std::collections::HashSet<String>,
+    /// Each integration's message actions (its hello), for the hover bar.
+    int_actions: HashMap<Network, Vec<aflos_integration::Action>>,
     mesh_editable: std::collections::HashSet<String>,
     web_marks: HashMap<String, String>,
     editing: Option<String>,
@@ -570,6 +572,7 @@ impl Session {
             deleting: None,
             web_chat: None,
             mesh_mine: Default::default(),
+            int_actions: HashMap::new(),
             mesh_editable: Default::default(),
             web_marks: HashMap::new(),
             editing: None,
@@ -864,6 +867,8 @@ impl Clients<'_> {
             if let (Some(Ok(index)), Some(message), Some(chat), Some(node)) = (parts.next().map(str::parse), parts.next(), parts.next(), self.mesh) {
                 mesh_spaces::fetch(node, chat, message, index);
             }
+        } else if url.starts_with("int:") {
+            integrations::chats::fetch(self, url);
         } else if url.starts_with("wa-") || url.contains(".whatsapp.net/") {
             self.whatsapp.map(|e| e.fetch_media(url));
         } else {
@@ -1332,6 +1337,14 @@ fn web_picture<'a>(session: &'a Session, url: Option<&str>) -> Option<&'a iced::
 /// that aren't cached or loading; they arrive as `Event::Media`.
 fn load_web_media(session: &mut Session, clients: &Clients) {
     for message in &session.timeline {
+        // A video's preview (WhatsApp's come inline, so they're already in).
+        if let MessageKind::File(info) = &message.kind
+            && let Some(url) = info.thumbnail.as_ref().and_then(|t| t.media.web_url())
+            && !session.images.contains_key(url)
+        {
+            session.images.insert(url.to_string(), None);
+            clients.fetch_media(url);
+        }
         if let Some(url) = message.sender_avatar.as_ref().and_then(MediaRef::web_url)
             && wants(&mut session.avatars, cache::Kind::Avatar, url)
         {
@@ -1340,7 +1353,10 @@ fn load_web_media(session: &mut Session, clients: &Clients) {
         if let MessageKind::Image(info) = &message.kind
             && let Some(url) = info.media.web_url()
         {
-            if url.starts_with("wa-gif:") {
+            let frames = url.starts_with("wa-gif:")
+                || integrations::chats::parse(url)
+                    .is_some_and(|(_, form, _)| form == aflos_integration::FetchForm::Frames);
+            if frames {
                 if !session.images.contains_key(url) {
                     match cache::get(cache::Kind::Media, url).and_then(|b| unpack_frames(&b)) {
                         Some((delay, frames)) => show_frames(&mut session.images, &mut session.animations, url, delay, frames),
@@ -2505,6 +2521,26 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     && let (Some(chat), Some(node)) = (session.web_chat.as_ref().filter(|c| c.network == Network::Mesh), &state.mesh.node)
                 {
                     mesh_spaces::typing(node, &chat.id);
+                }
+                // An integration that takes it, at most every 5 s.
+                if action.is_edit()
+                    && let Some(chat) = session.web_chat.as_ref().filter(|c| {
+                        session
+                            .int_actions
+                            .get(&c.network)
+                            .is_some_and(|a| a.contains(&aflos_integration::Action::Typing))
+                    })
+                    && !state
+                        .wa_typed
+                        .as_ref()
+                        .is_some_and(|(id, at)| *id == chat.id && at.elapsed().as_secs() < 5)
+                {
+                    let typing = aflos_integration::Cmd::Typing {
+                        chat: chat.id.clone(),
+                        on: true,
+                    };
+                    state.integrations.send(chat.network, typing);
+                    state.wa_typed = Some((chat.id.clone(), std::time::Instant::now()));
                 }
                 // WhatsApp too, at most every 5 s (it shows "typing…" for a while after each).
                 if action.is_edit()
@@ -4214,6 +4250,16 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                         on,
                     );
                 }
+            } else if let Some(network) = session
+                .web_chat
+                .as_ref()
+                .map(|c| c.network)
+                .filter(|n| matches!(n, Network::Integration(_)))
+            {
+                state.integrations.send(
+                    network,
+                    aflos_integration::Cmd::React { message: id, emoji },
+                );
             } else if let Some(engine) = &state.whatsapp {
                 engine.react(&id, &emoji);
             }
@@ -4248,6 +4294,16 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                 Screen::LoggedIn(session) => session.web_chat.as_ref().map(|c| c.id.clone()),
                 _ => None,
             };
+            if let Some(network) = web_integration(state) {
+                state.integrations.send(
+                    network,
+                    aflos_integration::Cmd::Delete {
+                        message: id,
+                        everyone,
+                    },
+                );
+                return Task::none();
+            }
             if let Some(node) = &state.mesh.node {
                 mesh_spaces::delete(node, chat.as_deref(), &id, everyone);
             }
@@ -4279,6 +4335,8 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             {
                 engine.voice_pcm(id);
                 session.player = Some(Player { key, position: 0, out: None, loading: true });
+            } else if key.starts_with("int:") {
+                integrations::chats::want_voice(state, key);
             }
             Task::none()
         }
@@ -4455,6 +4513,22 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
             if let Screen::LoggedIn(session) = &mut state.screen
                 && let Some((id, _)) = session.forwarding.take()
             {
+                if let Some(network) = session
+                    .web_chat
+                    .as_ref()
+                    .map(|c| c.network)
+                    .filter(|n| matches!(n, Network::Integration(_)))
+                {
+                    state.integrations.send(
+                        network,
+                        aflos_integration::Cmd::Forward {
+                            message: id,
+                            to: chat_id,
+                        },
+                    );
+                    session.status = Some("Forwarding…".to_string());
+                    return Task::none();
+                }
                 session.status = Some(match &state.whatsapp {
                     Some(engine) => {
                         engine.forward(&id, &chat_id);
@@ -4463,6 +4537,10 @@ fn handle(state: &mut App, message: Message) -> Task<Message> {
                     None => "WhatsApp isn't running, so this can't be forwarded.".to_string(),
                 });
             }
+            Task::none()
+        }
+        Message::OpenMedia(url) if url.starts_with("int:") && cache::file(&url).is_none() => {
+            integrations::chats::open(state, url);
             Task::none()
         }
         Message::OpenMedia(url) if url.starts_with("mesh-file:") => {
@@ -4874,6 +4952,10 @@ fn send_message(state: &mut App) -> Task<Message> {
                     session.status = Some("Sending files to Discord isn't ready yet — only WhatsApp and Matrix.".to_string());
                     let _ = chat;
                 }
+                Some(chat) if matches!(chat.network, Network::Integration(_)) => {
+                    let chat = chat.clone();
+                    integrations::chats::send_files(session, &state.integrations, &chat, attachment, caption);
+                }
                 Some(chat) if chat.network == Network::Mesh => match (&state.mesh.node, mesh_dm::staged(&attachment)) {
                     (Some(node), Ok((path, preview))) => {
                         mesh_spaces::send_file(node, &chat.id, &path.to_string_lossy(), preview.as_deref().map(|p| p.to_string_lossy()).as_deref());
@@ -4929,6 +5011,9 @@ fn send_message(state: &mut App) -> Task<Message> {
         }
         // A web chat sends through its hidden client; the echo comes back
         // with its messages.
+        if integrations::chats::edit(session, &state.integrations, &body) {
+            return Task::none();
+        }
         if let (Some(id), Some(node)) = (&session.editing, &state.mesh.node) {
             mesh_spaces::edit(
                 node,
@@ -4972,6 +5057,58 @@ fn media_moving(state: &App) -> bool {
     session.player.as_ref().is_some_and(|pl| pl.out.is_some())
         || session.lightbox.as_ref().is_some_and(|(key, _)| gif(key))
         || session.timeline.iter().any(|m| matches!(&m.kind, MessageKind::Image(info) if gif(&info.media.key())))
+}
+
+/// A chat a message can be forwarded to.
+struct ForwardTarget<'a> {
+    id: &'a str,
+    name: &'a str,
+    group: bool,
+}
+
+/// Where the open chat's messages can go: its own network's chats.
+fn forward_targets<'a>(session: &Session, state: &'a App) -> Vec<ForwardTarget<'a>> {
+    match session.web_chat.as_ref().map(|c| c.network) {
+        Some(network @ Network::Integration(_)) => state
+            .integrations
+            .by_network(network)
+            .map(|(_, live)| {
+                live.chats
+                    .sections
+                    .iter()
+                    .flat_map(|s| &s.chats)
+                    .filter(|c| !c.locked)
+                    .map(|c| ForwardTarget {
+                        id: &c.id,
+                        name: &c.name,
+                        group: c.kind != aflos_integration::ChatKind::Direct,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default(),
+        _ => state
+            .whatsapp_state
+            .iter()
+            .flat_map(|w| &w.chats)
+            .map(|c| ForwardTarget {
+                id: &c.id,
+                name: &c.name,
+                group: c.group,
+            })
+            .collect(),
+    }
+}
+
+/// The integration behind the open chat, if it's one of theirs.
+fn web_integration(state: &App) -> Option<Network> {
+    let Screen::LoggedIn(session) = &state.screen else {
+        return None;
+    };
+    session
+        .web_chat
+        .as_ref()
+        .map(|c| c.network)
+        .filter(|n| matches!(n, Network::Integration(_)))
 }
 
 /// A desktop notification, shown off the UI thread (the D-Bus / WinRT call
@@ -5274,7 +5411,7 @@ fn session_view<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message
         } else if let Some(picker) = &session.new_chat {
             stack![shell, new_chat_picker(picker, p, l)].into()
         } else if let Some((_, query)) = &session.forwarding {
-            stack![shell, forward_picker(query, state.whatsapp_state.as_ref(), p, l)].into()
+            stack![shell, forward_picker(query, forward_targets(session, state), p, l)].into()
         } else {
             shell.into()
         }
@@ -5437,19 +5574,21 @@ fn new_chat_picker<'a>(picker: &'a NewChat, p: &theme::Palette, l: &theme::Layou
 /// Pick a WhatsApp chat to forward a message to; type to filter.
 fn forward_picker<'a>(
     query: &'a str,
-    snapshot: Option<&'a whatsapp::Snapshot>,
+    targets: Vec<ForwardTarget<'a>>,
     p: &theme::Palette,
     l: &theme::Layout,
 ) -> Element<'a, Message> {
     let needle = query.to_lowercase();
-    let matches: Vec<&whatsapp::Chat> = snapshot
-        .map(|s| s.chats.iter().filter(|c| c.name.to_lowercase().contains(&needle)).take(12).collect())
-        .unwrap_or_default();
+    let matches: Vec<ForwardTarget<'a>> = targets
+        .into_iter()
+        .filter(|c| c.name.to_lowercase().contains(&needle))
+        .take(12)
+        .collect();
     let mut list = column![
         text_input("forward to…", query)
             .id(iced::widget::Id::new(FORWARD_INPUT))
             .on_input(Message::ForwardQuery)
-            .on_submit_maybe(matches.first().map(|c| Message::ForwardTo(c.id.clone())))
+            .on_submit_maybe(matches.first().map(|c| Message::ForwardTo(c.id.to_owned())))
             .padding(10)
             .size(14),
     ]
@@ -5457,14 +5596,14 @@ fn forward_picker<'a>(
     for (i, chat) in matches.iter().enumerate() {
         let mut line = row![
             ui::mono(if chat.group { "#" } else { "@" }, 13.0, p.text_muted()),
-            ui::sans(&chat.name, 14.0, Weight::Normal, p.text_bright()).width(Length::Fill),
+            ui::sans(chat.name, 14.0, Weight::Normal, p.text_bright()).width(Length::Fill),
         ]
         .spacing(10)
         .align_y(iced::Alignment::Center);
         if i == 0 {
             line = line.push(ui::mono("Enter", 11.0, p.text_muted()));
         }
-        list = list.push(ui::row_button(line, Message::ForwardTo(chat.id.clone()), i == 0, p, l));
+        list = list.push(ui::row_button(line, Message::ForwardTo(chat.id.to_owned()), i == 0, p, l));
     }
     if matches.is_empty() {
         list = list.push(container(ui::mono("no match", 12.0, p.text_muted())).padding(8));
@@ -6098,6 +6237,9 @@ fn channel_pane<'a>(
     p: &'a theme::Palette,
     l: &theme::Layout,
 ) -> Element<'a, Message> {
+    if let Some((network, section)) = &session.active_section {
+        return integrations::panes::section_pane(session, state, *network, section, p, l);
+    }
     if session.active_wa_groups {
         return wa_groups_pane(session, whatsapp, p, l);
     }
@@ -6286,6 +6428,7 @@ fn channel_pane<'a>(
                     rows.push((chat.last, web_chat_row(session, open, None, chat.unread > 0, chat.unread, p, l)));
                 }
             }
+            rows.extend(integrations::panes::home_rows(session, state, shows, p, l));
             rows.extend(whatsapp_chats.iter().filter(|chat| !chat.group).map(|chat| {
                 let open = WebChat { network: Network::WhatsApp, id: chat.id.clone(), name: chat.name.clone(), dm: !chat.group };
                 (chat.last_ms, web_chat_row(session, open, chat.avatar.as_deref(), chat.unread > 0, chat.unread, p, l))
@@ -7024,9 +7167,7 @@ fn chat_pane<'a>(session: &'a Session, state: &'a App) -> Element<'a, Message> {
                 .map(Vec::as_slice)
                 .unwrap_or_default(),
             Network::Discord => discord_typing(state, &channel.id),
-            Network::Integration(_) => integrations::chat(state, channel.network, &channel.id)
-                .map(|c| c.typing.as_slice())
-                .unwrap_or_default(),
+            Network::Integration(_) => integrations::typing(state, channel.network, &channel.id),
             Network::Matrix => &[],
         };
         return body(col, placeholder, typing).into();
@@ -8232,7 +8373,11 @@ fn hover_bar<'a>(message: &TimelineMessage, id: &str, session: &Session, p: &'a 
     }
     let ours = (session.mesh_mine.contains(id), session.mesh_editable.contains(id));
     let channel = session.web_chat.as_ref().is_some_and(|c| mesh_spaces::split(&c.id).is_some());
-    Some(message_actions(message, id, ours, channel, p))
+    let actions = session
+        .int_actions
+        .get(&message.sender_network)
+        .map(Vec::as_slice);
+    Some(message_actions(message, id, ours, channel, actions, p))
 }
 
 /// A bubble's last line: the time, then its mark beside it. WhatsApp's ticks
@@ -8294,7 +8439,14 @@ fn quote_of(message: &TimelineMessage) -> aflos_core::Quote {
 /// The hover bar on a message: copy; on WhatsApp react, reply, forward; on
 /// Aflos react, reply, edit (`editable`: ours, without files) and delete (for
 /// everyone when it's `mine`; in a `channel` only then).
-fn message_actions<'a>(message: &TimelineMessage, id: &str, (mine, editable): (bool, bool), channel: bool, p: &'a theme::Palette) -> Element<'a, Message> {
+fn message_actions<'a>(
+    message: &TimelineMessage,
+    id: &str,
+    (mine, editable): (bool, bool),
+    channel: bool,
+    actions: Option<&[aflos_integration::Action]>,
+    p: &'a theme::Palette,
+) -> Element<'a, Message> {
     let action = |glyph: &'static str, tip: &'static str, press: Message| {
         iced::widget::tooltip(
             button(text(glyph).size(15)).on_press(press).padding([2, 7]).style(flat_button_style(p)),
@@ -8315,6 +8467,50 @@ fn message_actions<'a>(message: &TimelineMessage, id: &str, (mine, editable): (b
     }
     if message.sender_network == Network::WhatsApp {
         bar = bar.push(action("↪", "Forward", Message::ForwardStart(id.to_string())));
+    }
+    if let Some(can) = actions {
+        use aflos_integration::Action as A;
+        if can.contains(&A::React) {
+            bar = bar.push(action(
+                "🙂",
+                "React",
+                Message::ToggleReactPicker(id.to_string()),
+            ));
+        }
+        if can.contains(&A::Reply) {
+            bar = bar.push(action(
+                "↩",
+                "Reply",
+                Message::ReplyTo(id.to_string(), quote_of(message)),
+            ));
+        }
+        if can.contains(&A::Forward) {
+            bar = bar.push(action(
+                "↪",
+                "Forward",
+                Message::ForwardStart(id.to_string()),
+            ));
+        }
+        if mine && can.contains(&A::Edit) && matches!(message.kind, MessageKind::Text) {
+            bar = bar.push(action(
+                "✎",
+                "Edit",
+                Message::MeshEdit(id.to_string(), message.body.clone()),
+            ));
+        }
+        if mine && can.contains(&A::DeleteForEveryone) {
+            bar = bar.push(action(
+                "🗑",
+                "Delete for everyone",
+                Message::MeshDelete(id.to_string(), true),
+            ));
+        } else if can.contains(&A::Delete) {
+            bar = bar.push(action(
+                "🗑",
+                "Delete here",
+                Message::MeshDelete(id.to_string(), false),
+            ));
+        }
     }
     if message.sender_network == Network::Mesh {
         if editable {

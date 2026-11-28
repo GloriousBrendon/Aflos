@@ -9,7 +9,7 @@ use matrix_sdk::ruma::events::StateEventType;
 use crate::networks::{self, NetworkSpec};
 
 /// Which network a room or person is really on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub enum Network {
     #[default]
     Matrix,

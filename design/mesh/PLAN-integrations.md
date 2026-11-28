@@ -80,7 +80,7 @@ Mesh-Node has no WhatsApp or Discord code.
 - [x] **Task 5: sign-in and Accounts.** QR, code, form and web-page
   sign-in; Accounts lists integrations with sign out, turn off and remove.
   **Accept:** echo signs in by form; unit tests for each sign-in kind.
-- [ ] **Task 6: chats.** Chat list sections, the timeline (text with the
+- [x] **Task 6: chats.** Chat list sections, the timeline (text with the
   fixed formatting, images, video, files, voice notes, stickers, GIFs,
   replies, forwards, reactions, edits, deletes, ticks), the hover bar from
   declared actions, typing and presence, notifications, search, Join by
@@ -201,6 +201,17 @@ the parity list passes again.
   keeps a failed step up with the reason, and has Restart (when stopped),
   Turn off and Remove; Remove asks once and deletes its folder. Part of
   spec T7 landed here; Task 12b adds the crash-on-next-start side.
+- **Task 6:** an integration's media are web media keyed
+  `int:<slot>:<o|p|f>:<key>` (the file, a voice note's samples, a GIF's
+  frames), so the timeline's loading, caching and drawing are WhatsApp's.
+  Its home sections' chats sit with everyone's direct messages; other
+  sections open their own pane, by category, with Join by link when it
+  takes them. The hover bar follows its declared actions; files go out
+  through its files folder; the forward picker lists its chats. Moved to
+  Task 9, where WhatsApp needs them: contact search and starting a chat
+  (the new-chat picker), and archived chats' row in Home (archived chats
+  are left out of Home until then). "Echo's chat end to end" is the
+  harness's send check (Task 3); the app's side is unit-tested.
 
 ## Changes while planning
 
